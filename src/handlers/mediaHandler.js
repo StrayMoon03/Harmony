@@ -4,6 +4,7 @@ const { classify } = require("../modules/media/classifier");
 const { formatMediaCard } = require("../modules/media/formatter");
 const { uploadMedia } = require("../modules/media/uploader");
 const { findInstagramLinks } = require("../modules/media/instagram");
+const { resolveCreator } = require("../modules/media/creator");
 
 /**
  * Handles supported social-media links in a Discord message.
@@ -14,7 +15,6 @@ async function handleMediaMessage(message) {
   if (message.author.bot) return;
 
   const instagramLinks = findInstagramLinks(message.content);
-
   if (instagramLinks.length === 0) return;
 
   const originalUrl = instagramLinks[0];
@@ -22,26 +22,22 @@ async function handleMediaMessage(message) {
   try {
     await message.channel.sendTyping();
 
-    // Metadata is optional.
     let info = null;
-
     try {
       info = await getMediaInfo(originalUrl);
-    } catch (err) {
+    } catch {
       console.warn("Metadata unavailable. Continuing with download only.");
     }
 
-    // Download the actual media.
     const downloadResult = await downloadMedia(originalUrl);
-
-    // Classify based on what was actually downloaded.
     const classification = classify(downloadResult.files, originalUrl);
 
     if (classification.files.length === 0) {
       throw new Error("No media files were downloaded.");
     }
 
-    const creator = info?.uploader || "Unknown creator";
+    // yt-dlp uploader when available; otherwise username from gallery-dl path.
+    const creator = resolveCreator(info, classification.files);
 
     const cardText = formatMediaCard({
       platform: "Instagram",
@@ -51,7 +47,12 @@ async function handleMediaMessage(message) {
       heart: "💗",
     });
 
-    await uploadMedia(message, classification.files, cardText);
+    await uploadMedia(
+      message,
+      classification.files,
+      cardText,
+      downloadResult.rawDir
+    );
 
     console.log(
       `Instagram ${classification.label} (${classification.files.length} file(s)) shared for ${message.author.username}`
@@ -65,9 +66,7 @@ async function handleMediaMessage(message) {
           "❌ Harmony encountered an error.\n\n```" +
           error.message +
           "```",
-        allowedMentions: {
-          repliedUser: false,
-        },
+        allowedMentions: { repliedUser: false },
       })
       .catch(() => {});
   }
