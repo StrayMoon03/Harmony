@@ -1,36 +1,31 @@
 /**
- * Builds Harmony's clean media-card text.
+ * Format a friendly "already shared" reply.
  *
- * @param {object} options
- * @param {string} options.platform
- * @param {string} options.mediaType
- * @param {string} options.creator
- * @param {string} options.originalUrl
- * @param {string} options.heart
+ * @param {{ shared_by: string, shared_at: string }} record
  * @returns {string}
  */
-function formatMediaCard({
-  platform,
-  mediaType,
-  creator,
-  originalUrl,
-  heart,
-}) {
-  const title = `${platform} ${mediaType}`.trim();
-  const sourceLabel = `Original ${mediaType}`.trim();
+function formatAlreadySharedReply(record) {
+  let dateLine = record.shared_at;
+
+  try {
+    const d = new Date(record.shared_at);
+
+    dateLine = d.toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    // Keep the raw value if parsing fails.
+  }
 
   return [
-    title,
+    "Thank you for helping keep our collection growing!",
     "",
-    creator,
+    "It looks like this post has already been added.",
     "",
-    `**${sourceLabel}**`,
-    originalUrl,
+    `Originally shared on ${dateLine}`,
+    `by ${record.shared_by}`,
     "",
-    `${heart} Shared by Harmony`,
+    "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
   ].join("\n");
 }
-
-module.exports = {
-  formatMediaCard,
-};

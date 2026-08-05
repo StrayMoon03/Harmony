@@ -28,16 +28,16 @@ function formatAlreadySharedReply(record) {
     // keep raw ISO string
   }
 
-  return [
-    "Thank you for helping keep our collection growing!",
-    "",
-    "It looks like this post has already been added.",
-    "",
-    `Originally shared by ${record.shared_by}`,
-    dateLine,
-    "",
-    "💜 Harmony",
-  ].join("\n");
+ return [
+  "Thank you for helping keep our collection growing!",
+  "",
+  "It looks like this post has already been added.",
+  "",
+  `Originally shared on ${dateLine}`,
+  `by ${record.shared_by}`,
+  "",
+  "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+].join("\n");
 }
 
 /**
