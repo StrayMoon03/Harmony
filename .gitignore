@@ -1,2 +1,4 @@
 node_modules/
 .env
+src/temp/
+src/instagram-cookies.txt
