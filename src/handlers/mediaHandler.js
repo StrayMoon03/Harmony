@@ -3,8 +3,42 @@ const { downloadMedia } = require("../modules/media/downloader");
 const { classify } = require("../modules/media/classifier");
 const { formatMediaCard } = require("../modules/media/formatter");
 const { uploadMedia } = require("../modules/media/uploader");
-const { findInstagramLinks } = require("../modules/media/instagram");
+const {
+  findInstagramLinks,
+  extractInstagramId,
+} = require("../modules/media/instagram");
 const { resolveCreator } = require("../modules/media/creator");
+const shareStore = require("../stores/shareStore");
+
+/**
+ * Format a friendly "already shared" reply.
+ *
+ * @param {{ shared_by: string, shared_at: string }} record
+ * @returns {string}
+ */
+function formatAlreadySharedReply(record) {
+  let dateLine = record.shared_at;
+  try {
+    const d = new Date(record.shared_at);
+    dateLine = d.toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  } catch {
+    // keep raw ISO string
+  }
+
+  return [
+    "Thank you for helping keep our collection growing!",
+    "",
+    "It looks like this post has already been added.",
+    "",
+    `Originally shared by ${record.shared_by}`,
+    dateLine,
+    "",
+    "💜 Harmony",
+  ].join("\n");
+}
 
 /**
  * Handles supported social-media links in a Discord message.
@@ -18,8 +52,26 @@ async function handleMediaMessage(message) {
   if (instagramLinks.length === 0) return;
 
   const originalUrl = instagramLinks[0];
+  const mediaId = extractInstagramId(originalUrl);
+
+  if (!mediaId) {
+    console.warn("Could not extract Instagram media id from:", originalUrl);
+    return;
+  }
+
+  const platform = "instagram";
 
   try {
+    // --- Duplicate check BEFORE any download ---
+    const existing = shareStore.find(platform, mediaId);
+    if (existing) {
+      await message.reply({
+        content: formatAlreadySharedReply(existing),
+        allowedMentions: { repliedUser: false },
+      });
+      return;
+    }
+
     await message.channel.sendTyping();
 
     let info = null;
@@ -36,7 +88,6 @@ async function handleMediaMessage(message) {
       throw new Error("No media files were downloaded.");
     }
 
-    // yt-dlp uploader when available; otherwise username from gallery-dl path.
     const creator = resolveCreator(info, classification.files);
 
     const cardText = formatMediaCard({
@@ -53,6 +104,19 @@ async function handleMediaMessage(message) {
       cardText,
       downloadResult.rawDir
     );
+
+    // --- Record only after successful upload ---
+    shareStore.insert({
+      platform,
+      mediaId,
+      creator,
+      sharedBy: message.member?.displayName || message.author.username,
+      sharedById: message.author.id,
+      messageId: message.id,
+      channelId: message.channel.id,
+      guildId: message.guild?.id ?? null,
+      url: originalUrl,
+    });
 
     console.log(
       `Instagram ${classification.label} (${classification.files.length} file(s)) shared for ${message.author.username}`

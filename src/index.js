@@ -2,10 +2,14 @@ require("dotenv").config();
 
 const { Client, GatewayIntentBits } = require("discord.js");
 const { handleMediaMessage } = require("./handlers/mediaHandler");
+const { getDb } = require("./db/sqlite");
 
 if (!process.env.DISCORD_TOKEN) {
   throw new Error("DISCORD_TOKEN is missing from the .env file.");
 }
+
+// Open DB and run migrations at startup
+getDb();
 
 const client = new Client({
   intents: [
