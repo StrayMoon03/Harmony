@@ -35,7 +35,14 @@ async function downloadYouTubeMedia(url) {
     "harmony-%(id)s.%(ext)s"
   );
 
-  console.log("YouTube download starting.");
+  const isShort = /\/shorts\//i.test(url);
+  const formatSelector = isShort
+    ? "b[height<=720][ext=mp4]/b[height<=720]/bv*[height<=720]+ba/b[height<=720]/b"
+    : "b[height<=480][ext=mp4]/b[height<=480]/bv*[height<=480]+ba/b[height<=480]/b";
+
+  console.log(
+    `YouTube download starting (${isShort ? "Short up to 720p" : "video up to 480p"}).`
+  );
 
   try {
     const { stdout } = await execFileAsync(
@@ -55,7 +62,7 @@ async function downloadYouTubeMedia(url) {
         "--print",
         "after_move:HARMONY_FILE:%(filepath)s",
         "-f",
-        "bv*[height<=720]+ba/b[height<=720]/b",
+        formatSelector,
         "--merge-output-format",
         "mp4",
         "-o",
