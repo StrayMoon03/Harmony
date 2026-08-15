@@ -48,6 +48,8 @@ async function downloadYouTubeMedia(url) {
     "--no-playlist",
     "--no-warnings",
     "--newline",
+    "--js-runtimes",
+    "node",
     "--socket-timeout",
     "20",
     "--retries",
