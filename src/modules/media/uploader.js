@@ -23,6 +23,8 @@ const SIZE_ATTEMPTS = [
   { maxWidth: 1280, bitrateScale: 1.0 },
   { maxWidth: 960, bitrateScale: 0.7 },
   { maxWidth: 720, bitrateScale: 0.45 },
+  { maxWidth: 480, bitrateScale: 0.28 },
+  { maxWidth: 360, bitrateScale: 0.18 },
 ];
 
 /**
@@ -161,6 +163,19 @@ async function runCompressionAttempt(
     "-movflags",
     "+faststart",
   ];
+
+  // Final video-only recovery is deliberately more tolerant of
+  // malformed source packets. This is used only after audio-preserving
+  // attempts have failed.
+  if (mode === "video-only") {
+    const inputIndex = args.indexOf("-i");
+    args.splice(
+      inputIndex,
+      0,
+      "-max_error_rate",
+      "1.0"
+    );
+  }
 
   if (mode === "with-audio") {
     args.push(
