@@ -7,6 +7,15 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
+const statusCommand = require("./commands/status");
+
+const commands = [
+  forgetShareCommand,
+  statusCommand,
+];
+const commandsByName = new Map(
+  commands.map((command) => [command.data.name, command])
+);
 
 if (!process.env.DISCORD_TOKEN) {
   throw new Error("DISCORD_TOKEN is missing from the .env file.");
@@ -23,33 +32,34 @@ const client = new Client({
   ],
 });
 
-async function registerForgetCommand(guild) {
-  const commands = await guild.commands.fetch();
-  const existing = commands.find(
-    (command) => command.name === forgetShareCommand.data.name
+async function registerGuildCommands(guild) {
+  await guild.commands.set(
+    commands.map((command) => command.data.toJSON())
   );
-  const commandData = forgetShareCommand.data.toJSON();
-
-  if (existing) {
-    await guild.commands.edit(existing.id, commandData);
-  } else {
-    await guild.commands.create(commandData);
-  }
 
   console.log(
-    `Admin command ready in ${guild.name}: /harmony-forget`
+    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status`
   );
 }
 
 client.once("clientReady", async () => {
   console.log(`💜 Harmony is online as ${client.user.username}!`);
 
+  // Remove stale global copies left by earlier deployments. Harmony now
+  // publishes one clean command set directly inside each server.
+  try {
+    await client.application.commands.set([]);
+    console.log("Stale global Harmony commands cleared.");
+  } catch (error) {
+    console.error("Could not clear stale global Harmony commands:", error);
+  }
+
   for (const guild of client.guilds.cache.values()) {
     try {
-      await registerForgetCommand(guild);
+      await registerGuildCommands(guild);
     } catch (error) {
       console.error(
-        `Could not register /harmony-forget in ${guild.name}:`,
+        `Could not register Harmony admin commands in ${guild.name}:`,
         error
       );
     }
@@ -58,10 +68,10 @@ client.once("clientReady", async () => {
 
 client.on("guildCreate", async (guild) => {
   try {
-    await registerForgetCommand(guild);
+    await registerGuildCommands(guild);
   } catch (error) {
     console.error(
-      `Could not register /harmony-forget in ${guild.name}:`,
+      `Could not register Harmony admin commands in ${guild.name}:`,
       error
     );
   }
@@ -73,14 +83,12 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (
-    !interaction.isChatInputCommand() ||
-    interaction.commandName !== forgetShareCommand.data.name
-  ) {
-    return;
-  }
+  if (!interaction.isChatInputCommand()) return;
 
-  await forgetShareCommand.execute(interaction);
+  const command = commandsByName.get(interaction.commandName);
+  if (!command) return;
+
+  await command.execute(interaction);
 });
 
 client.login(process.env.DISCORD_TOKEN);
