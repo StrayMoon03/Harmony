@@ -79,17 +79,14 @@ function formatAlreadySharedReply(record) {
 async function replyWithHarmonyError(message, error) {
   console.error("Harmony Error:", error);
 
-  const errorMessage =
-    error instanceof Error
-      ? error.message
-      : String(error);
-
   await message
     .reply({
-      content:
-        "❌ Harmony encountered an error.\n\n```" +
-        errorMessage +
-        "```",
+      content: [
+        "I’m sorry, I couldn’t retrieve that post right now.",
+        "The original link is still available above.",
+        "",
+        "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+      ].join("\n"),
       allowedMentions: {
         repliedUser: false,
       },

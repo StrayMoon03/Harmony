@@ -1,5 +1,8 @@
 require("dotenv").config();
 
+const { prepareRuntimeSecrets } = require("./services/runtimeSecrets");
+prepareRuntimeSecrets();
+
 const { Client, GatewayIntentBits } = require("discord.js");
 const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");

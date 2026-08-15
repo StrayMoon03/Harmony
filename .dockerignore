@@ -1,0 +1,13 @@
+node_modules
+.env
+*.env
+*cookies*.txt
+gallery-dl/
+temp/
+src/temp/
+*.zip
+*.mp4
+*.webm
+*.m4a
+*.mp3
+.git

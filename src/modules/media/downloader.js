@@ -253,10 +253,12 @@ async function downloadWithGalleryDl(url, jobDir) {
   const galleryDlPath =
     process.env.GALLERYDL_PATH || "gallery-dl";
 
-  const cookiesPath = path.resolve(
-    __dirname,
-    "../../instagram-cookies.txt"
-  );
+  const cookiesPath =
+    process.env.INSTAGRAM_COOKIES ||
+    path.resolve(
+      __dirname,
+      "../../instagram-cookies.txt"
+    );
 
   await execFileAsync(
     galleryDlPath,
