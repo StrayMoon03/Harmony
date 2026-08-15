@@ -23,29 +23,45 @@ const client = new Client({
   ],
 });
 
+async function registerForgetCommand(guild) {
+  const commands = await guild.commands.fetch();
+  const existing = commands.find(
+    (command) => command.name === forgetShareCommand.data.name
+  );
+  const commandData = forgetShareCommand.data.toJSON();
+
+  if (existing) {
+    await guild.commands.edit(existing.id, commandData);
+  } else {
+    await guild.commands.create(commandData);
+  }
+
+  console.log(
+    `Admin command ready in ${guild.name}: /harmony-forget`
+  );
+}
+
 client.once("clientReady", async () => {
   console.log(`💜 Harmony is online as ${client.user.username}!`);
 
-  try {
-    const commands = await client.application.commands.fetch();
-    const existing = commands.find(
-      (command) => command.name === forgetShareCommand.data.name
-    );
-    const commandData = forgetShareCommand.data.toJSON();
-
-    if (existing) {
-      await client.application.commands.edit(
-        existing.id,
-        commandData
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await registerForgetCommand(guild);
+    } catch (error) {
+      console.error(
+        `Could not register /harmony-forget in ${guild.name}:`,
+        error
       );
-    } else {
-      await client.application.commands.create(commandData);
     }
+  }
+});
 
-    console.log("Admin command ready: /harmony-forget");
+client.on("guildCreate", async (guild) => {
+  try {
+    await registerForgetCommand(guild);
   } catch (error) {
     console.error(
-      "Could not register /harmony-forget:",
+      `Could not register /harmony-forget in ${guild.name}:`,
       error
     );
   }
