@@ -83,7 +83,25 @@ function insert(data) {
   }
 }
 
+/**
+ * Removes one saved share so it can be shared again.
+ *
+ * @param {string} platform
+ * @param {string} mediaId
+ * @returns {boolean}
+ */
+function remove(platform, mediaId) {
+  const result = getDb()
+    .prepare(
+      `DELETE FROM shares WHERE platform = ? AND media_id = ?`
+    )
+    .run(platform, mediaId);
+
+  return Number(result.changes) > 0;
+}
+
 module.exports = {
   find,
   insert,
+  remove,
 };
