@@ -26,6 +26,10 @@ const {
   findXLinks,
   extractXId,
 } = require("../modules/media/x");
+const {
+  findYouTubeLinks,
+  extractYouTubeId,
+} = require("../modules/media/youtube");
 const shareStore = require("../stores/shareStore");
 
 const data = new SlashCommandBuilder()
@@ -35,7 +39,7 @@ const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName("link")
-      .setDescription("The Instagram, Facebook, TikTok, or X link to forget")
+      .setDescription("The Instagram, Facebook, TikTok, X, or YouTube link to forget")
       .setRequired(true)
   );
 
@@ -77,6 +81,14 @@ async function resolveShareKey(input) {
     };
   }
 
+  const youtubeUrl = findYouTubeLinks(input)[0];
+  if (youtubeUrl) {
+    return {
+      platform: "youtube",
+      mediaId: extractYouTubeId(youtubeUrl),
+    };
+  }
+
   return null;
 }
 
@@ -93,7 +105,7 @@ async function execute(interaction) {
     if (!key || !key.mediaId) {
       await interaction.editReply({
         content:
-          "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, or X post link.",
+          "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, X, or YouTube post link.",
       });
       return;
     }
