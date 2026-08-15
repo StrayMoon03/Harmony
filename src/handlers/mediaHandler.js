@@ -39,6 +39,9 @@ const {
   extractYouTubeId,
   isYouTubeShort,
 } = require("../modules/media/youtube");
+const {
+  downloadYouTubeMedia,
+} = require("../modules/media/youtubeDownloader");
 const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 
@@ -140,6 +143,11 @@ async function handleMediaMessage(message) {
 
   const youtubeLinks =
     findYouTubeLinks(message.content);
+
+  console.log("YouTube detection:", {
+    content: message.content,
+    youtubeLinks,
+  });
 
   console.log("TikTok detection:", {
     content: message.content,
@@ -651,18 +659,12 @@ async function handleMediaMessage(message) {
 
       await message.channel.sendTyping();
 
-      let info = null;
-
-      try {
-        info = await getMediaInfo(originalUrl);
-      } catch {
-        console.warn(
-          "YouTube metadata unavailable. Continuing with download only."
-        );
-      }
+      console.log(
+        `YouTube link accepted: ${mediaId}`
+      );
 
       const downloadResult =
-        await downloadMedia(originalUrl);
+        await downloadYouTubeMedia(originalUrl);
 
       const classification = classify(
         downloadResult.files,
@@ -675,10 +677,9 @@ async function handleMediaMessage(message) {
         );
       }
 
-      const creator = resolveCreator(
-        info,
-        classification.files
-      );
+      const creator =
+        downloadResult.creator ||
+        "Unknown creator";
 
       const mediaType =
         isYouTubeShort(originalUrl)
