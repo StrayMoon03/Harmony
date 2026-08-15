@@ -318,6 +318,153 @@ async function runGalleryDl(url, jobDir, cookiesPath = null) {
   });
 }
 
+
+/**
+ * Reads Netscape cookies into a request Cookie header.
+ *
+ * @param {string|null} cookiesPath
+ * @returns {Promise<string>}
+ */
+async function buildCookieHeader(cookiesPath) {
+  if (!cookiesPath) return "";
+
+  try {
+    const text = await fs.readFile(cookiesPath, "utf8");
+    return text
+      .split(/\r?\n/)
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => line.split("\t"))
+      .filter((parts) => parts.length >= 7)
+      .map((parts) => `${parts[5]}=${parts[6]}`)
+      .join("; ");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Facebook photo posts can expose a generated slideshow MP4 to yt-dlp.
+ * Read the post page itself and download only large CDN images so the
+ * original photo collection wins over that preview video.
+ *
+ * @param {string} url
+ * @param {string} jobDir
+ * @param {string|null} cookiesPath
+ */
+async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
+  const cookie = await buildCookieHeader(cookiesPath);
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Facebook photo page returned HTTP ${response.status}`);
+  }
+
+  const html = await response.text();
+  const matches = [];
+  const escapedUrlPattern =
+    /https(?:\\u003A|:)(?:\\\/|\/){2}(?:scontent|scontent-[a-z0-9-]+|lookaside)\.[^"'\\s<]+/gi;
+
+  for (const match of html.matchAll(escapedUrlPattern)) {
+    const raw = match[0]
+      .replace(/\\u003A/gi, ":")
+      .replace(/\\u0025/gi, "%")
+      .replace(/\\u0026/gi, "&")
+      .replace(/\\\//g, "/")
+      .replace(/&amp;/g, "&");
+
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      continue;
+    }
+
+    if (
+      !/(?:fbcdn\.net|facebook\.com)$/i.test(parsed.hostname) &&
+      !/\.fbcdn\.net$/i.test(parsed.hostname)
+    ) {
+      continue;
+    }
+
+    const nearby = html.slice(
+      Math.max(0, match.index - 450),
+      Math.min(html.length, match.index + match[0].length + 450)
+    );
+    const widths = [...nearby.matchAll(/"width"\s*:\s*(\d+)/g)].map(
+      (item) => Number(item[1])
+    );
+    const heights = [...nearby.matchAll(/"height"\s*:\s*(\d+)/g)].map(
+      (item) => Number(item[1])
+    );
+    const width = Math.max(0, ...widths);
+    const height = Math.max(0, ...heights);
+
+    // Excludes profile pictures, icons, reactions, and other page furniture.
+    if (width < 500 || height < 500) continue;
+
+    matches.push({
+      url: parsed.toString(),
+      key: `${parsed.hostname}${parsed.pathname}`,
+      area: width * height,
+    });
+  }
+
+  const unique = [
+    ...new Map(
+      matches
+        .sort((a, b) => b.area - a.area)
+        .map((item) => [item.key, item])
+    ).values(),
+  ].slice(0, 20);
+
+  if (unique.length === 0) {
+    throw new Error("No original Facebook post photos were found in the page");
+  }
+
+  let saved = 0;
+  for (const item of unique) {
+    const image = await fetch(item.url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+    });
+    if (!image.ok) continue;
+
+    const type = image.headers.get("content-type") || "";
+    if (!type.startsWith("image/")) continue;
+
+    const bytes = Buffer.from(await image.arrayBuffer());
+    if (bytes.length < 30 * 1024) continue;
+
+    const ext = type.includes("png")
+      ? ".png"
+      : type.includes("webp")
+        ? ".webp"
+        : ".jpg";
+    const dest = path.join(
+      jobDir,
+      `facebook-photo-${String(saved).padStart(3, "0")}${ext}`
+    );
+    await fs.writeFile(dest, bytes);
+    saved += 1;
+  }
+
+  if (saved === 0) {
+    throw new Error("Facebook post photos were found but could not be downloaded");
+  }
+
+  console.log(`Facebook photo-page extraction saved ${saved} original image(s)`);
+}
+
 /**
  * @param {string} url
  * @param {string|null} cookiesPath
@@ -447,10 +594,15 @@ async function getGalleryDlCreator(url, cookiesPath = null) {
  * @param {Array<object>} files
  * @returns {number}
  */
-function scoreFiles(files) {
+function scoreFiles(files, preferPhotos = false) {
   const images = files.filter((f) => f.isImage).length;
   const videos = files.filter((f) => f.isVideo).length;
-  return images + videos * 3;
+
+  // For a Facebook photo-post URL, original images must outrank Facebook's
+  // generated slideshow/preview MP4. Genuine reels and videos use normal scoring.
+  return preferPhotos
+    ? images * 10 + videos
+    : images + videos * 3;
 }
 
 /**
@@ -507,6 +659,15 @@ async function downloadFacebookMedia(url) {
 
   /** @type {Array<{ name: string, run: () => Promise<void> }>} */
   const strategies = [];
+
+  // A /share/p/ or other photo-post URL may make yt-dlp return Facebook's
+  // generated preview video. Try the page's original CDN images first.
+  if (preferGalleryFirst && cookiesUsable) {
+    strategies.push({
+      name: "facebook-photo-page+cookies (primary)",
+      run: () => runFacebookPhotoPage(url, jobDir, cookiesPath),
+    });
+  }
 
   for (const candidate of urlCandidates) {
     const label =
@@ -581,7 +742,7 @@ async function downloadFacebookMedia(url) {
 
       const imageCount = files.filter((f) => f.isImage).length;
       const videoCount = files.filter((f) => f.isVideo).length;
-      const score = scoreFiles(files);
+      const score = scoreFiles(files, preferGalleryFirst);
 
       console.log(
         `Facebook ${strategy.name}: ${files.length} file(s) ` +
@@ -606,8 +767,12 @@ async function downloadFacebookMedia(url) {
         break;
       }
 
-      // Multi-photo or video is enough — stop.
-      if (imageCount > 1 || videoCount > 0) {
+      // For photo-post URLs, never stop merely because Facebook supplied
+      // a generated preview MP4. Keep searching for the original images.
+      if (
+        imageCount > 1 ||
+        (!preferGalleryFirst && videoCount > 0)
+      ) {
         break;
       }
     } catch (error) {
