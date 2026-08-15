@@ -362,21 +362,69 @@ async function buildCookieHeader(cookiesPath) {
  */
 async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
   const cookie = await buildCookieHeader(cookiesPath);
-  const response = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-      "Accept-Language": "en-US,en;q=0.9",
-      ...(cookie ? { Cookie: cookie } : {}),
-    },
-  });
+  const original = new URL(url);
+  const mobile = new URL(url);
+  mobile.hostname = "m.facebook.com";
+  const basic = new URL(url);
+  basic.hostname = "mbasic.facebook.com";
+  const embedded =
+    "https://www.facebook.com/plugins/post.php?href=" +
+    encodeURIComponent(url) +
+    "&show_text=true&width=750";
 
-  if (!response.ok) {
-    throw new Error(`Facebook photo page returned HTTP ${response.status}`);
+  const pageCandidates = [
+    original.toString(),
+    mobile.toString(),
+    basic.toString(),
+    embedded,
+  ];
+  const pageErrors = [];
+  let html = "";
+
+  for (const candidate of [...new Set(pageCandidates)]) {
+    try {
+      const response = await fetch(candidate, {
+        redirect: "follow",
+        headers: {
+          "User-Agent":
+            candidate.includes("mbasic") || candidate.includes("m.facebook")
+              ? "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36"
+              : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      });
+
+      if (!response.ok) {
+        pageErrors.push(`${candidate}: HTTP ${response.status}`);
+        continue;
+      }
+
+      const body = await response.text();
+      if (body.length > html.length) {
+        html = body;
+      }
+
+      if (/scontent|fbcdn\.net/i.test(body)) {
+        console.log(
+          `Facebook photo page loaded via ${new URL(candidate).hostname}`
+        );
+        html = body;
+        break;
+      }
+    } catch (error) {
+      pageErrors.push(`${candidate}: ${error.message}`);
+    }
   }
 
-  const html = await response.text();
+  if (!html) {
+    throw new Error(
+      "Facebook photo page could not be opened. " + pageErrors.join(" | ")
+    );
+  }
+
   const matches = [];
   const escapedUrlPattern =
     /https(?:\\u003A|:)(?:\\\/|\/){2}(?:scontent|scontent-[a-z0-9-]+|lookaside)\.[^"'\\s<]+/gi;
@@ -416,8 +464,14 @@ async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
     const width = Math.max(0, ...widths);
     const height = Math.max(0, ...heights);
 
-    // Excludes profile pictures, icons, reactions, and other page furniture.
-    if (width < 500 || height < 500) continue;
+    // If Facebook supplied dimensions, reject obvious icons immediately.
+    // Mobile/embedded pages often omit them; ffprobe verifies those below.
+    if (
+      (width > 0 && width < 500) ||
+      (height > 0 && height < 500)
+    ) {
+      continue;
+    }
 
     matches.push({
       url: parsed.toString(),
@@ -432,10 +486,12 @@ async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
         .sort((a, b) => b.area - a.area)
         .map((item) => [item.key, item])
     ).values(),
-  ].slice(0, 20);
+  ].slice(0, 60);
 
   if (unique.length === 0) {
-    throw new Error("No original Facebook post photos were found in the page");
+    throw new Error(
+      "No Facebook CDN images were found in the available post pages"
+    );
   }
 
   let saved = 0;
@@ -464,14 +520,54 @@ async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
       `facebook-photo-${String(saved).padStart(3, "0")}${ext}`
     );
     await fs.writeFile(dest, bytes);
+
+    try {
+      const { stdout } = await execFileAsync(
+        process.env.FFPROBE_PATH || "ffprobe",
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "v:0",
+          "-show_entries",
+          "stream=width,height",
+          "-of",
+          "csv=p=0:s=x",
+          dest,
+        ],
+        {
+          windowsHide: true,
+          maxBuffer: 1024 * 1024,
+        }
+      );
+      const dimensions = String(stdout)
+        .trim()
+        .match(/^(\d+)x(\d+)/);
+      if (
+        !dimensions ||
+        Number(dimensions[1]) < 500 ||
+        Number(dimensions[2]) < 500
+      ) {
+        await fs.rm(dest, { force: true });
+        continue;
+      }
+    } catch {
+      await fs.rm(dest, { force: true });
+      continue;
+    }
+
     saved += 1;
   }
 
   if (saved === 0) {
-    throw new Error("Facebook post photos were found but could not be downloaded");
+    throw new Error(
+      "Facebook post images were found, but none were original-size photos"
+    );
   }
 
-  console.log(`Facebook photo-page extraction saved ${saved} original image(s)`);
+  console.log(
+    `Facebook photo-page extraction saved ${saved} original image(s)`
+  );
 }
 
 /**
