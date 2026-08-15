@@ -41,6 +41,11 @@ function prepareRuntimeSecrets() {
     "FACEBOOK_COOKIES",
     "facebook-cookies.txt"
   );
+  materializeBase64Secret(
+    "YOUTUBE_COOKIES_BASE64",
+    "YOUTUBE_COOKIES",
+    "youtube-cookies.txt"
+  );
 }
 
 module.exports = { prepareRuntimeSecrets };

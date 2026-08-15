@@ -44,31 +44,44 @@ async function downloadYouTubeMedia(url) {
     `YouTube download starting (${isShort ? "Short up to 720p" : "video up to 480p"}).`
   );
 
+  const ytDlpArgs = [
+    "--no-playlist",
+    "--no-warnings",
+    "--newline",
+    "--socket-timeout",
+    "20",
+    "--retries",
+    "2",
+    "--fragment-retries",
+    "2",
+    "--print",
+    "before_dl:HARMONY_CREATOR:%(uploader)s",
+    "--print",
+    "after_move:HARMONY_FILE:%(filepath)s",
+    "-f",
+    formatSelector,
+    "--merge-output-format",
+    "mp4",
+    "-o",
+    outputTemplate,
+  ];
+
+  const cookiesPath = process.env.YOUTUBE_COOKIES;
+  if (cookiesPath) {
+    ytDlpArgs.push("--cookies", cookiesPath);
+    console.log("YouTube cookies: ready.");
+  } else {
+    console.warn(
+      "YouTube cookies: missing — Railway may be blocked as a bot."
+    );
+  }
+
+  ytDlpArgs.push(url);
+
   try {
     const { stdout } = await execFileAsync(
       ytDlpPath,
-      [
-        "--no-playlist",
-        "--no-warnings",
-        "--newline",
-        "--socket-timeout",
-        "20",
-        "--retries",
-        "2",
-        "--fragment-retries",
-        "2",
-        "--print",
-        "before_dl:HARMONY_CREATOR:%(uploader)s",
-        "--print",
-        "after_move:HARMONY_FILE:%(filepath)s",
-        "-f",
-        formatSelector,
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        outputTemplate,
-        url,
-      ],
+      ytDlpArgs,
       {
         windowsHide: true,
         timeout: 180000,
