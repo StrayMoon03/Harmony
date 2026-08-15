@@ -1,28 +1,4 @@
-const YOUTUBE_URL_REGEX =
-  /https?:\/\/(?:(?:(?:www|m|music)\.)?youtube\.com\/(?:(?:watch\?[^\s<]*\bv=[A-Za-z0-9_-]{11})|(?:shorts|live)\/[A-Za-z0-9_-]{11})|youtu\.be\/[A-Za-z0-9_-]{11})[^\s<]*/gi;
-
-/**
- * Finds supported YouTube video links in Discord message text.
- *
- * Supports:
- * - youtube.com/watch?v=...
- * - youtube.com/shorts/...
- * - youtube.com/live/...
- * - youtu.be/...
- * - music.youtube.com/watch?v=...
- *
- * @param {string} text
- * @returns {string[]}
- */
-function findYouTubeLinks(text) {
-  if (!text) return [];
-
-  const matches = text.match(YOUTUBE_URL_REGEX) ?? [];
-
-  return matches.map((url) =>
-    url.replace(/[)>.,!?]+$/g, "")
-  );
-}
+const URL_TOKEN_REGEX = /https?:\/\/[^\s<>]+/gi;
 
 /**
  * Extracts the stable 11-character YouTube video ID.
@@ -35,7 +11,9 @@ function extractYouTubeId(url) {
 
   try {
     const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = parsed.hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
 
     if (hostname === "youtu.be") {
       const id = parsed.pathname.split("/").filter(Boolean)[0];
@@ -46,7 +24,7 @@ function extractYouTubeId(url) {
       hostname === "youtube.com" ||
       hostname.endsWith(".youtube.com")
     ) {
-      if (parsed.pathname === "/watch") {
+      if (parsed.pathname.replace(/\/$/, "") === "/watch") {
         const id = parsed.searchParams.get("v");
         return /^[A-Za-z0-9_-]{11}$/.test(id || "") ? id : null;
       }
@@ -61,6 +39,20 @@ function extractYouTubeId(url) {
   }
 
   return null;
+}
+
+/**
+ * Finds supported YouTube links in Discord message text.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+function findYouTubeLinks(text) {
+  if (!text) return [];
+
+  return (text.match(URL_TOKEN_REGEX) ?? [])
+    .map((url) => url.replace(/[)>.,!?]+$/g, ""))
+    .filter((url) => extractYouTubeId(url) !== null);
 }
 
 /**
