@@ -1,0 +1,141 @@
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { randomUUID } = require("node:crypto");
+const { execFile } = require("node:child_process");
+const { promisify } = require("node:util");
+const { probeFile } = require("./downloader");
+
+const execFileAsync = promisify(execFile);
+const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+
+/**
+ * Downloads one YouTube video with bounded network retries and a hard timeout.
+ * The 720p ceiling keeps the source practical for Discord's upload compressor.
+ *
+ * @param {string} url
+ * @returns {Promise<{
+ *   files: Array<object>,
+ *   rawDir: string,
+ *   platform: string,
+ *   creator: string|null
+ * }>}
+ */
+async function downloadYouTubeMedia(url) {
+  await fs.mkdir(TEMP_ROOT, { recursive: true });
+
+  const jobDir = path.join(
+    TEMP_ROOT,
+    `youtube-${Date.now()}-${randomUUID()}`
+  );
+  await fs.mkdir(jobDir, { recursive: true });
+
+  const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
+  const outputTemplate = path.join(
+    jobDir,
+    "harmony-%(id)s.%(ext)s"
+  );
+
+  console.log("YouTube download starting.");
+
+  try {
+    const { stdout } = await execFileAsync(
+      ytDlpPath,
+      [
+        "--no-playlist",
+        "--no-warnings",
+        "--newline",
+        "--socket-timeout",
+        "20",
+        "--retries",
+        "2",
+        "--fragment-retries",
+        "2",
+        "--print",
+        "before_dl:HARMONY_CREATOR:%(uploader)s",
+        "--print",
+        "after_move:HARMONY_FILE:%(filepath)s",
+        "-f",
+        "bv*[height<=720]+ba/b[height<=720]/b",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        outputTemplate,
+        url,
+      ],
+      {
+        windowsHide: true,
+        timeout: 180000,
+        killSignal: "SIGKILL",
+        maxBuffer: 30 * 1024 * 1024,
+      }
+    );
+
+    const lines = String(stdout).split(/\r?\n/);
+    const creatorLine = lines.find((line) =>
+      line.startsWith("HARMONY_CREATOR:")
+    );
+    const creatorValue = creatorLine
+      ? creatorLine.slice("HARMONY_CREATOR:".length).trim()
+      : "";
+    const creator =
+      creatorValue &&
+      creatorValue !== "NA" &&
+      creatorValue !== "None"
+        ? creatorValue
+        : null;
+
+    const downloadedPaths = lines
+      .filter((line) => line.startsWith("HARMONY_FILE:"))
+      .map((line) =>
+        line.slice("HARMONY_FILE:".length).trim()
+      )
+      .filter(Boolean);
+
+    if (downloadedPaths.length === 0) {
+      throw new Error(
+        "yt-dlp finished without returning a YouTube media file."
+      );
+    }
+
+    const files = downloadedPaths
+      .map(probeFile)
+      .filter((file) => file.isImage || file.isVideo);
+
+    if (files.length === 0) {
+      throw new Error(
+        "yt-dlp did not produce a supported YouTube media file."
+      );
+    }
+
+    console.log(
+      `YouTube download complete (${files.length} file(s)).`
+    );
+
+    return {
+      files,
+      rawDir: jobDir,
+      platform: "youtube",
+      creator,
+    };
+  } catch (error) {
+    await fs.rm(jobDir, {
+      recursive: true,
+      force: true,
+    });
+
+    if (
+      error &&
+      (error.killed || error.signal === "SIGKILL")
+    ) {
+      throw new Error(
+        "YouTube took longer than three minutes to respond."
+      );
+    }
+
+    throw error;
+  }
+}
+
+module.exports = {
+  downloadYouTubeMedia,
+};
