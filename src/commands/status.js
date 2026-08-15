@@ -60,12 +60,14 @@ async function execute(interaction) {
     const [
       instagramCookies,
       facebookCookies,
+      youtubeCookies,
       ytDlp,
       galleryDl,
       ffmpeg,
     ] = await Promise.all([
       fileReady(process.env.INSTAGRAM_COOKIES),
       fileReady(process.env.FACEBOOK_COOKIES),
+      fileReady(process.env.YOUTUBE_COOKIES),
       commandReady(process.env.YTDLP_PATH || "yt-dlp"),
       commandReady(process.env.GALLERYDL_PATH || "gallery-dl"),
       commandReady(process.env.FFMPEG_PATH || "ffmpeg", ["-version"]),
@@ -79,11 +81,12 @@ async function execute(interaction) {
       `Memory database: ${mark(databaseReady)}`,
       `Instagram cookies: ${mark(instagramCookies)}`,
       `Facebook cookies: ${mark(facebookCookies)}`,
+      `YouTube cookies: ${mark(youtubeCookies)}`,
       `yt-dlp: ${mark(ytDlp)}`,
       `gallery-dl: ${mark(galleryDl)}`,
       `ffmpeg: ${mark(ffmpeg)}`,
       "",
-      "Instagram, Facebook, TikTok, and X are enabled.",
+      "Instagram, Facebook, TikTok, X, and YouTube are enabled.",
       "",
       "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
     ].join("\n");
