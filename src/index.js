@@ -53,6 +53,12 @@ client.once("clientReady", async () => {
 
 client.on("messageCreate", async (message) => {
   console.log("MESSAGE RECEIVED:", message.content);
+
+  const commandHandled =
+    await forgetShareCommand.executeText(message);
+
+  if (commandHandled) return;
+
   await handleMediaMessage(message);
 });
 
