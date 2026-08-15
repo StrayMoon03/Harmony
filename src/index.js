@@ -24,6 +24,7 @@ client.once("clientReady", () => {
 });
 
 client.on("messageCreate", async (message) => {
+  console.log("MESSAGE RECEIVED:", message.content);
   await handleMediaMessage(message);
 });
 

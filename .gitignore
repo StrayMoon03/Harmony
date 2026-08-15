@@ -6,3 +6,12 @@ data/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*cookies*.txt
+gallery-dl/
+temp/
+src/temp/
+*.zip
+*.mp4
+*.webm
+*.m4a
+*.mp3

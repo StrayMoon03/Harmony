@@ -1,12 +1,27 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const execFileAsync = promisify(execFile);
 
-const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
-const VIDEO_EXT = new Set(["mp4", "mov", "webm", "mkv"]);
+const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+
+const IMAGE_EXT = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+]);
+
+const VIDEO_EXT = new Set([
+  "mp4",
+  "mov",
+  "webm",
+  "mkv",
+]);
 
 /**
  * @typedef {object} MediaFile
@@ -24,20 +39,27 @@ const VIDEO_EXT = new Set(["mp4", "mov", "webm", "mkv"]);
  */
 
 /**
- * Probe a file path into a MediaFile.
+ * Converts a downloaded file path into a MediaFile object.
+ *
  * @param {string} filePath
  * @returns {MediaFile}
  */
 function probeFile(filePath) {
   const ext = path.extname(filePath).slice(1).toLowerCase();
+
   const isImage = IMAGE_EXT.has(ext);
   const isVideo = VIDEO_EXT.has(ext);
 
   let mime = "application/octet-stream";
+
   if (isImage) {
-    mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+    mime = ext === "jpg" || ext === "jpeg"
+      ? "image/jpeg"
+      : `image/${ext}`;
   } else if (isVideo) {
-    mime = ext === "mp4" ? "video/mp4" : `video/${ext}`;
+    mime = ext === "mp4"
+      ? "video/mp4"
+      : `video/${ext}`;
   }
 
   return {
@@ -49,12 +71,16 @@ function probeFile(filePath) {
 }
 
 /**
- * Recursively collect media files under a directory.
+ * Recursively finds media files inside a directory.
+ *
  * @param {string} dir
  * @returns {Promise<string[]>}
  */
 async function findMediaFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const entries = await fs.readdir(dir, {
+    withFileTypes: true,
+  });
+
   let files = [];
 
   for (const entry of entries) {
@@ -62,7 +88,14 @@ async function findMediaFiles(dir) {
 
     if (entry.isDirectory()) {
       files.push(...(await findMediaFiles(fullPath)));
-    } else if (/\.(jpg|jpeg|png|webp|gif|mp4|mov|webm|mkv)$/i.test(entry.name)) {
+      continue;
+    }
+
+    if (
+      /\.(jpg|jpeg|png|webp|gif|mp4|mov|webm|mkv)$/i.test(
+        entry.name
+      )
+    ) {
       files.push(fullPath);
     }
   }
@@ -71,48 +104,96 @@ async function findMediaFiles(dir) {
 }
 
 /**
- * Downloads media from a supported public URL into src/temp.
+ * Creates a unique temporary workspace for one download.
  *
- * Uses yt-dlp first.
- * If Instagram reports no video formats, falls back to gallery-dl.
+ * @returns {Promise<string>}
+ */
+async function createJobDirectory() {
+  await fs.mkdir(TEMP_ROOT, {
+    recursive: true,
+  });
+
+  const jobDir = path.join(
+    TEMP_ROOT,
+    `job-${Date.now()}-${randomUUID()}`
+  );
+
+  await fs.mkdir(jobDir, {
+    recursive: true,
+  });
+
+  return jobDir;
+}
+
+/**
+ * Downloads media from a supported URL.
  *
- * Always returns every media file that was produced.
+ * yt-dlp is attempted first.
+ * Instagram photo posts and carousels fall back to gallery-dl.
+ *
+ * Every download uses its own temporary folder.
  *
  * @param {string} url
  * @returns {Promise<DownloadResult>}
  */
 async function downloadMedia(url) {
-  const tempDir = path.resolve(__dirname, "../../temp");
-  await fs.mkdir(tempDir, { recursive: true });
+  const jobDir = await createJobDirectory();
 
   try {
-    return await downloadWithYtDlp(url, tempDir);
+    return await downloadWithYtDlp(url, jobDir);
   } catch (err) {
-    const errorText = `${err.stderr || ""} ${err.message || ""}`.toLowerCase();
+    const errorText = [
+      err.stderr || "",
+      err.stdout || "",
+      err.message || "",
+    ]
+      .join(" ")
+      .toLowerCase();
 
-    if (
+    const shouldUseGalleryDl =
       errorText.includes("there is no video in this post") ||
-      errorText.includes("no video formats found")
-    ) {
-      console.log("Instagram photo/carousel detected. Falling back to gallery-dl...");
-      return await downloadWithGalleryDl(url, tempDir);
+      errorText.includes("no video formats found");
+
+    if (shouldUseGalleryDl) {
+      console.log(
+        "Instagram photo/carousel detected. Falling back to gallery-dl..."
+      );
+
+      try {
+        return await downloadWithGalleryDl(url, jobDir);
+      } catch (galleryError) {
+        await fs.rm(jobDir, {
+          recursive: true,
+          force: true,
+        });
+
+        throw galleryError;
+      }
     }
+
+    await fs.rm(jobDir, {
+      recursive: true,
+      force: true,
+    });
 
     throw err;
   }
 }
 
 /**
+ * Downloads media using yt-dlp.
+ *
  * @param {string} url
- * @param {string} tempDir
+ * @param {string} jobDir
  * @returns {Promise<DownloadResult>}
  */
-async function downloadWithYtDlp(url, tempDir) {
-  const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
+async function downloadWithYtDlp(url, jobDir) {
+  const ytDlpPath =
+    process.env.YTDLP_PATH || "yt-dlp";
 
   const outputTemplate = path.join(
-    tempDir,
-    `harmony-${Date.now()}-%(id)s.%(ext)s`
+    jobDir,
+    "harmony-%(id)s.%(ext)s"
   );
 
   const { stdout } = await execFileAsync(
@@ -128,44 +209,54 @@ async function downloadWithYtDlp(url, tempDir) {
     ],
     {
       windowsHide: true,
-      maxBuffer: 10 * 1024 * 1024,
+      maxBuffer: 20 * 1024 * 1024,
     }
   );
 
-  const lines = stdout
+  const paths = stdout
     .trim()
     .split(/\r?\n/)
-    .map((l) => l.trim())
+    .map((line) => line.trim())
     .filter(Boolean);
 
-  if (lines.length === 0) {
-    throw new Error("yt-dlp did not return a downloaded file path.");
+  if (paths.length === 0) {
+    throw new Error(
+      "yt-dlp did not return a downloaded file path."
+    );
   }
 
-  const files = lines.map(probeFile);
+  const files = paths
+    .map(probeFile)
+    .filter((file) => file.isImage || file.isVideo);
+
+  if (files.length === 0) {
+    throw new Error(
+      "yt-dlp did not produce any supported media files."
+    );
+  }
 
   return {
     files,
-    rawDir: tempDir,
+    rawDir: jobDir,
     platform: "instagram",
   };
 }
 
 /**
+ * Downloads media using gallery-dl.
+ *
  * @param {string} url
- * @param {string} tempDir
+ * @param {string} jobDir
  * @returns {Promise<DownloadResult>}
  */
-async function downloadWithGalleryDl(url, tempDir) {
-  const galleryDlPath = process.env.GALLERYDL_PATH || "gallery-dl";
+async function downloadWithGalleryDl(url, jobDir) {
+  const galleryDlPath =
+    process.env.GALLERYDL_PATH || "gallery-dl";
 
   const cookiesPath = path.resolve(
     __dirname,
     "../../instagram-cookies.txt"
   );
-
-  // Snapshot existing media so we only return newly downloaded files.
-  const before = new Set(await findMediaFiles(tempDir));
 
   await execFileAsync(
     galleryDlPath,
@@ -173,30 +264,48 @@ async function downloadWithGalleryDl(url, tempDir) {
       "--cookies",
       cookiesPath,
       "-d",
-      tempDir,
+      jobDir,
       url,
     ],
     {
       windowsHide: true,
-      maxBuffer: 10 * 1024 * 1024,
+      maxBuffer: 20 * 1024 * 1024,
     }
   );
 
-  const after = await findMediaFiles(tempDir);
-  const newPaths = after.filter((p) => !before.has(p));
+  // Brief pause for Windows to finish exposing written files.
+  await new Promise((resolve) =>
+    setTimeout(resolve, 300)
+  );
 
-  if (newPaths.length === 0) {
-    throw new Error("gallery-dl did not download any media files.");
+  const paths = await findMediaFiles(jobDir);
+
+  if (paths.length === 0) {
+    throw new Error(
+      "gallery-dl did not download any media files."
+    );
   }
 
-  // Sort for stable order (gallery-dl names are usually sequential).
-  newPaths.sort((a, b) => a.localeCompare(b));
+  paths.sort((a, b) =>
+    a.localeCompare(b, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    })
+  );
 
-  const files = newPaths.map(probeFile);
+  const files = paths
+    .map(probeFile)
+    .filter((file) => file.isImage || file.isVideo);
+
+  if (files.length === 0) {
+    throw new Error(
+      "gallery-dl did not produce any supported media files."
+    );
+  }
 
   return {
     files,
-    rawDir: tempDir,
+    rawDir: jobDir,
     platform: "instagram",
   };
 }

@@ -31,7 +31,7 @@ async function getMediaInfo(url) {
       }
     ));
   } catch (err) {
-    // Instagram photo posts often return JSON even though yt-dlp exits with code 1.
+    // Some sites still return usable JSON even when yt-dlp exits non-zero.
     if (err.stdout) {
       stdout = err.stdout;
     } else {
@@ -42,11 +42,25 @@ async function getMediaInfo(url) {
   const info = JSON.parse(stdout);
 
   return {
-    uploader: info.uploader || info.channel || info.creator || null,
+    uploader:
+      info.uploader ||
+      info.channel ||
+      info.creator ||
+      info.uploader_id ||
+      info.channel_id ||
+      null,
+
+    creator:
+      info.creator ||
+      info.uploader ||
+      info.channel ||
+      null,
+
     title: info.title || null,
     description: info.description || null,
     webpage_url: info.webpage_url || url,
-    // Keep the raw object available for future needs, but do not classify here.
+
+    // Keep the raw object available for future needs.
     _raw: info,
   };
 }

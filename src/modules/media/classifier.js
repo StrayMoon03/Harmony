@@ -1,13 +1,26 @@
 /**
- * Pure classifier. The only place that decides photo / video / carousel.
+ * Pure classifier.
+ * The only place that decides Photo / Video / Reel / Multi-Photo.
+ *
  * Operates exclusively on the files that were actually downloaded.
  *
- * @param {Array<{ path: string, isImage: boolean, isVideo: boolean, mime: string }>} files
- * @param {string} [originalUrl] - optional, used only for cosmetic "Reel" label
- * @returns {{ kind: string, label: string, files: typeof files }}
+ * @param {Array<{
+ *   path: string,
+ *   isImage: boolean,
+ *   isVideo: boolean,
+ *   mime: string
+ * }>} files
+ * @param {string} [originalUrl]
+ * @returns {{
+ *   kind: string,
+ *   label: string,
+ *   files: typeof files
+ * }}
  */
 function classify(files, originalUrl = "") {
-  const media = files.filter((f) => f.isImage || f.isVideo);
+  const media = files.filter(
+    (file) => file.isImage || file.isVideo
+  );
 
   if (media.length === 0) {
     return {
@@ -17,17 +30,23 @@ function classify(files, originalUrl = "") {
     };
   }
 
+  // =========================
+  // Single media item
+  // =========================
+
   if (media.length === 1) {
     const file = media[0];
 
     if (file.isVideo) {
-      // Cosmetic only: single video from a /reel/ URL may still be labelled "Reel".
       const isReel =
         typeof originalUrl === "string" &&
-        (/\/reel\//i.test(originalUrl) || /\/reels\//i.test(originalUrl));
+        (
+          /\/reel\//i.test(originalUrl) ||
+          /\/reels\//i.test(originalUrl)
+        );
 
       return {
-        kind: "video",
+        kind: isReel ? "reel" : "video",
         label: isReel ? "Reel" : "Video",
         files: media,
       };
@@ -40,9 +59,13 @@ function classify(files, originalUrl = "") {
     };
   }
 
+  // =========================
+  // Multiple media items
+  // =========================
+
   return {
-    kind: "carousel",
-    label: "Carousel",
+    kind: "multi-photo",
+    label: "Multi-Photo",
     files: media,
   };
 }

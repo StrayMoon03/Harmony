@@ -1,31 +1,48 @@
 /**
- * Format a friendly "already shared" reply.
+ * Builds Harmony's media card.
  *
- * @param {{ shared_by: string, shared_at: string }} record
+ * @param {object} options
+ * @param {string} options.platform
+ * @param {string} options.mediaType
+ * @param {string} options.creator
+ * @param {string} options.originalUrl
+ * @param {string} options.heart
  * @returns {string}
  */
-function formatAlreadySharedReply(record) {
-  let dateLine = record.shared_at;
+function formatMediaCard({
+  platform,
+  mediaType,
+  creator,
+  originalUrl,
+  heart,
+}) {
+  const safeCreator = creator || "Unknown creator";
+  const safeHeart = heart || "🤍";
 
-  try {
-    const d = new Date(record.shared_at);
+  const typeIcons = {
+    Photo: "📷",
+    "Multi-Photo": "🖼️",
+    Reel: "🎬",
+    Video: "🎥",
+  };
 
-    dateLine = d.toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    // Keep the raw value if parsing fails.
-  }
+  const icon = typeIcons[mediaType] || "📎";
+
+  const safeUrl = originalUrl
+    ? `<${originalUrl}>`
+    : "";
 
   return [
-    "Thank you for helping keep our collection growing!",
+    `${icon} ${platform} ${mediaType}`,
+    safeCreator,
     "",
-    "It looks like this post has already been added.",
+    `Original ${mediaType}`,
+    safeUrl,
     "",
-    `Originally shared on ${dateLine}`,
-    `by ${record.shared_by}`,
-    "",
-    "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+    `Shared by Harmony ${safeHeart}`,
   ].join("\n");
 }
+
+module.exports = {
+  formatMediaCard,
+};
