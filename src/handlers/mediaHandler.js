@@ -215,7 +215,8 @@ async function handleMediaMessage(message) {
         message,
         classification.files,
         cardText,
-        downloadResult.rawDir
+        downloadResult.rawDir,
+        { embedColor: 0xfacc15 }
       );
 
       await suppressOriginalEmbeds(message);
