@@ -101,15 +101,31 @@ async function replyWithHarmonyError(message, error) {
  * @param {import("discord.js").Message} message
  */
 async function suppressOriginalEmbeds(message) {
-  try {
-    await message.suppressEmbeds(true);
-    console.log("Original message embeds suppressed.");
-  } catch (err) {
-    console.warn(
-      "suppressEmbeds failed (bot needs Manage Messages in this channel?):",
-      err instanceof Error ? err.message : err
-    );
+  async function suppress(attempt) {
+    try {
+      const freshMessage = await message.channel.messages.fetch(message.id);
+      await freshMessage.suppressEmbeds(true);
+      console.log(
+        `Original message embeds suppressed (attempt ${attempt}).`
+      );
+    } catch (err) {
+      console.warn(
+        `suppressEmbeds attempt ${attempt} failed:`,
+        err instanceof Error ? err.message : err
+      );
+    }
   }
+
+  await suppress(1);
+
+  // Discord can finish generating a social preview after Harmony uploads.
+  // Re-fetch the message and suppress it again after those late previews arrive.
+  setTimeout(() => {
+    suppress(2).catch(() => {});
+  }, 2000);
+  setTimeout(() => {
+    suppress(3).catch(() => {});
+  }, 6000);
 }
 
 /**
@@ -342,9 +358,6 @@ async function handleMediaMessage(message) {
       );
 
       await suppressOriginalEmbeds(message);
-      setTimeout(() => {
-        suppressOriginalEmbeds(message).catch(() => {});
-      }, 2500);
 
       shareStore.insert({
         platform,
