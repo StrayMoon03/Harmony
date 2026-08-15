@@ -34,6 +34,11 @@ const {
 const {
   downloadXMedia,
 } = require("../modules/media/xDownloader");
+const {
+  findYouTubeLinks,
+  extractYouTubeId,
+  isYouTubeShort,
+} = require("../modules/media/youtube");
 const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 
@@ -132,6 +137,9 @@ async function handleMediaMessage(message) {
 
   const xLinks =
     findXLinks(message.content);
+
+  const youtubeLinks =
+    findYouTubeLinks(message.content);
 
   console.log("TikTok detection:", {
     content: message.content,
@@ -594,6 +602,126 @@ async function handleMediaMessage(message) {
 
       console.log(
         `X ${classification.label} ` +
+          `(${classification.files.length} file(s)) ` +
+          `shared for ${message.author.username}`
+      );
+    } catch (error) {
+      await replyWithHarmonyError(
+        message,
+        error
+      );
+    }
+
+    return;
+  }
+
+  // =========================
+  // YouTube
+  // =========================
+
+  if (youtubeLinks.length > 0) {
+    const originalUrl = youtubeLinks[0];
+    const mediaId = extractYouTubeId(originalUrl);
+    const platform = "youtube";
+
+    if (!mediaId) {
+      console.warn(
+        "Could not extract YouTube video id from:",
+        originalUrl
+      );
+      return;
+    }
+
+    try {
+      const existing =
+        shareStore.find(platform, mediaId);
+
+      if (existing) {
+        await message.reply({
+          content:
+            formatAlreadySharedReply(existing),
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        await suppressOriginalEmbeds(message);
+        return;
+      }
+
+      await message.channel.sendTyping();
+
+      let info = null;
+
+      try {
+        info = await getMediaInfo(originalUrl);
+      } catch {
+        console.warn(
+          "YouTube metadata unavailable. Continuing with download only."
+        );
+      }
+
+      const downloadResult =
+        await downloadMedia(originalUrl);
+
+      const classification = classify(
+        downloadResult.files,
+        originalUrl
+      );
+
+      if (classification.files.length === 0) {
+        throw new Error(
+          "No YouTube media files were downloaded."
+        );
+      }
+
+      const creator = resolveCreator(
+        info,
+        classification.files
+      );
+
+      const mediaType =
+        isYouTubeShort(originalUrl)
+          ? "Short"
+          : classification.label;
+
+      const cardText = formatMediaCard({
+        platform: "YouTube",
+        mediaType,
+        creator,
+        originalUrl,
+        heart: "❤️",
+      });
+
+      await uploadMedia(
+        message,
+        classification.files,
+        cardText,
+        downloadResult.rawDir,
+        { embedColor: 0xff0000 }
+      );
+
+      await suppressOriginalEmbeds(message);
+      setTimeout(() => {
+        suppressOriginalEmbeds(message).catch(() => {});
+      }, 2500);
+
+      shareStore.insert({
+        platform,
+        mediaId,
+        creator,
+        sharedBy:
+          message.member?.displayName ??
+          message.author.username,
+        sharedById: message.author.id,
+        messageId: message.id,
+        channelId: message.channel.id,
+        guildId: message.guild?.id ?? null,
+        url: originalUrl,
+      });
+
+      console.log(
+        `YouTube ${mediaType} ` +
           `(${classification.files.length} file(s)) ` +
           `shared for ${message.author.username}`
       );
