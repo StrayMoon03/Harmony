@@ -162,6 +162,8 @@ function looksLikeFacebookPhotoPost(url) {
     /\/share\/p\//i.test(url) ||
     /story_fbid=/i.test(url) ||
     /\/posts\/\d+/i.test(url) ||
+    /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/i.test(url) ||
+    /\/permalink\/\d+/i.test(url) ||
     /permalink\.php/i.test(url) ||
     /\/set\//i.test(url) ||
     /media_set/i.test(url) ||
