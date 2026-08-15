@@ -334,6 +334,13 @@ async function buildCookieHeader(cookiesPath) {
     const text = await fs.readFile(cookiesPath, "utf8");
     return text
       .split(/\r?\n/)
+      // Netscape exports prefix secure login cookies with #HttpOnly_.
+      // Those are real cookies, not comments, and Facebook needs them.
+      .map((line) =>
+        line.startsWith("#HttpOnly_")
+          ? line.slice("#HttpOnly_".length)
+          : line
+      )
       .filter((line) => line && !line.startsWith("#"))
       .map((line) => line.split("\t"))
       .filter((parts) => parts.length >= 7)
@@ -621,7 +628,7 @@ function scoreFiles(files, preferPhotos = false) {
  *   creator: string|null
  * }>}
  */
-async function downloadFacebookMedia(url) {
+async function downloadFacebookMedia(url, originalUrl = url) {
   const jobDir = await createFacebookJobDirectory();
 
   const cookiesPath =
@@ -654,7 +661,12 @@ async function downloadFacebookMedia(url) {
     }`
   );
 
-  const preferGalleryFirst = looksLikeFacebookPhotoPost(url);
+  const preferGalleryFirst =
+    looksLikeFacebookPhotoPost(url) ||
+    looksLikeFacebookPhotoPost(originalUrl);
+  const photoPageUrl = looksLikeFacebookPhotoPost(originalUrl)
+    ? originalUrl
+    : url;
   const urlCandidates = preferGalleryFirst
     ? buildFacebookUrlCandidates(url)
     : [url];
@@ -667,7 +679,8 @@ async function downloadFacebookMedia(url) {
   if (preferGalleryFirst && cookiesUsable) {
     strategies.push({
       name: "facebook-photo-page+cookies (primary)",
-      run: () => runFacebookPhotoPage(url, jobDir, cookiesPath),
+      run: () =>
+        runFacebookPhotoPage(photoPageUrl, jobDir, cookiesPath),
     });
   }
 

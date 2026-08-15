@@ -305,7 +305,8 @@ async function handleMediaMessage(message) {
 
       const downloadResult =
         await downloadFacebookMedia(
-          normalizedUrl
+          normalizedUrl,
+          originalUrl
         );
 
       const classification = classify(
