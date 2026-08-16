@@ -106,6 +106,7 @@ function startWelcomePassServer(client) {
         "waiting_for_link",
         "waiting_for_setup",
         "member_missing",
+        "manual_role_required",
       ].includes(result.status);
 
       sendJson(response, pending ? 202 : 200, {
