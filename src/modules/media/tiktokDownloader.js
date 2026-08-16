@@ -452,7 +452,10 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
       );
     } else {
       console.warn(
-        "TikTok still has no audio stream after retry (source may be silent)."
+        "TikTok still has no audio stream after retry. Trying gallery-dl before accepting a silent file."
+      );
+      throw new Error(
+        "yt-dlp produced a TikTok video without an audio stream."
       );
     }
   } else {
@@ -516,6 +519,9 @@ async function downloadTikTokVideoWithGalleryDl(url, jobDir) {
   } else if (videoFiles.length > 0) {
     console.warn(
       "TikTok gallery-dl fallback video has no audio stream."
+    );
+    throw new Error(
+      "Both TikTok download methods returned video without audio."
     );
   }
 
