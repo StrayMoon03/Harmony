@@ -122,6 +122,46 @@ async function suppressOriginalEmbeds(message) {
 }
 
 /**
+ * Sends a long YouTube video as two messages so Discord can generate its
+ * native player without competing with Harmony's custom red card embed.
+ *
+ * @param {import("discord.js").Message} message
+ * @param {{ originalUrl: string, cardText: string, durationMinutes: number|null }} options
+ */
+async function sendYouTubeStreamingPreview(
+  message,
+  { originalUrl, cardText, durationMinutes }
+) {
+  await message.reply({
+    content: originalUrl,
+    allowedMentions: {
+      repliedUser: false,
+    },
+  });
+
+  await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xff0000)
+        .setDescription(
+          [
+            cardText,
+            "",
+            durationMinutes
+              ? `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`
+              : "This video plays through YouTube so it can remain full length.",
+          ].join("\n")
+        ),
+    ],
+    allowedMentions: {
+      parse: [],
+    },
+  });
+
+  await suppressOriginalEmbeds(message);
+}
+
+/**
  * Handles supported social-media links
  * in a Discord message.
  *
@@ -682,28 +722,11 @@ async function handleMediaMessage(message) {
           heart: "❤️",
         });
 
-        await message.reply({
-          // A raw URL lets Discord build YouTube's playable streaming preview.
-          content: originalUrl,
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xff0000)
-              .setDescription(
-                [
-                  cardText,
-                  "",
-                  `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`,
-                ].join("\n")
-              ),
-          ],
-          allowedMentions: {
-            repliedUser: false,
-          },
+        await sendYouTubeStreamingPreview(message, {
+          originalUrl,
+          cardText,
+          durationMinutes,
         });
-
-        // Harmony's reply now owns the playable preview; hide any duplicate
-        // preview Discord may later add to the member's original link.
-        await suppressOriginalEmbeds(message);
         shareStore.insert({
           platform,
           mediaId,
@@ -774,27 +797,11 @@ async function handleMediaMessage(message) {
           ? Math.ceil(downloadResult.durationSeconds / 60)
           : null;
 
-        await message.reply({
-          content: originalUrl,
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xff0000)
-              .setDescription(
-                [
-                  cardText,
-                  "",
-                  durationMinutes
-                    ? `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`
-                    : "This video plays through YouTube so it can remain full length.",
-                ].join("\n")
-              ),
-          ],
-          allowedMentions: {
-            repliedUser: false,
-          },
+        await sendYouTubeStreamingPreview(message, {
+          originalUrl,
+          cardText,
+          durationMinutes,
         });
-
-        await suppressOriginalEmbeds(message);
         shareStore.insert({
           platform,
           mediaId,
