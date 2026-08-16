@@ -1,4 +1,49 @@
 /**
+ * Facebook share links may redirect anonymous requests to /login while
+ * preserving the real post URL in the next= parameter. Never pass the
+ * login wrapper to media extractors.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function unwrapFacebookLoginRedirect(value) {
+  try {
+    const wrapper = new URL(value);
+    const host = wrapper.hostname.toLowerCase();
+    const isFacebook =
+      host === "facebook.com" ||
+      host.endsWith(".facebook.com");
+    const isLogin =
+      wrapper.pathname === "/login" ||
+      wrapper.pathname === "/login/" ||
+      wrapper.pathname.startsWith("/login.");
+
+    if (!isFacebook || !isLogin) return value;
+
+    const next = wrapper.searchParams.get("next");
+    if (!next) return value;
+
+    const target = new URL(next);
+    const targetHost = target.hostname.toLowerCase();
+    const isFacebookTarget =
+      target.protocol === "https:" &&
+      (
+        targetHost === "facebook.com" ||
+        targetHost.endsWith(".facebook.com")
+      );
+
+    if (!isFacebookTarget) return value;
+
+    console.log(
+      "Facebook login redirect unwrapped to the original post URL."
+    );
+    return target.toString();
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Normalizes common Facebook URLs into a consistent format.
  * Resolves share / fb.watch short links when possible.
  * Rewrites nested pcb video URLs to watch/?v= form for yt-dlp.
@@ -82,7 +127,9 @@ async function normalizeFacebookUrl(url) {
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
           },
         });
-        if (head.url) current = head.url;
+        if (head.url) {
+          current = unwrapFacebookLoginRedirect(head.url);
+        }
       } catch {
         try {
           const get = await fetch(current, {
@@ -93,7 +140,9 @@ async function normalizeFacebookUrl(url) {
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             },
           });
-          if (get.url) current = get.url;
+          if (get.url) {
+            current = unwrapFacebookLoginRedirect(get.url);
+          }
         } catch {
           // keep current
         }
@@ -102,6 +151,8 @@ async function normalizeFacebookUrl(url) {
   } catch {
     // keep current
   }
+
+  current = unwrapFacebookLoginRedirect(current);
 
   try {
     const u = new URL(current);
@@ -138,4 +189,5 @@ async function normalizeFacebookUrl(url) {
 
 module.exports = {
   normalizeFacebookUrl,
+  unwrapFacebookLoginRedirect,
 };
