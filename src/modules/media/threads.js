@@ -1,5 +1,5 @@
 const THREADS_URL_REGEX =
-  /https?:\/\/(?:(?:www\.)?threads\.(?:com|net))\/(?:@[^\s/]+\/post\/|t\/)[A-Za-z0-9_-]+[^\s<]*/gi;
+  /https?:\/\/(?:(?:www\.)?threads\.(?:com|net))\/(?:@[^\s/]+\/post\/|t\/|share\/)[A-Za-z0-9_-]+[^\s<]*/gi;
 
 /**
  * @param {string} text
@@ -25,7 +25,7 @@ function extractThreadsId(url) {
   try {
     const parsed = new URL(url);
     const match = parsed.pathname.match(
-      /\/(?:@[^/]+\/post|t)\/([A-Za-z0-9_-]+)(?:\/|$)/i
+      /\/(?:@[^/]+\/post|t|share)\/([A-Za-z0-9_-]+)(?:\/|$)/i
     );
     return match ? match[1] : null;
   } catch {
