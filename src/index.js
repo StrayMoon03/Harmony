@@ -11,12 +11,14 @@ const statusCommand = require("./commands/status");
 const greetingsCommand = require("./commands/greetings");
 const linkWelcomePassCommand = require("./commands/linkWelcomePass");
 const welcomePassSetupCommand = require("./commands/welcomePassSetup");
+const welcomePassModeCommand = require("./commands/welcomePassMode");
 const {
   getGreetingSettings,
   renderGreetingMessage,
 } = require("./stores/greetingStore");
 const {
   assignAllApprovedWelcomePasses,
+  handleManualWelcomePassRoleAdded,
 } = require("./services/welcomePassService");
 const {
   startWelcomePassServer,
@@ -28,6 +30,7 @@ const commands = [
   greetingsCommand,
   linkWelcomePassCommand,
   welcomePassSetupCommand,
+  welcomePassModeCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -59,7 +62,7 @@ async function registerGuildCommands(guild) {
   console.log(
     "Harmony commands ready in " + guild.name + ": " +
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
-      "/harmony-pass, /harmony-pass-setup"
+      "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode"
   );
 }
 
@@ -205,6 +208,18 @@ client.on("guildMemberRemove", async (member) => {
       "Could not send the departure message in " +
         member.guild.name +
         ":",
+      error
+    );
+  }
+});
+
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    await handleManualWelcomePassRoleAdded(oldMember, newMember);
+  } catch (error) {
+    console.error(
+      "Could not process a manually granted Welcome Pass role:",
       error
     );
   }
