@@ -63,6 +63,18 @@ function listWelcomePassSettings() {
   ).all();
 }
 
+function setWelcomePassGrantMode(guildId, mode) {
+  if (!["automatic", "manual"].includes(mode)) {
+    throw new Error("Invalid Welcome Pass grant mode.");
+  }
+  const result = getDb().prepare(`
+    UPDATE welcome_pass_settings
+    SET grant_mode = ?, updated_at = ?
+    WHERE guild_id = ?
+  `).run(mode, new Date().toISOString(), guildId);
+  return result.changes > 0;
+}
+
 function linkWelcomePassCode({ code, guildId, userId }) {
   const normalizedCode = normalizeWelcomePassCode(code);
   const db = getDb();
@@ -156,6 +168,7 @@ module.exports = {
   saveWelcomePassSettings,
   getWelcomePassSettings,
   listWelcomePassSettings,
+  setWelcomePassGrantMode,
   linkWelcomePassCode,
   recordWelcomePassApproval,
   getWelcomePassAssignment,
