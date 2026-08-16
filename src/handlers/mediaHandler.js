@@ -1,3 +1,4 @@
+const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
 const { downloadMedia } = require("../modules/media/downloader");
 const {
@@ -665,6 +666,59 @@ async function handleMediaMessage(message) {
 
       const downloadResult =
         await downloadYouTubeMedia(originalUrl);
+
+      if (downloadResult.linkOnly) {
+        const creator =
+          downloadResult.creator ||
+          "Unknown creator";
+        const durationMinutes = Math.ceil(
+          downloadResult.durationSeconds / 60
+        );
+        const cardText = formatMediaCard({
+          platform: "YouTube",
+          mediaType: "Video",
+          creator,
+          originalUrl,
+          heart: "❤️",
+        });
+
+        await message.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xff0000)
+              .setDescription(
+                [
+                  cardText,
+                  "",
+                  `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`,
+                ].join("\n")
+              ),
+          ],
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        // Keep Discord's native YouTube player on the original message.
+        shareStore.insert({
+          platform,
+          mediaId,
+          creator,
+          sharedBy:
+            message.member?.displayName ??
+            message.author.username,
+          sharedById: message.author.id,
+          messageId: message.id,
+          channelId: message.channel.id,
+          guildId: message.guild?.id ?? null,
+          url: originalUrl,
+        });
+
+        console.log(
+          `YouTube long video card shared for ${message.author.username}`
+        );
+        return;
+      }
 
       const classification = classify(
         downloadResult.files,
