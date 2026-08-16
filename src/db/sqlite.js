@@ -83,6 +83,21 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
       ON welcome_pass_links (guild_id, user_id);
   `);
+
+  const settingColumns = new Set(
+    database.prepare("PRAGMA table_info(welcome_pass_settings)").all()
+      .map((column) => column.name)
+  );
+  if (!settingColumns.has("release_channel_id")) {
+    database.exec(
+      "ALTER TABLE welcome_pass_settings ADD COLUMN release_channel_id TEXT"
+    );
+  }
+  if (!settingColumns.has("release_message")) {
+    database.exec(
+      "ALTER TABLE welcome_pass_settings ADD COLUMN release_message TEXT"
+    );
+  }
 }
 
 function closeDb() {
