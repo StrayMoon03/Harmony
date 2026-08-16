@@ -48,6 +48,15 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_shares_platform_media
       ON shares (platform, media_id);
+
+    CREATE TABLE IF NOT EXISTS greeting_settings (
+      guild_id          TEXT PRIMARY KEY,
+      channel_id        TEXT NOT NULL,
+      enabled           INTEGER NOT NULL DEFAULT 1,
+      entrance_message  TEXT NOT NULL,
+      exit_message      TEXT NOT NULL,
+      updated_at        TEXT NOT NULL
+    );
   `);
 }
 
