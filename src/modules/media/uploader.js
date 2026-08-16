@@ -423,6 +423,131 @@ async function compressForDiscord(
 }
 
 /**
+ * Probes whether a video is safe for playback in Discord on iPhones.
+ * Discord's iOS player is most reliable with MP4 + H.264/yuv420p + AAC.
+ *
+ * @param {string} filePath
+ * @returns {Promise<boolean>}
+ */
+async function isAppleCompatibleVideo(filePath) {
+  if (path.extname(filePath).toLowerCase() !== ".mp4") return false;
+
+  const ffprobePath = process.env.FFPROBE_PATH || "ffprobe";
+
+  try {
+    const { stdout } = await execFileAsync(
+      ffprobePath,
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type,codec_name,pix_fmt",
+        "-of",
+        "json",
+        filePath,
+      ],
+      { windowsHide: true, maxBuffer: 1024 * 1024 }
+    );
+
+    const streams = JSON.parse(String(stdout)).streams || [];
+    const video = streams.find((stream) => stream.codec_type === "video");
+    const audioStreams = streams.filter(
+      (stream) => stream.codec_type === "audio"
+    );
+
+    return Boolean(
+      video &&
+        video.codec_name === "h264" &&
+        video.pix_fmt === "yuv420p" &&
+        audioStreams.every((stream) => stream.codec_name === "aac")
+    );
+  } catch (err) {
+    console.warn(
+      "Video compatibility probe failed; converting defensively:",
+      err.message || err
+    );
+    return false;
+  }
+}
+
+/**
+ * Converts only incompatible videos to an iPhone-safe Discord MP4.
+ * Photos and already-compatible videos pass through untouched.
+ *
+ * @param {string} filePath
+ * @returns {Promise<string>}
+ */
+async function ensureAppleCompatibleVideo(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (!VIDEO_EXT.has(ext)) return filePath;
+
+  if (await isAppleCompatibleVideo(filePath)) {
+    console.log(
+      `iPhone compatibility: already compatible (${path.basename(filePath)})`
+    );
+    return filePath;
+  }
+
+  const outputPath = path.join(
+    path.dirname(filePath),
+    `${path.basename(filePath, ext)}-iphone-compatible.mp4`
+  );
+
+  await safeUnlink(outputPath);
+
+  console.log(
+    `iPhone compatibility: converting ${path.basename(filePath)} to H.264/AAC MP4`
+  );
+
+  await runFfmpeg([
+    "-y",
+    "-loglevel",
+    "error",
+    "-fflags",
+    "+genpts+igndts+discardcorrupt",
+    "-err_detect",
+    "ignore_err",
+    "-i",
+    filePath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "0:a:0?",
+    "-vf",
+    "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+    "-c:v",
+    "libx264",
+    "-profile:v",
+    "main",
+    "-level",
+    "4.0",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "23",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+    "-movflags",
+    "+faststart",
+    outputPath,
+  ]);
+
+  if (!(await hasAudioStream(filePath))) {
+    console.log(
+      "iPhone compatibility: source had no audio track; converted video remains silent"
+    );
+  }
+
+  return outputPath;
+}
+
+/**
  * If file is over the bot upload ceiling and is video, compress through size tiers.
  * Each tier runs the full recovery ladder, then size is checked again.
  * Normal-sized files are returned unchanged.
@@ -564,7 +689,7 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * @param {Array<{ path: string }>} files
  * @param {string} cardText
  * @param {string|number} [rawDirOrColor]
- * @param {{ embedColor?: number }} [options]
+ * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean }} [options]
  */
 async function uploadMedia(
   message,
@@ -603,7 +728,13 @@ async function uploadMedia(
 
   try {
     for (const file of files) {
-      const ready = await ensureUnderSizeLimit(file.path, maxBytes);
+      let ready = file.path;
+
+      if (options.ensureAppleCompatibleVideo) {
+        ready = await ensureAppleCompatibleVideo(ready);
+      }
+
+      ready = await ensureUnderSizeLimit(ready, maxBytes);
       paths.push(ready);
     }
 
@@ -666,6 +797,8 @@ module.exports = {
   ensureUnderSizeLimit,
   safeUnlink,
   hasAudioStream,
+  isAppleCompatibleVideo,
+  ensureAppleCompatibleVideo,
   SIZE_ATTEMPTS,
   DEFAULT_MAX_UPLOAD_BYTES,
   DEFAULT_EMBED_COLOR,
