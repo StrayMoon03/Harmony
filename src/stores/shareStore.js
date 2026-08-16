@@ -1,5 +1,20 @@
 const { getDb } = require("../db/sqlite");
 
+const insertListeners = new Set();
+
+function onInserted(listener) {
+  insertListeners.add(listener);
+  return () => insertListeners.delete(listener);
+}
+
+function notifyInserted(record) {
+  for (const listener of insertListeners) {
+    Promise.resolve(listener(record)).catch((error) => {
+      console.error("Share insert listener failed:", error);
+    });
+  }
+}
+
 /**
  * @typedef {object} ShareRecord
  * @property {number} id
@@ -69,6 +84,19 @@ function insert(data) {
 
     // node:sqlite returns { changes, lastInsertRowid } from StatementSync.run()
     const id = Number(result.lastInsertRowid);
+    notifyInserted({
+      id,
+      platform: data.platform,
+      media_id: data.mediaId,
+      creator: data.creator ?? null,
+      shared_by: data.sharedBy,
+      shared_by_id: data.sharedById ?? null,
+      shared_at: sharedAt,
+      message_id: data.messageId ?? null,
+      channel_id: data.channelId ?? null,
+      guild_id: data.guildId ?? null,
+      url: data.url ?? null,
+    });
     return { ok: true, id };
   } catch (err) {
     const message = String(err && err.message ? err.message : err);
@@ -101,6 +129,7 @@ function remove(platform, mediaId) {
 }
 
 module.exports = {
+  onInserted,
   find,
   insert,
   remove,
