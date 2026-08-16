@@ -40,9 +40,7 @@ async function downloadYouTubeMedia(url) {
     ? "b[height<=720][ext=mp4]/b[height<=720]/bv*[height<=720]+ba/b[height<=720]/b"
     : "b[height<=480][ext=mp4]/b[height<=480]/bv*[height<=480]+ba/b[height<=480]/b";
 
-  console.log(
-    `YouTube download starting (${isShort ? "Short up to 720p" : "video up to 480p"}).`
-  );
+  console.log("YouTube inspection starting.");
 
   const ytDlpArgs = [
     "--no-playlist",
@@ -81,6 +79,83 @@ async function downloadYouTubeMedia(url) {
   ytDlpArgs.push(url);
 
   try {
+    const inspectArgs = [
+      "--no-playlist",
+      "--no-warnings",
+      "--js-runtimes",
+      "node",
+      "--skip-download",
+      "--print",
+      "HARMONY_DURATION:%(duration)s",
+      "--print",
+      "HARMONY_CREATOR:%(uploader)s",
+    ];
+
+    if (cookiesPath) {
+      inspectArgs.push("--cookies", cookiesPath);
+    }
+    inspectArgs.push(url);
+
+    const { stdout: inspectStdout } = await execFileAsync(
+      ytDlpPath,
+      inspectArgs,
+      {
+        windowsHide: true,
+        timeout: 60000,
+        killSignal: "SIGKILL",
+        maxBuffer: 5 * 1024 * 1024,
+      }
+    );
+
+    const inspectLines = String(inspectStdout).split(/\r?\n/);
+    const durationLine = inspectLines.find((line) =>
+      line.startsWith("HARMONY_DURATION:")
+    );
+    const durationSeconds = durationLine
+      ? Number.parseFloat(
+          durationLine.slice("HARMONY_DURATION:".length).trim()
+        )
+      : null;
+    const inspectCreatorLine = inspectLines.find((line) =>
+      line.startsWith("HARMONY_CREATOR:")
+    );
+    const inspectCreatorValue = inspectCreatorLine
+      ? inspectCreatorLine.slice("HARMONY_CREATOR:".length).trim()
+      : "";
+    const inspectCreator =
+      inspectCreatorValue &&
+      inspectCreatorValue !== "NA" &&
+      inspectCreatorValue !== "None"
+        ? inspectCreatorValue
+        : null;
+
+    if (
+      Number.isFinite(durationSeconds) &&
+      durationSeconds > 600
+    ) {
+      console.log(
+        `YouTube long video detected (~${Math.ceil(
+          durationSeconds / 60
+        )} minutes); using YouTube streaming preview.`
+      );
+      await fs.rm(jobDir, {
+        recursive: true,
+        force: true,
+      });
+      return {
+        files: [],
+        rawDir: null,
+        platform: "youtube",
+        creator: inspectCreator,
+        linkOnly: true,
+        durationSeconds,
+      };
+    }
+
+    console.log(
+      `YouTube download starting (${isShort ? "Short up to 720p" : "video up to 480p"}).`
+    );
+
     const { stdout } = await execFileAsync(
       ytDlpPath,
       ytDlpArgs,
