@@ -82,6 +82,32 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
       ON welcome_pass_links (guild_id, user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_shares_guild_time
+      ON shares (guild_id, shared_at);
+
+    CREATE INDEX IF NOT EXISTS idx_shares_guild_user_time
+      ON shares (guild_id, shared_by_id, shared_at);
+
+    CREATE TABLE IF NOT EXISTS collection_settings (
+      guild_id            TEXT PRIMARY KEY,
+      channel_id          TEXT NOT NULL,
+      milestones_enabled  INTEGER NOT NULL DEFAULT 1,
+      schedule_enabled    INTEGER NOT NULL DEFAULT 0,
+      weekday             INTEGER NOT NULL DEFAULT 0,
+      hour                INTEGER NOT NULL DEFAULT 10,
+      timezone            TEXT NOT NULL DEFAULT 'America/New_York',
+      last_weekly_key     TEXT,
+      updated_at          TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_milestones (
+      guild_id      TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      milestone     INTEGER NOT NULL,
+      announced_at  TEXT NOT NULL,
+      PRIMARY KEY (guild_id, user_id, milestone)
+    );
   `);
 
   const settingColumns = new Set(
