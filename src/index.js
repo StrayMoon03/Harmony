@@ -8,10 +8,16 @@ const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
 const statusCommand = require("./commands/status");
+const greetingsCommand = require("./commands/greetings");
+const {
+  getGreetingSettings,
+  renderGreetingMessage,
+} = require("./stores/greetingStore");
 
 const commands = [
   forgetShareCommand,
   statusCommand,
+  greetingsCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -27,6 +33,7 @@ getDb();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -38,7 +45,7 @@ async function registerGuildCommands(guild) {
   );
 
   console.log(
-    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status`
+    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status, /harmony-greetings`
   );
 }
 
@@ -72,6 +79,116 @@ client.on("guildCreate", async (guild) => {
   } catch (error) {
     console.error(
       `Could not register Harmony admin commands in ${guild.name}:`,
+      error
+    );
+  }
+});
+
+async function getConfiguredGreetingChannel(guild, settings) {
+  const cached = guild.channels.cache.get(settings.channel_id);
+  const channel =
+    cached ||
+    (await guild.channels
+      .fetch(settings.channel_id)
+      .catch(() => null));
+
+  return channel && channel.isTextBased()
+    ? channel
+    : null;
+}
+
+client.on("guildMemberAdd", async (member) => {
+  if (member.user.bot) return;
+
+  const settings = getGreetingSettings(member.guild.id);
+  if (!settings || !settings.enabled) return;
+
+  const channel = await getConfiguredGreetingChannel(
+    member.guild,
+    settings
+  );
+  if (!channel) {
+    console.warn(
+      "Configured greeting channel is unavailable in " +
+        member.guild.name +
+        "."
+    );
+    return;
+  }
+
+  const content = renderGreetingMessage(
+    settings.entrance_message,
+    {
+      memberMention: "<@" + member.id + ">",
+      memberName:
+        member.displayName ||
+        member.user.globalName ||
+        member.user.username,
+      serverName: member.guild.name,
+    }
+  );
+
+  try {
+    await channel.send({
+      content,
+      allowedMentions: {
+        users: [member.id],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Could not send the welcome message in " +
+        member.guild.name +
+        ":",
+      error
+    );
+  }
+});
+
+client.on("guildMemberRemove", async (member) => {
+  if (member.user.bot) return;
+
+  const settings = getGreetingSettings(member.guild.id);
+  if (!settings || !settings.enabled) return;
+
+  const channel = await getConfiguredGreetingChannel(
+    member.guild,
+    settings
+  );
+  if (!channel) {
+    console.warn(
+      "Configured greeting channel is unavailable in " +
+        member.guild.name +
+        "."
+    );
+    return;
+  }
+
+  const memberName =
+    member.displayName ||
+    member.user.globalName ||
+    member.user.username ||
+    "A member";
+  const content = renderGreetingMessage(
+    settings.exit_message,
+    {
+      memberName,
+      serverName: member.guild.name,
+    }
+  );
+
+  try {
+    await channel.send({
+      content,
+      allowedMentions: {
+        parse: [],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Could not send the departure message in " +
+        member.guild.name +
+        ":",
       error
     );
   }
