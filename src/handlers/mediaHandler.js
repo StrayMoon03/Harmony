@@ -169,6 +169,40 @@ async function sendYouTubeStreamingPreview(
 }
 
 /**
+ * Keeps long TikTok videos at their original quality instead of crushing
+ * several minutes of video into Discord's small attachment limit.
+ *
+ * @param {import("discord.js").Message} message
+ * @param {{ originalUrl: string, cardText: string, durationMinutes: number }} options
+ */
+async function sendTikTokStreamingPreview(
+  message,
+  { originalUrl, cardText, durationMinutes }
+) {
+  await message.reply({
+    content: originalUrl,
+    allowedMentions: { repliedUser: false },
+  });
+
+  await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xff4fa3)
+        .setDescription(
+          [
+            cardText,
+            "",
+            `This ${durationMinutes}-minute video plays through TikTok so it keeps its original quality and sound.`,
+          ].join("\n")
+        ),
+    ],
+    allowedMentions: { parse: [] },
+  });
+
+  await suppressOriginalEmbeds(message);
+}
+
+/**
  * Handles supported social-media links
  * in a Discord message.
  *
@@ -492,6 +526,47 @@ async function handleMediaMessage(message) {
         console.warn(
           "TikTok metadata unavailable. Continuing with download only."
         );
+      }
+
+      const durationSeconds = Number(info?.duration || 0);
+
+      if (durationSeconds >= 90) {
+        const creator =
+          info?.uploader ||
+          info?.creator ||
+          "Unknown creator";
+        const cardText = formatMediaCard({
+          platform: "TikTok",
+          mediaType: "Video",
+          creator,
+          originalUrl: normalizedUrl,
+          heart: "🩷",
+        });
+
+        await sendTikTokStreamingPreview(message, {
+          originalUrl: normalizedUrl,
+          cardText,
+          durationMinutes: Math.ceil(durationSeconds / 60),
+        });
+
+        shareStore.insert({
+          platform,
+          mediaId,
+          creator,
+          sharedBy:
+            message.member?.displayName ??
+            message.author.username,
+          sharedById: message.author.id,
+          messageId: message.id,
+          channelId: message.channel.id,
+          guildId: message.guild?.id ?? null,
+          url: normalizedUrl,
+        });
+
+        console.log(
+          `TikTok long-video streaming card shared for ${message.author.username}`
+        );
+        return;
       }
 
       const downloadResult =
