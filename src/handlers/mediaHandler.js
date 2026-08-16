@@ -283,7 +283,10 @@ async function handleMediaMessage(message) {
         classification.files,
         cardText,
         downloadResult.rawDir,
-        { embedColor: 0xfacc15 }
+        {
+          embedColor: 0xfacc15,
+          ensureAppleCompatibleVideo: true,
+        }
       );
 
       await suppressOriginalEmbeds(message);
