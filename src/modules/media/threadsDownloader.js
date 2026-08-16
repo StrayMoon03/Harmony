@@ -102,6 +102,12 @@ function validCdnUrl(raw) {
     const parsed = new URL(decodePageText(raw));
     const host = parsed.hostname.toLowerCase();
     if (
+      host.startsWith("static.") ||
+      parsed.pathname.includes("/rsrc.php/")
+    ) {
+      return null;
+    }
+    if (
       !host.endsWith(".fbcdn.net") &&
       !host.endsWith(".cdninstagram.com") &&
       !host.endsWith(".threads.net") &&
@@ -297,6 +303,59 @@ async function imageIsLargeEnough(filePath) {
   }
 }
 
+async function imagePerceptualHash(filePath) {
+  try {
+    const { stdout } = await execFileAsync(
+      process.env.FFMPEG_PATH || "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-i",
+        filePath,
+        "-vf",
+        "scale=8:8,format=gray",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+      ],
+      {
+        windowsHide: true,
+        timeout: 10000,
+        maxBuffer: 1024 * 1024,
+        encoding: "buffer",
+      }
+    );
+
+    const pixels = Buffer.from(stdout).subarray(0, 64);
+    if (pixels.length !== 64) return null;
+
+    const average =
+      pixels.reduce((total, value) => total + value, 0) /
+      pixels.length;
+    let hash = 0n;
+    pixels.forEach((value, index) => {
+      if (value >= average) {
+        hash |= 1n << BigInt(index);
+      }
+    });
+    return hash;
+  } catch {
+    return null;
+  }
+}
+
+function perceptualHashDistance(first, second) {
+  let value = first ^ second;
+  let distance = 0;
+  while (value) {
+    distance += Number(value & 1n);
+    value >>= 1n;
+  }
+  return distance;
+}
+
 async function fetchThreadsPage(url) {
   const original = new URL(url);
   const canonical = new URL(url);
@@ -448,6 +507,7 @@ async function downloadThreadsMedia(url) {
     }
 
     const files = [];
+    const imageHashes = [];
 
     for (const candidate of candidates) {
       const response = await fetch(candidate, {
@@ -486,6 +546,27 @@ async function downloadThreadsMedia(url) {
       if (isImage && !(await imageIsLargeEnough(dest))) {
         await fs.rm(dest, { force: true });
         continue;
+      }
+
+      if (isImage) {
+        const imageHash = await imagePerceptualHash(dest);
+        const isDuplicate =
+          imageHash !== null &&
+          imageHashes.some(
+            (existingHash) =>
+              perceptualHashDistance(
+                imageHash,
+                existingHash
+              ) <= 6
+          );
+
+        if (isDuplicate) {
+          await fs.rm(dest, { force: true });
+          continue;
+        }
+        if (imageHash !== null) {
+          imageHashes.push(imageHash);
+        }
       }
 
       files.push(probeFile(dest));
