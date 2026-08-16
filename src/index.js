@@ -8,10 +8,16 @@ const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
 const statusCommand = require("./commands/status");
+const greetingsCommand = require("./commands/greetings");
+const {
+  getGreetingSettings,
+  renderGreetingMessage,
+} = require("./stores/greetingStore");
 
 const commands = [
   forgetShareCommand,
   statusCommand,
+  greetingsCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -39,7 +45,7 @@ async function registerGuildCommands(guild) {
   );
 
   console.log(
-    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status`
+    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status, /harmony-greetings`
   );
 }
 
@@ -78,25 +84,53 @@ client.on("guildCreate", async (guild) => {
   }
 });
 
+async function getConfiguredGreetingChannel(guild, settings) {
+  const cached = guild.channels.cache.get(settings.channel_id);
+  const channel =
+    cached ||
+    (await guild.channels
+      .fetch(settings.channel_id)
+      .catch(() => null));
+
+  return channel && channel.isTextBased()
+    ? channel
+    : null;
+}
+
 client.on("guildMemberAdd", async (member) => {
-  const channel = member.guild.systemChannel;
+  if (member.user.bot) return;
+
+  const settings = getGreetingSettings(member.guild.id);
+  if (!settings || !settings.enabled) return;
+
+  const channel = await getConfiguredGreetingChannel(
+    member.guild,
+    settings
+  );
   if (!channel) {
     console.warn(
-      "No system channel is configured in " +
+      "Configured greeting channel is unavailable in " +
         member.guild.name +
-        "; welcome message skipped."
+        "."
     );
     return;
   }
 
+  const content = renderGreetingMessage(
+    settings.entrance_message,
+    {
+      memberMention: "<@" + member.id + ">",
+      memberName:
+        member.displayName ||
+        member.user.globalName ||
+        member.user.username,
+      serverName: member.guild.name,
+    }
+  );
+
   try {
     await channel.send({
-      content:
-        "✨ Everyone welcome <@" +
-        member.id +
-        "> to " +
-        member.guild.name +
-        "! We’re so happy you found your way here. 💜",
+      content,
       allowedMentions: {
         users: [member.id],
       },
@@ -112,30 +146,40 @@ client.on("guildMemberAdd", async (member) => {
 });
 
 client.on("guildMemberRemove", async (member) => {
-  const channel = member.guild.systemChannel;
+  if (member.user.bot) return;
+
+  const settings = getGreetingSettings(member.guild.id);
+  if (!settings || !settings.enabled) return;
+
+  const channel = await getConfiguredGreetingChannel(
+    member.guild,
+    settings
+  );
   if (!channel) {
     console.warn(
-      "No system channel is configured in " +
+      "Configured greeting channel is unavailable in " +
         member.guild.name +
-        "; departure message skipped."
+        "."
     );
     return;
   }
 
-  const displayName =
+  const memberName =
     member.displayName ||
-    member.user?.globalName ||
-    member.user?.username ||
+    member.user.globalName ||
+    member.user.username ||
     "A member";
+  const content = renderGreetingMessage(
+    settings.exit_message,
+    {
+      memberName,
+      serverName: member.guild.name,
+    }
+  );
 
   try {
     await channel.send({
-      content:
-        "👋 **" +
-        displayName +
-        "** has left " +
-        member.guild.name +
-        ". We wish them well on their journey. 💜",
+      content,
       allowedMentions: {
         parse: [],
       },
