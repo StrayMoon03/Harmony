@@ -30,6 +30,10 @@ const {
   findYouTubeLinks,
   extractYouTubeId,
 } = require("../modules/media/youtube");
+const {
+  findThreadsLinks,
+  extractThreadsId,
+} = require("../modules/media/threads");
 const shareStore = require("../stores/shareStore");
 
 const data = new SlashCommandBuilder()
@@ -39,7 +43,7 @@ const data = new SlashCommandBuilder()
   .addStringOption((option) =>
     option
       .setName("link")
-      .setDescription("The Instagram, Facebook, TikTok, X, or YouTube link to forget")
+      .setDescription("The Instagram, Facebook, TikTok, X, YouTube, or Threads link")
       .setRequired(true)
   );
 
@@ -89,6 +93,14 @@ async function resolveShareKey(input) {
     };
   }
 
+  const threadsUrl = findThreadsLinks(input)[0];
+  if (threadsUrl) {
+    return {
+      platform: "threads",
+      mediaId: extractThreadsId(threadsUrl),
+    };
+  }
+
   return null;
 }
 
@@ -105,7 +117,7 @@ async function execute(interaction) {
     if (!key || !key.mediaId) {
       await interaction.editReply({
         content:
-          "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, X, or YouTube post link.",
+          "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, X, YouTube, or Threads post link.",
       });
       return;
     }

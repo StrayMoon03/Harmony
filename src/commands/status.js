@@ -86,7 +86,7 @@ async function execute(interaction) {
       `gallery-dl: ${mark(galleryDl)}`,
       `ffmpeg: ${mark(ffmpeg)}`,
       "",
-      "Instagram, Facebook, TikTok, X, and YouTube are enabled.",
+      "Instagram, Facebook, TikTok, X, YouTube, and Threads are enabled.",
       "",
       "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
     ].join("\n");
