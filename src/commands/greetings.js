@@ -50,6 +50,11 @@ const data = new SlashCommandBuilder()
   )
   .addSubcommand((subcommand) =>
     subcommand
+      .setName("test")
+      .setDescription("Send the saved entrance message in the configured channel")
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
       .setName("off")
       .setDescription("Turn off Harmony’s entrance and exit messages")
   );
@@ -133,6 +138,61 @@ async function execute(interaction) {
         content: buildPreview(interaction, settings),
         allowedMentions: { parse: [] },
       });
+      return;
+    }
+
+    if (subcommand === "test") {
+      const settings = getGreetingSettings(interaction.guild.id);
+      if (!settings || !settings.enabled) {
+        await interaction.editReply({
+          content:
+            "Harmony’s greetings are currently off. Use /harmony-greetings setup first.",
+        });
+        return;
+      }
+
+      const channel =
+        interaction.guild.channels.cache.get(settings.channel_id) ||
+        (await interaction.guild.channels
+          .fetch(settings.channel_id)
+          .catch(() => null));
+
+      if (!channel || !channel.isTextBased()) {
+        await interaction.editReply({
+          content:
+            "The saved greeting channel is unavailable. Run setup again and choose a text channel.",
+        });
+        return;
+      }
+
+      const memberName =
+        interaction.member?.displayName ||
+        interaction.user.globalName ||
+        interaction.user.username;
+      const content = renderGreetingMessage(settings.entrance_message, {
+        memberMention: "<@" + interaction.user.id + ">",
+        memberName,
+        serverName: interaction.guild.name,
+      });
+
+      try {
+        await channel.send({
+          content,
+          allowedMentions: { users: [interaction.user.id] },
+        });
+        await interaction.editReply({
+          content:
+            "Test delivered successfully in <#" + channel.id + ">. Harmony can post greetings there.",
+        });
+      } catch (error) {
+        console.error("Harmony greeting delivery test failed:", error);
+        const code = error?.code ? " Discord error: " + error.code + "." : "";
+        await interaction.editReply({
+          content:
+            "Harmony could not post in <#" + channel.id +
+            ">. Check **View Channel** and **Send Messages** permissions." + code,
+        });
+      }
       return;
     }
 
