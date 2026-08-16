@@ -27,6 +27,7 @@ getDb();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
@@ -72,6 +73,78 @@ client.on("guildCreate", async (guild) => {
   } catch (error) {
     console.error(
       `Could not register Harmony admin commands in ${guild.name}:`,
+      error
+    );
+  }
+});
+
+client.on("guildMemberAdd", async (member) => {
+  const channel = member.guild.systemChannel;
+  if (!channel) {
+    console.warn(
+      "No system channel is configured in " +
+        member.guild.name +
+        "; welcome message skipped."
+    );
+    return;
+  }
+
+  try {
+    await channel.send({
+      content:
+        "✨ Everyone welcome <@" +
+        member.id +
+        "> to " +
+        member.guild.name +
+        "! We’re so happy you found your way here. 💜",
+      allowedMentions: {
+        users: [member.id],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Could not send the welcome message in " +
+        member.guild.name +
+        ":",
+      error
+    );
+  }
+});
+
+client.on("guildMemberRemove", async (member) => {
+  const channel = member.guild.systemChannel;
+  if (!channel) {
+    console.warn(
+      "No system channel is configured in " +
+        member.guild.name +
+        "; departure message skipped."
+    );
+    return;
+  }
+
+  const displayName =
+    member.displayName ||
+    member.user?.globalName ||
+    member.user?.username ||
+    "A member";
+
+  try {
+    await channel.send({
+      content:
+        "👋 **" +
+        displayName +
+        "** has left " +
+        member.guild.name +
+        ". We wish them well on their journey. 💜",
+      allowedMentions: {
+        parse: [],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Could not send the departure message in " +
+        member.guild.name +
+        ":",
       error
     );
   }
