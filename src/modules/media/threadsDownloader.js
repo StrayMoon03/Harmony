@@ -230,6 +230,7 @@ async function fetchThreadsPage(url) {
       : "www.threads.com";
 
   const errors = [];
+  let bestPage = null;
   const hasThreadsCookies = Boolean(process.env.THREADS_COOKIES);
 
   console.log(
@@ -266,18 +267,45 @@ async function fetchThreadsPage(url) {
 
       const html = await response.text();
       if (html.length > 1000) {
-        return {
+        const decodedHtml = decodePageText(html);
+        const mediaCandidateCount =
+          collectCandidateUrls(decodedHtml).length;
+        const cookieCount = cookieHeader
+          ? cookieHeader.split("; ").length
+          : 0;
+        const page = {
           html,
           finalUrl: response.url || candidate,
           sourceUrl: candidate,
           status: response.status,
         };
+
+        console.log("Threads page candidate:", {
+          sourceHost: candidateHost,
+          finalHost: new URL(page.finalUrl).hostname,
+          status: response.status,
+          characters: html.length,
+          cookieCount,
+          mediaCandidateCount,
+        });
+
+        if (mediaCandidateCount > 0) {
+          return page;
+        }
+
+        if (!bestPage || html.length > bestPage.html.length) {
+          bestPage = page;
+        }
       }
     } catch (error) {
       errors.push(
         `${candidate}: ${error instanceof Error ? error.message : error}`
       );
     }
+  }
+
+  if (bestPage) {
+    return bestPage;
   }
 
   throw new Error(
