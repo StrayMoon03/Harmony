@@ -57,6 +57,12 @@ function getWelcomePassSettings(guildId) {
   ).get(guildId) || null;
 }
 
+function listWelcomePassSettings() {
+  return getDb().prepare(
+    "SELECT * FROM welcome_pass_settings ORDER BY guild_id"
+  ).all();
+}
+
 function linkWelcomePassCode({ code, guildId, userId }) {
   const normalizedCode = normalizeWelcomePassCode(code);
   const db = getDb();
@@ -149,6 +155,7 @@ module.exports = {
   renderWelcomePassReleaseMessage,
   saveWelcomePassSettings,
   getWelcomePassSettings,
+  listWelcomePassSettings,
   linkWelcomePassCode,
   recordWelcomePassApproval,
   getWelcomePassAssignment,
