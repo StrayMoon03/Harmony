@@ -6,6 +6,7 @@ const {
   recordWelcomePassApproval,
 } = require("../stores/welcomePassStore");
 const {
+  autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
 } = require("./welcomePassService");
 
@@ -95,6 +96,11 @@ function startWelcomePassServer(client) {
         code,
         approverName: body.approverName,
       });
+      const matchResult = await autoLinkWelcomePassByDiscordUsername(
+        client,
+        code,
+        String(body.discordUsername || "").slice(0, 100)
+      );
       const result = await assignApprovedWelcomePass(client, code);
       const pending = [
         "waiting_for_link",
@@ -106,6 +112,7 @@ function startWelcomePassServer(client) {
         ok: true,
         code,
         status: result.status,
+        matchStatus: matchResult.status,
       });
     } catch (error) {
       if (error.message === "body_too_large") {
