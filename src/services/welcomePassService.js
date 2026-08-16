@@ -3,7 +3,16 @@ const {
   getWelcomePassSettings,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
+  renderWelcomePassReleaseMessage,
 } = require("../stores/welcomePassStore");
+
+async function fetchTextChannel(guild, channelId) {
+  if (!channelId) return null;
+  const channel =
+    guild.channels.cache.get(channelId) ||
+    (await guild.channels.fetch(channelId).catch(() => null));
+  return channel && channel.isTextBased() ? channel : null;
+}
 
 async function assignApprovedWelcomePass(client, code) {
   const assignment = getWelcomePassAssignment(code);
@@ -36,14 +45,38 @@ async function assignApprovedWelcomePass(client, code) {
     );
   }
 
+  const releaseChannel = await fetchTextChannel(
+    guild,
+    settings.release_channel_id
+  );
+  if (settings.release_channel_id && !releaseChannel) {
+    throw new Error("Configured Welcome Pass member channel is unavailable.");
+  }
+
+  if (releaseChannel) {
+    const memberName =
+      member.displayName ||
+      member.user.globalName ||
+      member.user.username;
+    const releaseContent = renderWelcomePassReleaseMessage(
+      settings.release_message,
+      {
+        memberMention: "<@" + member.id + ">",
+        memberName,
+        serverName: guild.name,
+      }
+    );
+    await releaseChannel.send({
+      content: releaseContent,
+      allowedMentions: { users: [member.id] },
+    });
+  }
+
   markWelcomePassAssigned(assignment.code);
 
-  const channel =
-    guild.channels.cache.get(settings.channel_id) ||
-    (await guild.channels.fetch(settings.channel_id).catch(() => null));
-
-  if (channel && channel.isTextBased()) {
-    await channel.send({
+  const adminChannel = await fetchTextChannel(guild, settings.channel_id);
+  if (adminChannel) {
+    await adminChannel.send({
       content: [
         "✅ **Welcome Pass approved — STAY role granted**",
         "",
