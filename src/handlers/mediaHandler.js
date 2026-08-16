@@ -43,6 +43,13 @@ const {
 const {
   downloadYouTubeMedia,
 } = require("../modules/media/youtubeDownloader");
+const {
+  findThreadsLinks,
+  extractThreadsId,
+} = require("../modules/media/threads");
+const {
+  downloadThreadsMedia,
+} = require("../modules/media/threadsDownloader");
 const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 
@@ -184,6 +191,9 @@ async function handleMediaMessage(message) {
 
   const youtubeLinks =
     findYouTubeLinks(message.content);
+
+  const threadsLinks =
+    findThreadsLinks(message.content);
 
   console.log("YouTube detection:", {
     content: message.content,
@@ -843,6 +853,113 @@ async function handleMediaMessage(message) {
 
       console.log(
         `YouTube ${mediaType} ` +
+          `(${classification.files.length} file(s)) ` +
+          `shared for ${message.author.username}`
+      );
+    } catch (error) {
+      await replyWithHarmonyError(
+        message,
+        error
+      );
+    }
+
+    return;
+  }
+
+  // =========================
+  // Threads
+  // =========================
+
+  if (threadsLinks.length > 0) {
+    const originalUrl = threadsLinks[0];
+    const mediaId = extractThreadsId(originalUrl);
+    const platform = "threads";
+
+    if (!mediaId) {
+      console.warn(
+        "Could not extract Threads post id from:",
+        originalUrl
+      );
+      return;
+    }
+
+    try {
+      const existing =
+        shareStore.find(platform, mediaId);
+
+      if (existing) {
+        await message.reply({
+          content:
+            formatAlreadySharedReply(existing),
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        await suppressOriginalEmbeds(message);
+        return;
+      }
+
+      await message.channel.sendTyping();
+      console.log(
+        `Threads link accepted: ${mediaId}`
+      );
+
+      const downloadResult =
+        await downloadThreadsMedia(originalUrl);
+
+      const classification = classify(
+        downloadResult.files,
+        originalUrl
+      );
+
+      if (classification.files.length === 0) {
+        throw new Error(
+          "No Threads media files were downloaded."
+        );
+      }
+
+      const creator =
+        downloadResult.creator ||
+        "Unknown creator";
+
+      const cardText = formatMediaCard({
+        platform: "Threads",
+        mediaType: classification.label,
+        creator,
+        originalUrl,
+        heart: "🤍",
+      });
+
+      await uploadMedia(
+        message,
+        classification.files,
+        cardText,
+        downloadResult.rawDir,
+        { embedColor: 0xffffff }
+      );
+
+      await suppressOriginalEmbeds(message);
+      setTimeout(() => {
+        suppressOriginalEmbeds(message).catch(() => {});
+      }, 2500);
+
+      shareStore.insert({
+        platform,
+        mediaId,
+        creator,
+        sharedBy:
+          message.member?.displayName ??
+          message.author.username,
+        sharedById: message.author.id,
+        messageId: message.id,
+        channelId: message.channel.id,
+        guildId: message.guild?.id ?? null,
+        url: originalUrl,
+      });
+
+      console.log(
+        `Threads ${classification.label} ` +
           `(${classification.files.length} file(s)) ` +
           `shared for ${message.author.username}`
       );
