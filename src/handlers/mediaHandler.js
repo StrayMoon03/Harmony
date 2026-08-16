@@ -683,6 +683,8 @@ async function handleMediaMessage(message) {
         });
 
         await message.reply({
+          // A raw URL lets Discord build YouTube's playable streaming preview.
+          content: originalUrl,
           embeds: [
             new EmbedBuilder()
               .setColor(0xff0000)
@@ -699,7 +701,9 @@ async function handleMediaMessage(message) {
           },
         });
 
-        // Keep Discord's native YouTube player on the original message.
+        // Harmony's reply now owns the playable preview; hide any duplicate
+        // preview Discord may later add to the member's original link.
+        await suppressOriginalEmbeds(message);
         shareStore.insert({
           platform,
           mediaId,
