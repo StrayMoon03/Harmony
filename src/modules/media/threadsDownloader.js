@@ -8,6 +8,10 @@ const { extractThreadsCreator } = require("./threads");
 
 const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+const THREADS_BROWSER_HELPER = path.join(
+  __dirname,
+  "threadsBrowser.py"
+);
 
 async function readThreadsCookieHeader(hostname) {
   const cookiesPath = process.env.THREADS_COOKIES;
@@ -182,6 +186,84 @@ function collectCandidateUrls(html) {
   ].slice(0, 20);
 }
 
+async function inspectThreadsWithBrowser(url) {
+  const pythonPath = process.env.PYTHON_PATH || "python3";
+  const cookiePath = process.env.THREADS_COOKIES || "";
+
+  console.log("Threads browser fallback starting.");
+
+  try {
+    const { stdout } = await execFileAsync(
+      pythonPath,
+      [THREADS_BROWSER_HELPER, url, cookiePath],
+      {
+        windowsHide: true,
+        timeout: 75000,
+        killSignal: "SIGKILL",
+        maxBuffer: 5 * 1024 * 1024,
+      }
+    );
+
+    const line = String(stdout)
+      .split(/\r?\n/)
+      .find((value) =>
+        value.startsWith("HARMONY_THREADS_BROWSER:")
+      );
+    if (!line) {
+      throw new Error(
+        "browser helper returned no result"
+      );
+    }
+
+    const result = JSON.parse(
+      line.slice("HARMONY_THREADS_BROWSER:".length)
+    );
+    const candidates = Array.isArray(result.candidates)
+      ? result.candidates
+          .map(validCdnUrl)
+          .filter(Boolean)
+          .slice(0, 20)
+      : [];
+
+    console.log("Threads browser fallback complete:", {
+      cookieCount: Number(result.cookieCount) || 0,
+      candidateCount: candidates.length,
+    });
+
+    return {
+      candidates,
+      finalUrl:
+        typeof result.finalUrl === "string"
+          ? result.finalUrl
+          : url,
+    };
+  } catch (error) {
+    if (
+      error &&
+      (error.killed || error.signal === "SIGKILL")
+    ) {
+      throw new Error(
+        "Threads browser took longer than 75 seconds."
+      );
+    }
+
+    const stderr =
+      error && typeof error.stderr === "string"
+        ? error.stderr
+            .split(/\r?\n/)
+            .find((line) =>
+              line.startsWith(
+                "HARMONY_THREADS_BROWSER_ERROR:"
+              )
+            )
+        : "";
+    throw new Error(
+      stderr ||
+        "Threads browser could not inspect this post."
+    );
+  }
+}
+
 async function imageIsLargeEnough(filePath) {
   try {
     const { stdout } = await execFileAsync(
@@ -337,11 +419,12 @@ async function downloadThreadsMedia(url) {
   try {
     console.log("Threads page inspection starting.");
 
-    const { html, finalUrl, sourceUrl, status } =
-      await fetchThreadsPage(url);
+    const pageResult = await fetchThreadsPage(url);
+    const { html, sourceUrl, status } = pageResult;
+    let finalUrl = pageResult.finalUrl;
     const decodedHtml = decodePageText(html);
     const diagnostics = inspectThreadsPage(decodedHtml);
-    const candidates = collectCandidateUrls(decodedHtml);
+    let candidates = collectCandidateUrls(decodedHtml);
 
     console.log("Threads page diagnostics:", {
       status,
@@ -352,8 +435,15 @@ async function downloadThreadsMedia(url) {
     });
 
     if (candidates.length === 0) {
+      const browserResult =
+        await inspectThreadsWithBrowser(url);
+      candidates = browserResult.candidates;
+      finalUrl = browserResult.finalUrl || finalUrl;
+    }
+
+    if (candidates.length === 0) {
       throw new Error(
-        "Threads did not expose downloadable media on this public post page."
+        "Threads did not expose downloadable media after browser inspection."
       );
     }
 
