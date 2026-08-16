@@ -5,6 +5,7 @@ const {
   ChannelType,
 } = require("discord.js");
 const {
+  DEFAULT_RELEASE_MESSAGE,
   saveWelcomePassSettings,
 } = require("../stores/welcomePassStore");
 const {
@@ -13,7 +14,7 @@ const {
 
 const data = new SlashCommandBuilder()
   .setName("harmony-pass-setup")
-  .setDescription("Choose the STAY role and private Welcome Pass alert channel")
+  .setDescription("Configure Welcome Pass role automation and messages")
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addRoleOption((option) =>
     option
@@ -23,10 +24,24 @@ const data = new SlashCommandBuilder()
   )
   .addChannelOption((option) =>
     option
-      .setName("channel")
+      .setName("private-channel")
       .setDescription("Private channel for successful role alerts")
       .addChannelTypes(ChannelType.GuildText)
       .setRequired(true)
+  )
+  .addChannelOption((option) =>
+    option
+      .setName("member-channel")
+      .setDescription("Public channel where Harmony tells the member they are free")
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(true)
+  )
+  .addStringOption((option) =>
+    option
+      .setName("member-message")
+      .setDescription("Use {member}, {name}, and {server}; blank uses Harmony’s default")
+      .setMaxLength(1000)
+      .setRequired(false)
   );
 
 async function execute(interaction) {
@@ -40,7 +55,17 @@ async function execute(interaction) {
   }
 
   const role = interaction.options.getRole("role", true);
-  const channel = interaction.options.getChannel("channel", true);
+  const privateChannel = interaction.options.getChannel(
+    "private-channel",
+    true
+  );
+  const memberChannel = interaction.options.getChannel(
+    "member-channel",
+    true
+  );
+  const memberMessage =
+    interaction.options.getString("member-message") ||
+    DEFAULT_RELEASE_MESSAGE;
   const harmony = interaction.guild.members.me;
 
   if (role.managed || role.id === interaction.guild.id) {
@@ -67,7 +92,9 @@ async function execute(interaction) {
   saveWelcomePassSettings({
     guildId: interaction.guild.id,
     roleId: role.id,
-    channelId: channel.id,
+    channelId: privateChannel.id,
+    releaseChannelId: memberChannel.id,
+    releaseMessage: memberMessage,
   });
 
   await assignAllApprovedWelcomePasses(interaction.client);
@@ -77,9 +104,21 @@ async function execute(interaction) {
       "Welcome Pass role automation is ready. 💜",
       "",
       "Approved role: <@&" + role.id + ">",
-      "Private alerts: <#" + channel.id + ">",
+      "Private alerts: <#" + privateChannel.id + ">",
+      "Member message: <#" + memberChannel.id + ">",
       "",
-      "Members can now use `/harmony-pass` with their confirmation code.",
+      "**Message preview**",
+      memberMessage
+        .replaceAll("{member}", "<@" + interaction.user.id + ">")
+        .replaceAll(
+          "{name}",
+          interaction.member?.displayName ||
+            interaction.user.globalName ||
+            interaction.user.username
+        )
+        .replaceAll("{server}", interaction.guild.name),
+      "",
+      "Members can use `/harmony-pass` with their confirmation code.",
     ].join("\n"),
     allowedMentions: { parse: [] },
   });
