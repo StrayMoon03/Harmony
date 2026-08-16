@@ -414,54 +414,6 @@ async function handleMediaMessage(message) {
           originalUrl
         );
 
-      if (!downloadResult.hasAudio) {
-        const creator =
-          downloadResult.creator ||
-          info?.uploader ||
-          info?.creator ||
-          "Unknown creator";
-        const cardText = formatMediaCard({
-          platform: "TikTok",
-          mediaType: "Video",
-          creator,
-          originalUrl: normalizedUrl,
-          heart: "🩷",
-        });
-
-        await fs.rm(downloadResult.rawDir, {
-          recursive: true,
-          force: true,
-        }).catch(() => {});
-
-        await sendTikTokStreamingPreview(message, {
-          originalUrl: normalizedUrl,
-          cardText,
-          durationMinutes: Math.max(
-            1,
-            Math.ceil(Number(info?.duration || 0) / 60)
-          ),
-        });
-
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator,
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: normalizedUrl,
-        });
-
-        console.log(
-          `TikTok no-audio streaming fallback shared for ${message.author.username}`
-        );
-        return;
-      }
-
       const classification = classify(
         downloadResult.files,
         normalizedUrl
@@ -622,6 +574,54 @@ async function handleMediaMessage(message) {
         await downloadTikTokMedia(
           normalizedUrl
         );
+
+      if (!downloadResult.hasAudio) {
+        const creator =
+          downloadResult.creator ||
+          info?.uploader ||
+          info?.creator ||
+          "Unknown creator";
+        const cardText = formatMediaCard({
+          platform: "TikTok",
+          mediaType: "Video",
+          creator,
+          originalUrl: normalizedUrl,
+          heart: "🩷",
+        });
+
+        await fs.rm(downloadResult.rawDir, {
+          recursive: true,
+          force: true,
+        }).catch(() => {});
+
+        await sendTikTokStreamingPreview(message, {
+          originalUrl: normalizedUrl,
+          cardText,
+          durationMinutes: Math.max(
+            1,
+            Math.ceil(Number(info?.duration || 0) / 60)
+          ),
+        });
+
+        shareStore.insert({
+          platform,
+          mediaId,
+          creator,
+          sharedBy:
+            message.member?.displayName ??
+            message.author.username,
+          sharedById: message.author.id,
+          messageId: message.id,
+          channelId: message.channel.id,
+          guildId: message.guild?.id ?? null,
+          url: normalizedUrl,
+        });
+
+        console.log(
+          `TikTok no-audio streaming fallback shared for ${message.author.username}`
+        );
+        return;
+      }
 
       const classification = classify(
         downloadResult.files,
