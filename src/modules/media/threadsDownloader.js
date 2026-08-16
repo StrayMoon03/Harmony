@@ -270,7 +270,7 @@ async function inspectThreadsWithBrowser(url) {
   }
 }
 
-async function imageIsLargeEnough(filePath) {
+async function getImageDimensions(filePath) {
   try {
     const { stdout } = await execFileAsync(
       process.env.FFPROBE_PATH || "ffprobe",
@@ -293,13 +293,15 @@ async function imageIsLargeEnough(filePath) {
     );
 
     const match = String(stdout).trim().match(/^(\d+)x(\d+)/);
-    return Boolean(
-      match &&
-      Number(match[1]) >= 300 &&
-      Number(match[2]) >= 300
-    );
+    if (!match) return null;
+
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width < 300 || height < 300) return null;
+
+    return { width, height, area: width * height };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -506,7 +508,7 @@ async function downloadThreadsMedia(url) {
       );
     }
 
-    const files = [];
+    const downloaded = [];
     const imageHashes = [];
 
     for (const candidate of candidates) {
@@ -539,16 +541,18 @@ async function downloadThreadsMedia(url) {
             : ".jpg";
       const dest = path.join(
         jobDir,
-        `threads-${String(files.length).padStart(3, "0")}${ext}`
+        `threads-${String(downloaded.length).padStart(3, "0")}${ext}`
       );
       await fs.writeFile(dest, bytes);
 
-      if (isImage && !(await imageIsLargeEnough(dest))) {
-        await fs.rm(dest, { force: true });
-        continue;
-      }
-
+      let dimensions = null;
       if (isImage) {
+        dimensions = await getImageDimensions(dest);
+        if (!dimensions) {
+          await fs.rm(dest, { force: true });
+          continue;
+        }
+
         const imageHash = await imagePerceptualHash(dest);
         const isDuplicate =
           imageHash !== null &&
@@ -569,8 +573,56 @@ async function downloadThreadsMedia(url) {
         }
       }
 
-      files.push(probeFile(dest));
+      downloaded.push({
+        file: probeFile(dest),
+        bytes: bytes.length,
+        dimensions,
+      });
     }
+
+    const images = downloaded.filter(
+      (item) => item.file.isImage && item.dimensions
+    );
+    let retained = downloaded;
+
+    if (images.length > 1) {
+      const largestArea = Math.max(
+        ...images.map((item) => item.dimensions.area)
+      );
+      const largestBytes = Math.max(
+        ...images.map((item) => item.bytes)
+      );
+      const minimumArea = largestArea * 0.4;
+      const minimumBytes = largestBytes * 0.15;
+
+      retained = downloaded.filter(
+        (item) =>
+          !item.file.isImage ||
+          (
+            item.dimensions.area >= minimumArea &&
+            item.bytes >= minimumBytes
+          )
+      );
+
+      const retainedPaths = new Set(
+        retained.map((item) => item.file.path)
+      );
+      for (const item of downloaded) {
+        if (!retainedPaths.has(item.file.path)) {
+          await fs.rm(item.file.path, { force: true });
+        }
+      }
+
+      console.log("Threads image selection:", {
+        downloadedImageCount: images.length,
+        retainedImageCount: retained.filter(
+          (item) => item.file.isImage
+        ).length,
+        largestArea,
+      });
+    }
+
+    const files = retained.map((item) => item.file);
 
     if (files.length === 0) {
       throw new Error(
