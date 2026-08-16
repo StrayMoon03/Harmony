@@ -116,8 +116,7 @@ def main():
             try:
                 content_type = response.headers.get("content-type", "").lower()
                 if (
-                    content_type.startswith("image/")
-                    or content_type.startswith("video/")
+                    content_type.startswith("video/")
                     or ".mp4" in response.url.lower()
                 ) and allowed_media_url(response.url):
                     observed.append(response.url)
@@ -139,11 +138,34 @@ def main():
               for (const source of document.querySelectorAll("video source")) {
                 if (source.src) results.push(source.src);
               }
+              const seenImages = new Set();
               for (const image of document.querySelectorAll("img")) {
-                if (image.naturalWidth >= 300 && image.naturalHeight >= 300) {
-                  const value = image.currentSrc || image.src;
-                  if (value) results.push(value);
+                if (image.naturalWidth < 300 || image.naturalHeight < 300) {
+                  continue;
                 }
+                const value = image.currentSrc || image.src;
+                if (!value) continue;
+
+                let parsed;
+                try {
+                  parsed = new URL(value);
+                } catch {
+                  continue;
+                }
+                if (
+                  parsed.hostname.startsWith("static.") ||
+                  parsed.pathname.includes("/rsrc.php/")
+                ) {
+                  continue;
+                }
+
+                const alt = (image.alt || "").trim().toLowerCase();
+                const identity = alt || (
+                  parsed.hostname + parsed.pathname
+                );
+                if (seenImages.has(identity)) continue;
+                seenImages.add(identity);
+                results.push(value);
               }
               return results;
             }"""
