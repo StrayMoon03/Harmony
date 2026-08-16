@@ -116,7 +116,8 @@ def main():
             try:
                 content_type = response.headers.get("content-type", "").lower()
                 if (
-                    content_type.startswith("video/")
+                    content_type.startswith("image/")
+                    or content_type.startswith("video/")
                     or ".mp4" in response.url.lower()
                 ) and allowed_media_url(response.url):
                     observed.append(response.url)
