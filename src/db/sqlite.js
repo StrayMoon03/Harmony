@@ -98,6 +98,11 @@ function migrate(database) {
       "ALTER TABLE welcome_pass_settings ADD COLUMN release_message TEXT"
     );
   }
+  if (!settingColumns.has("grant_mode")) {
+    database.exec(
+      "ALTER TABLE welcome_pass_settings ADD COLUMN grant_mode TEXT NOT NULL DEFAULT 'automatic'"
+    );
+  }
 }
 
 function closeDb() {
