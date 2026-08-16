@@ -507,6 +507,8 @@ async function ensureAppleCompatibleVideo(filePath) {
     "+genpts+igndts+discardcorrupt",
     "-err_detect",
     "ignore_err",
+    "-filter_threads",
+    "1",
     "-i",
     filePath,
     "-map",
@@ -514,17 +516,19 @@ async function ensureAppleCompatibleVideo(filePath) {
     "-map",
     "0:a:0?",
     "-vf",
-    "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+    "scale='min(720,iw)':-2,format=yuv420p",
     "-c:v",
     "libx264",
+    "-threads",
+    "1",
     "-profile:v",
     "main",
     "-level",
     "4.0",
     "-preset",
-    "veryfast",
+    "ultrafast",
     "-crf",
-    "23",
+    "25",
     "-c:a",
     "aac",
     "-b:a",
@@ -728,13 +732,15 @@ async function uploadMedia(
 
   try {
     for (const file of files) {
-      let ready = file.path;
+      // Size compression already produces H.264/AAC/yuv420p. Run it first
+      // so oversized sources do not receive an unnecessary full-size encode.
+      let ready = await ensureUnderSizeLimit(file.path, maxBytes);
 
       if (options.ensureAppleCompatibleVideo) {
         ready = await ensureAppleCompatibleVideo(ready);
+        ready = await ensureUnderSizeLimit(ready, maxBytes);
       }
 
-      ready = await ensureUnderSizeLimit(ready, maxBytes);
       paths.push(ready);
     }
 
