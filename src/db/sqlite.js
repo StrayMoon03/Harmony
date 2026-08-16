@@ -57,6 +57,31 @@ function migrate(database) {
       exit_message      TEXT NOT NULL,
       updated_at        TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS welcome_pass_settings (
+      guild_id    TEXT PRIMARY KEY,
+      role_id     TEXT NOT NULL,
+      channel_id  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS welcome_pass_links (
+      code         TEXT PRIMARY KEY,
+      guild_id     TEXT NOT NULL,
+      user_id      TEXT NOT NULL,
+      linked_at    TEXT NOT NULL,
+      assigned_at  TEXT,
+      UNIQUE (guild_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS welcome_pass_approvals (
+      code           TEXT PRIMARY KEY,
+      approver_name  TEXT NOT NULL,
+      approved_at    TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
+      ON welcome_pass_links (guild_id, user_id);
   `);
 }
 

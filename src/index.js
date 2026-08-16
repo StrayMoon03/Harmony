@@ -9,15 +9,25 @@ const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
 const statusCommand = require("./commands/status");
 const greetingsCommand = require("./commands/greetings");
+const linkWelcomePassCommand = require("./commands/linkWelcomePass");
+const welcomePassSetupCommand = require("./commands/welcomePassSetup");
 const {
   getGreetingSettings,
   renderGreetingMessage,
 } = require("./stores/greetingStore");
+const {
+  assignAllApprovedWelcomePasses,
+} = require("./services/welcomePassService");
+const {
+  startWelcomePassServer,
+} = require("./services/welcomePassServer");
 
 const commands = [
   forgetShareCommand,
   statusCommand,
   greetingsCommand,
+  linkWelcomePassCommand,
+  welcomePassSetupCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -39,13 +49,17 @@ const client = new Client({
   ],
 });
 
+startWelcomePassServer(client);
+
 async function registerGuildCommands(guild) {
   await guild.commands.set(
     commands.map((command) => command.data.toJSON())
   );
 
   console.log(
-    `Admin commands ready in ${guild.name}: /harmony-forget, /harmony-status, /harmony-greetings`
+    "Harmony commands ready in " + guild.name + ": " +
+      "/harmony-forget, /harmony-status, /harmony-greetings, " +
+      "/harmony-pass, /harmony-pass-setup"
   );
 }
 
@@ -66,11 +80,13 @@ client.once("clientReady", async () => {
       await registerGuildCommands(guild);
     } catch (error) {
       console.error(
-        `Could not register Harmony admin commands in ${guild.name}:`,
+        `Could not register Harmony commands in ${guild.name}:`,
         error
       );
     }
   }
+
+  await assignAllApprovedWelcomePasses(client);
 });
 
 client.on("guildCreate", async (guild) => {
@@ -78,7 +94,7 @@ client.on("guildCreate", async (guild) => {
     await registerGuildCommands(guild);
   } catch (error) {
     console.error(
-      `Could not register Harmony admin commands in ${guild.name}:`,
+      `Could not register Harmony commands in ${guild.name}:`,
       error
     );
   }
