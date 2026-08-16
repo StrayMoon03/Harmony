@@ -46,6 +46,11 @@ function prepareRuntimeSecrets() {
     "YOUTUBE_COOKIES",
     "youtube-cookies.txt"
   );
+  materializeBase64Secret(
+    "THREADS_COOKIES_BASE64",
+    "THREADS_COOKIES",
+    "threads-cookies.txt"
+  );
 }
 
 module.exports = { prepareRuntimeSecrets };

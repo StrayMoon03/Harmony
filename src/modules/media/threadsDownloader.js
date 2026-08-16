@@ -9,6 +9,56 @@ const { extractThreadsCreator } = require("./threads");
 const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
 
+async function readThreadsCookieHeader(hostname) {
+  const cookiesPath = process.env.THREADS_COOKIES;
+  if (!cookiesPath) return "";
+
+  try {
+    const text = await fs.readFile(cookiesPath, "utf8");
+    const now = Math.floor(Date.now() / 1000);
+    const cookies = [];
+
+    for (const rawLine of text.split(/\r?\n/)) {
+      let line = rawLine.trim();
+      if (!line) continue;
+
+      if (line.startsWith("#HttpOnly_")) {
+        line = line.slice("#HttpOnly_".length);
+      } else if (line.startsWith("#")) {
+        continue;
+      }
+
+      const parts = line.split("\t");
+      if (parts.length < 7) continue;
+
+      const [rawDomain, , , , rawExpiry, name, ...valueParts] =
+        parts;
+      const domain = rawDomain.replace(/^\./, "").toLowerCase();
+      const requestHost = hostname.toLowerCase();
+      const expiry = Number(rawExpiry);
+
+      if (
+        !name ||
+        (Number.isFinite(expiry) && expiry > 0 && expiry < now) ||
+        (requestHost !== domain &&
+          !requestHost.endsWith("." + domain))
+      ) {
+        continue;
+      }
+
+      cookies.push(name + "=" + valueParts.join("\t"));
+    }
+
+    return cookies.join("; ");
+  } catch (error) {
+    console.warn(
+      "Threads cookies could not be read:",
+      error instanceof Error ? error.message : error
+    );
+    return "";
+  }
+}
+
 function decodePageText(value) {
   return String(value || "")
     .replace(/\\u0025/gi, "%")
@@ -180,6 +230,13 @@ async function fetchThreadsPage(url) {
       : "www.threads.com";
 
   const errors = [];
+  const hasThreadsCookies = Boolean(process.env.THREADS_COOKIES);
+
+  console.log(
+    hasThreadsCookies
+      ? "Threads cookies: ready."
+      : "Threads cookies: missing — public pages may return an empty app shell."
+  );
 
   for (const candidate of [
     canonical.toString(),
@@ -187,6 +244,9 @@ async function fetchThreadsPage(url) {
     original.toString(),
   ]) {
     try {
+      const candidateHost = new URL(candidate).hostname;
+      const cookieHeader =
+        await readThreadsCookieHeader(candidateHost);
       const response = await fetch(candidate, {
         redirect: "follow",
         headers: {
@@ -195,6 +255,7 @@ async function fetchThreadsPage(url) {
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
         },
       });
 
