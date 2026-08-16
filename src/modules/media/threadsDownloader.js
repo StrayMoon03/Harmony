@@ -148,17 +148,24 @@ async function imageIsLargeEnough(filePath) {
 
 async function fetchThreadsPage(url) {
   const original = new URL(url);
-  const alternate = new URL(url);
+  const canonical = new URL(url);
+  canonical.pathname = canonical.pathname.replace(
+    /\/media\/?$/i,
+    ""
+  );
+
+  const alternate = new URL(canonical);
   alternate.hostname =
-    original.hostname.endsWith("threads.com")
+    canonical.hostname.endsWith("threads.com")
       ? "www.threads.net"
       : "www.threads.com";
 
   const errors = [];
 
   for (const candidate of [
-    original.toString(),
+    canonical.toString(),
     alternate.toString(),
+    original.toString(),
   ]) {
     try {
       const response = await fetch(candidate, {
@@ -222,7 +229,8 @@ async function downloadThreadsMedia(url) {
 
     const { html, finalUrl } =
       await fetchThreadsPage(url);
-    const candidates = collectCandidateUrls(html);
+    const decodedHtml = decodePageText(html);
+    const candidates = collectCandidateUrls(decodedHtml);
 
     if (candidates.length === 0) {
       throw new Error(
