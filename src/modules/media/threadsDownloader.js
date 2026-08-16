@@ -87,6 +87,23 @@ function firstUrlAfterKey(html, key, windowSize = 12000) {
   return results;
 }
 
+function inspectThreadsPage(html) {
+  const cdnMatches =
+    html.match(
+      /https:\/\/[^"'\\s<>}]+(?:fbcdn\.net|cdninstagram\.com)[^"'\\s<>}]*/gi
+    ) || [];
+
+  return {
+    characters: html.length,
+    hasOgImage: /(?:property|name)=["']og:image["']/i.test(html),
+    hasOgVideo: /(?:property|name)=["']og:video(?::secure_url)?["']/i.test(html),
+    hasImageVersions: html.includes('"image_versions2"'),
+    hasVideoVersions: html.includes('"video_versions"'),
+    hasLoginPrompt: /log in|sign up|create (?:a new )?account/i.test(html),
+    cdnUrlCount: cdnMatches.length,
+  };
+}
+
 function collectCandidateUrls(html) {
   const videos = firstUrlAfterKey(html, '"video_versions"');
   const images = firstUrlAfterKey(html, '"image_versions2"');
@@ -191,6 +208,8 @@ async function fetchThreadsPage(url) {
         return {
           html,
           finalUrl: response.url || candidate,
+          sourceUrl: candidate,
+          status: response.status,
         };
       }
     } catch (error) {
@@ -229,10 +248,19 @@ async function downloadThreadsMedia(url) {
   try {
     console.log("Threads page inspection starting.");
 
-    const { html, finalUrl } =
+    const { html, finalUrl, sourceUrl, status } =
       await fetchThreadsPage(url);
     const decodedHtml = decodePageText(html);
+    const diagnostics = inspectThreadsPage(decodedHtml);
     const candidates = collectCandidateUrls(decodedHtml);
+
+    console.log("Threads page diagnostics:", {
+      status,
+      sourceHost: new URL(sourceUrl).hostname,
+      finalHost: new URL(finalUrl).hostname,
+      ...diagnostics,
+      candidateCount: candidates.length,
+    });
 
     if (candidates.length === 0) {
       throw new Error(
