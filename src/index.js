@@ -12,6 +12,10 @@ const greetingsCommand = require("./commands/greetings");
 const linkWelcomePassCommand = require("./commands/linkWelcomePass");
 const welcomePassSetupCommand = require("./commands/welcomePassSetup");
 const welcomePassModeCommand = require("./commands/welcomePassMode");
+const collectionStatsCommand = require("./commands/collectionStats");
+const collectionLeaderboardCommand = require("./commands/collectionLeaderboard");
+const collectionAdminCommand = require("./commands/collectionAdmin");
+const shareStore = require("./stores/shareStore");
 const {
   getGreetingSettings,
   renderGreetingMessage,
@@ -23,6 +27,10 @@ const {
 const {
   startWelcomePassServer,
 } = require("./services/welcomePassServer");
+const {
+  handleNewCollectionShare,
+  startCollectionScheduler,
+} = require("./services/collectionService");
 
 const commands = [
   forgetShareCommand,
@@ -31,6 +39,9 @@ const commands = [
   linkWelcomePassCommand,
   welcomePassSetupCommand,
   welcomePassModeCommand,
+  collectionStatsCommand,
+  collectionLeaderboardCommand,
+  collectionAdminCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -53,6 +64,9 @@ const client = new Client({
 });
 
 startWelcomePassServer(client);
+shareStore.onInserted((record) =>
+  handleNewCollectionShare(client, record)
+);
 
 async function registerGuildCommands(guild) {
   await guild.commands.set(
@@ -62,7 +76,8 @@ async function registerGuildCommands(guild) {
   console.log(
     "Harmony commands ready in " + guild.name + ": " +
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
-      "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode"
+      "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
+      "/harmony-stats, /harmony-leaderboard, /harmony-collection"
   );
 }
 
@@ -90,6 +105,7 @@ client.once("clientReady", async () => {
   }
 
   await assignAllApprovedWelcomePasses(client);
+  startCollectionScheduler(client);
 });
 
 client.on("guildCreate", async (guild) => {
