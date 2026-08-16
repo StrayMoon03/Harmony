@@ -133,10 +133,23 @@ async function getConfiguredGreetingChannel(guild, settings) {
 }
 
 client.on("guildMemberAdd", async (member) => {
-  if (member.user.bot) return;
+  console.log(
+    "Greeting join event received:",
+    member.user.username,
+    "in",
+    member.guild.name
+  );
+
+  if (member.user.bot) {
+    console.log("Greeting skipped: joining account is a bot.");
+    return;
+  }
 
   const settings = getGreetingSettings(member.guild.id);
-  if (!settings || !settings.enabled) return;
+  if (!settings || !settings.enabled) {
+    console.log("Greeting skipped: greetings are not configured or are off.");
+    return;
+  }
 
   const channel = await getConfiguredGreetingChannel(
     member.guild,
@@ -170,6 +183,12 @@ client.on("guildMemberAdd", async (member) => {
         users: [member.id],
       },
     });
+    console.log(
+      "Entrance greeting delivered for",
+      member.user.username,
+      "in",
+      member.guild.name
+    );
   } catch (error) {
     console.error(
       "Could not send the welcome message in " +
