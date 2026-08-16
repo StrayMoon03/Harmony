@@ -1,6 +1,8 @@
 const { getDb } = require("../db/sqlite");
 
 const CODE_PATTERN = /^YS-[A-Z0-9]{8}$/;
+const DEFAULT_RELEASE_MESSAGE =
+  "✨ Your Welcome Pass is approved, {member}! The doors are open—you’re officially free to explore the rest of Youtiful Stay. Have fun finding your favorite room! 💜";
 
 function normalizeWelcomePassCode(value) {
   return String(value || "").trim().toUpperCase();
@@ -10,16 +12,43 @@ function isValidWelcomePassCode(value) {
   return CODE_PATTERN.test(normalizeWelcomePassCode(value));
 }
 
-function saveWelcomePassSettings({ guildId, roleId, channelId }) {
+function renderWelcomePassReleaseMessage(template, values) {
+  return String(template || DEFAULT_RELEASE_MESSAGE)
+    .replaceAll("{member}", values.memberMention)
+    .replaceAll("{name}", values.memberName)
+    .replaceAll("{server}", values.serverName);
+}
+
+function saveWelcomePassSettings({
+  guildId,
+  roleId,
+  channelId,
+  releaseChannelId,
+  releaseMessage,
+}) {
   getDb().prepare(`
     INSERT INTO welcome_pass_settings (
-      guild_id, role_id, channel_id, updated_at
-    ) VALUES (?, ?, ?, ?)
+      guild_id,
+      role_id,
+      channel_id,
+      release_channel_id,
+      release_message,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(guild_id) DO UPDATE SET
       role_id = excluded.role_id,
       channel_id = excluded.channel_id,
+      release_channel_id = excluded.release_channel_id,
+      release_message = excluded.release_message,
       updated_at = excluded.updated_at
-  `).run(guildId, roleId, channelId, new Date().toISOString());
+  `).run(
+    guildId,
+    roleId,
+    channelId,
+    releaseChannelId,
+    releaseMessage || DEFAULT_RELEASE_MESSAGE,
+    new Date().toISOString()
+  );
 }
 
 function getWelcomePassSettings(guildId) {
@@ -114,8 +143,10 @@ function markWelcomePassAssigned(code) {
 }
 
 module.exports = {
+  DEFAULT_RELEASE_MESSAGE,
   normalizeWelcomePassCode,
   isValidWelcomePassCode,
+  renderWelcomePassReleaseMessage,
   saveWelcomePassSettings,
   getWelcomePassSettings,
   linkWelcomePassCode,
