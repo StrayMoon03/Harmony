@@ -129,6 +129,9 @@ async function assignApprovedWelcomePass(client, code) {
 
   const settings = getWelcomePassSettings(assignment.guild_id);
   if (!settings) return { status: "waiting_for_setup" };
+  if (settings.grant_mode === "manual") {
+    return { status: "manual_role_required" };
+  }
 
   const guild =
     client.guilds.cache.get(assignment.guild_id) ||
@@ -198,6 +201,76 @@ async function assignApprovedWelcomePass(client, code) {
   return { status: "assigned", guildId: guild.id, userId: member.id };
 }
 
+
+async function handleManualWelcomePassRoleAdded(
+  oldMember,
+  newMember
+) {
+  if (newMember.user.bot) return { status: "ignored" };
+
+  const settings = getWelcomePassSettings(newMember.guild.id);
+  if (!settings || settings.grant_mode !== "manual") {
+    return { status: "ignored" };
+  }
+
+  const roleId = settings.role_id;
+  const roleWasAdded =
+    !oldMember.roles.cache.has(roleId) &&
+    newMember.roles.cache.has(roleId);
+  if (!roleWasAdded) return { status: "ignored" };
+
+  const releaseChannel = await fetchTextChannel(
+    newMember.guild,
+    settings.release_channel_id
+  );
+  if (settings.release_channel_id && !releaseChannel) {
+    throw new Error("Configured Welcome Pass member channel is unavailable.");
+  }
+
+  if (releaseChannel) {
+    const memberName =
+      newMember.displayName ||
+      newMember.user.globalName ||
+      newMember.user.username;
+    const releaseContent = renderWelcomePassReleaseMessage(
+      settings.release_message,
+      {
+        memberMention: "<@" + newMember.id + ">",
+        memberName,
+        serverName: newMember.guild.name,
+      }
+    );
+    await releaseChannel.send({
+      content: releaseContent,
+      allowedMentions: { users: [newMember.id] },
+    });
+  }
+
+  const adminChannel = await fetchTextChannel(
+    newMember.guild,
+    settings.channel_id
+  );
+  if (adminChannel) {
+    await adminChannel.send({
+      content: [
+        "✅ **STAY role manually granted**",
+        "",
+        "Member: <@" + newMember.id + ">",
+        "Harmony detected the role change and sent the member message.",
+      ].join("\n"),
+      allowedMentions: { parse: [] },
+    }).catch((error) => {
+      console.error("Could not send manual Welcome Pass admin notice:", error);
+    });
+  }
+
+  return {
+    status: "manual_release_sent",
+    guildId: newMember.guild.id,
+    userId: newMember.id,
+  };
+}
+
 async function assignAllApprovedWelcomePasses(client) {
   const pending = listPendingWelcomePassApprovals();
   for (const item of pending) {
@@ -215,5 +288,6 @@ async function assignAllApprovedWelcomePasses(client) {
 module.exports = {
   autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
+  handleManualWelcomePassRoleAdded,
   assignAllApprovedWelcomePasses,
 };
