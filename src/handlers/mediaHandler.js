@@ -752,13 +752,68 @@ async function handleMediaMessage(message) {
         heart: "❤️",
       });
 
-      await uploadMedia(
-        message,
-        classification.files,
-        cardText,
-        downloadResult.rawDir,
-        { embedColor: 0xff0000 }
-      );
+      try {
+        await uploadMedia(
+          message,
+          classification.files,
+          cardText,
+          downloadResult.rawDir,
+          { embedColor: 0xff0000 }
+        );
+      } catch (uploadError) {
+        console.warn(
+          "YouTube attachment could not fit; switching to streaming preview:",
+          uploadError instanceof Error
+            ? uploadError.message
+            : uploadError
+        );
+
+        const durationMinutes = Number.isFinite(
+          downloadResult.durationSeconds
+        )
+          ? Math.ceil(downloadResult.durationSeconds / 60)
+          : null;
+
+        await message.reply({
+          content: originalUrl,
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xff0000)
+              .setDescription(
+                [
+                  cardText,
+                  "",
+                  durationMinutes
+                    ? `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`
+                    : "This video plays through YouTube so it can remain full length.",
+                ].join("\n")
+              ),
+          ],
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        await suppressOriginalEmbeds(message);
+        shareStore.insert({
+          platform,
+          mediaId,
+          creator,
+          sharedBy:
+            message.member?.displayName ??
+            message.author.username,
+          sharedById: message.author.id,
+          messageId: message.id,
+          channelId: message.channel.id,
+          guildId: message.guild?.id ?? null,
+          url: originalUrl,
+        });
+
+        console.log(
+          `YouTube streaming fallback shared for ${message.author.username}`
+        );
+        return;
+      }
 
       await suppressOriginalEmbeds(message);
       setTimeout(() => {

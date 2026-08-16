@@ -7,6 +7,7 @@ const { probeFile } = require("./downloader");
 
 const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+const MAX_YOUTUBE_UPLOAD_SECONDS = 4 * 60;
 
 /**
  * Downloads one YouTube video with bounded network retries and a hard timeout.
@@ -131,7 +132,7 @@ async function downloadYouTubeMedia(url) {
 
     if (
       Number.isFinite(durationSeconds) &&
-      durationSeconds > 600
+      durationSeconds > MAX_YOUTUBE_UPLOAD_SECONDS
     ) {
       console.log(
         `YouTube long video detected (~${Math.ceil(
@@ -213,6 +214,7 @@ async function downloadYouTubeMedia(url) {
       rawDir: jobDir,
       platform: "youtube",
       creator,
+      durationSeconds,
     };
   } catch (error) {
     await fs.rm(jobDir, {
@@ -235,4 +237,5 @@ async function downloadYouTubeMedia(url) {
 
 module.exports = {
   downloadYouTubeMedia,
+  MAX_YOUTUBE_UPLOAD_SECONDS,
 };
