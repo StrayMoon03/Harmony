@@ -12,6 +12,10 @@ const THREADS_BROWSER_HELPER = path.join(
   __dirname,
   "threadsBrowser.py"
 );
+const THREADS_PLACEHOLDER_HASHES = [
+  0x187cfeffff7e7c18n,
+  0x187e7effff7e3e18n,
+];
 
 async function readThreadsCookieHeader(hostname) {
   const cookiesPath = process.env.THREADS_COOKIES;
@@ -358,6 +362,18 @@ function perceptualHashDistance(first, second) {
   return distance;
 }
 
+function isKnownThreadsPlaceholder(imageHash) {
+  if (imageHash === null) return false;
+
+  return THREADS_PLACEHOLDER_HASHES.some(
+    (placeholderHash) =>
+      perceptualHashDistance(
+        imageHash,
+        placeholderHash
+      ) <= 10
+  );
+}
+
 async function fetchThreadsPage(url) {
   const original = new URL(url);
   const canonical = new URL(url);
@@ -554,6 +570,14 @@ async function downloadThreadsMedia(url) {
         }
 
         const imageHash = await imagePerceptualHash(dest);
+        if (isKnownThreadsPlaceholder(imageHash)) {
+          await fs.rm(dest, { force: true });
+          console.log(
+            "Threads placeholder artwork removed."
+          );
+          continue;
+        }
+
         const isDuplicate =
           imageHash !== null &&
           imageHashes.some(
