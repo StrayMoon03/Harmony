@@ -5,10 +5,15 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const { probeFile } = require("./downloader");
+const { withBrowserLock } = require("./browserLock");
 
 const execFileAsync = promisify(execFile);
 
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+const FACEBOOK_BROWSER_HELPER = path.join(
+  __dirname,
+  "facebookBrowser.py"
+);
 
 /**
  * @param {string} dir
@@ -361,6 +366,134 @@ async function buildCookieHeader(cookiesPath) {
   } catch {
     return "";
   }
+}
+
+function validFacebookCdnUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      parsed.protocol === "https:" &&
+      (host.endsWith(".fbcdn.net") ||
+        host.endsWith(".cdninstagram.com"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function runFacebookBrowser(url, jobDir, cookiesPath) {
+  const pythonPath = process.env.PYTHON_PATH || "python3";
+  console.log("Facebook exact-post browser inspection starting.");
+
+  const { stdout } = await withBrowserLock(() =>
+    execFileAsync(
+      pythonPath,
+      [FACEBOOK_BROWSER_HELPER, url, cookiesPath || ""],
+      {
+        windowsHide: true,
+        timeout: 65000,
+        killSignal: "SIGKILL",
+        maxBuffer: 20 * 1024 * 1024,
+      }
+    )
+  );
+
+  const line = String(stdout)
+    .split(/\r?\n/)
+    .find((value) =>
+      value.startsWith("HARMONY_FACEBOOK_BROWSER:")
+    );
+  if (!line) {
+    throw new Error(
+      "Facebook browser helper returned no verified post result."
+    );
+  }
+
+  const result = JSON.parse(
+    line.slice("HARMONY_FACEBOOK_BROWSER:".length)
+  );
+  const attachments = Array.isArray(result.attachments)
+    ? result.attachments
+        .filter((item) =>
+          item &&
+          (item.type === "video" || item.type === "photo") &&
+          validFacebookCdnUrl(item.url)
+        )
+        .sort((a, b) => Number(a.order) - Number(b.order))
+        .slice(0, 10)
+    : [];
+
+  if (!attachments.length) {
+    throw new Error(
+      "Facebook browser found no attachments bound to the requested post."
+    );
+  }
+
+  const cookie = await buildCookieHeader(cookiesPath);
+  let saved = 0;
+  for (const attachment of attachments) {
+    const response = await fetch(attachment.url, {
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Referer:
+          typeof result.finalUrl === "string"
+            ? result.finalUrl
+            : url,
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      signal: AbortSignal.timeout(25000),
+    });
+    if (!response.ok) continue;
+
+    const type = response.headers.get("content-type") || "";
+    const isVideo =
+      attachment.type === "video" ||
+      type.startsWith("video/");
+    const isImage =
+      attachment.type === "photo" &&
+      type.startsWith("image/");
+    if (!isVideo && !isImage) continue;
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < (isVideo ? 50 : 30) * 1024) continue;
+    const ext = isVideo
+      ? ".mp4"
+      : type.includes("png")
+        ? ".png"
+        : type.includes("webp")
+          ? ".webp"
+          : ".jpg";
+    const destination = path.join(
+      jobDir,
+      `facebook-verified-${String(saved).padStart(3, "0")}${ext}`
+    );
+    await fs.writeFile(destination, bytes);
+    saved += 1;
+  }
+
+  if (!saved) {
+    throw new Error(
+      "Facebook verified the post attachments but their files could not be downloaded."
+    );
+  }
+
+  console.log("Facebook exact-post browser inspection complete:", {
+    cookieHealth: result.cookieHealth || "unknown",
+    targetCount: Array.isArray(result.targetIds)
+      ? result.targetIds.length
+      : 0,
+    attachmentCount: saved,
+    matchScore: Number(result.matchScore) || 0,
+  });
+
+  return {
+    creator:
+      typeof result.creator === "string"
+        ? result.creator
+        : null,
+  };
 }
 
 /**
@@ -770,10 +903,23 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
   /** @type {Array<{ name: string, run: () => Promise<void> }>} */
   const strategies = [];
+  let browserCreator = null;
 
   // A /share/p/ or other photo-post URL may make yt-dlp return Facebook's
   // generated preview video. Try the page's original CDN images first.
-  if (preferGalleryFirst && cookiesUsable) {
+  if (identitySensitive && cookiesUsable) {
+    strategies.push({
+      name: "facebook-browser+cookies (verified exact post)",
+      run: async () => {
+        const result = await runFacebookBrowser(
+          photoPageUrl,
+          jobDir,
+          cookiesPath
+        );
+        browserCreator = result.creator;
+      },
+    });
+  } else if (preferGalleryFirst && cookiesUsable) {
     strategies.push({
       name: "facebook-photo-page+cookies (primary)",
       run: () =>
@@ -960,9 +1106,12 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
   let creator = null;
   const cookieArg = cookiesUsable ? cookiesPath : null;
-  creator =
-    (await getGalleryDlCreator(url, cookieArg)) ||
-    (await getYtDlpCreator(url, cookieArg));
+  creator = browserCreator;
+  if (!creator && !identitySensitive) {
+    creator =
+      (await getGalleryDlCreator(url, cookieArg)) ||
+      (await getYtDlpCreator(url, cookieArg));
+  }
 
   if (creator) {
     console.log(`Facebook creator detected: ${creator}`);

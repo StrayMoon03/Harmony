@@ -5,6 +5,7 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { probeFile } = require("./downloader");
 const { extractThreadsCreator } = require("./threads");
+const { withBrowserLock } = require("./browserLock");
 
 const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
@@ -203,15 +204,17 @@ async function inspectThreadsWithBrowser(url) {
   console.log("Threads browser fallback starting.");
 
   try {
-    const { stdout } = await execFileAsync(
-      pythonPath,
-      [THREADS_BROWSER_HELPER, url, cookiePath],
-      {
-        windowsHide: true,
-        timeout: 75000,
-        killSignal: "SIGKILL",
-        maxBuffer: 5 * 1024 * 1024,
-      }
+    const { stdout } = await withBrowserLock(() =>
+      execFileAsync(
+        pythonPath,
+        [THREADS_BROWSER_HELPER, url, cookiePath],
+        {
+          windowsHide: true,
+          timeout: 75000,
+          killSignal: "SIGKILL",
+          maxBuffer: 5 * 1024 * 1024,
+        }
+      )
     );
 
     const line = String(stdout)

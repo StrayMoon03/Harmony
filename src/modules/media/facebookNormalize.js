@@ -1,3 +1,50 @@
+const fs = require("node:fs/promises");
+const path = require("node:path");
+
+async function getFacebookSessionHeader() {
+  const cookiePath =
+    process.env.FACEBOOK_COOKIES ||
+    path.resolve(__dirname, "../../facebook-cookies.txt");
+  try {
+    const text = await fs.readFile(cookiePath, "utf8");
+    const now = Math.floor(Date.now() / 1000);
+    const cookies = [];
+    const session = { c_user: false, xs: false };
+
+    for (const rawLine of text.split(/\r?\n/)) {
+      let line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith("#HttpOnly_")) {
+        line = line.slice("#HttpOnly_".length);
+      } else if (line.startsWith("#")) {
+        continue;
+      }
+      const parts = line.split("\t");
+      if (parts.length < 7) continue;
+      const [rawDomain, , , , rawExpiry, name, ...valueParts] = parts;
+      const domain = rawDomain.replace(/^\./, "").toLowerCase();
+      const expiry = Number(rawExpiry);
+      if (
+        (domain !== "facebook.com" && !domain.endsWith(".facebook.com")) ||
+        (Number.isFinite(expiry) && expiry > 0 && expiry < now)
+      ) {
+        continue;
+      }
+      cookies.push(name + "=" + valueParts.join("\t"));
+      if (Object.prototype.hasOwnProperty.call(session, name)) {
+        session[name] = true;
+      }
+    }
+
+    const healthy = session.c_user && session.xs;
+    console.log("Facebook normalization cookies:", healthy ? "ok" : "missing-session-cookies");
+    return healthy ? cookies.join("; ") : "";
+  } catch {
+    console.log("Facebook normalization cookies: missing");
+    return "";
+  }
+}
+
 /**
  * Facebook share links may redirect anonymous requests to /login while
  * preserving the real post URL in the next= parameter. Never pass the
@@ -53,6 +100,7 @@ function unwrapFacebookLoginRedirect(value) {
  */
 async function normalizeFacebookUrl(url) {
   let current = url;
+  const cookieHeader = await getFacebookSessionHeader();
 
   try {
     const u = new URL(current);
@@ -125,6 +173,7 @@ async function normalizeFacebookUrl(url) {
           headers: {
             "User-Agent":
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
         });
         if (head.url) {
@@ -138,6 +187,7 @@ async function normalizeFacebookUrl(url) {
             headers: {
               "User-Agent":
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+              ...(cookieHeader ? { Cookie: cookieHeader } : {}),
             },
           });
           if (get.url) {
