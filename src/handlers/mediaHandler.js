@@ -414,6 +414,15 @@ async function handleMediaMessage(message) {
           originalUrl
         );
 
+      if (downloadResult.linkOnly) {
+        await message.reply({
+          content:
+            "Facebook did not expose media that Harmony could verify belongs to this exact post, so I left the original link above instead of showing the wrong preview.\n\n💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+
       const classification = classify(
         downloadResult.files,
         normalizedUrl
