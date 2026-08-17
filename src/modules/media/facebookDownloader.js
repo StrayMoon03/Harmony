@@ -115,19 +115,25 @@ async function clearStrategyOutputs(jobDir) {
  */
 async function snapshotBest(jobDir, files) {
   const bestDir = path.join(jobDir, "_best");
-  await fs.rm(bestDir, { recursive: true, force: true });
-  await fs.mkdir(bestDir, { recursive: true });
+  const stagingDir = path.join(jobDir, "_best-staging");
+  await fs.rm(stagingDir, { recursive: true, force: true });
+  await fs.mkdir(stagingDir, { recursive: true });
 
+  // Stage first because a mixed-media snapshot may include files from the
+  // current _best directory. Deleting _best before copying would lose them.
   let index = 0;
   for (const file of files) {
     const ext = path.extname(file.path) || ".bin";
     const dest = path.join(
-      bestDir,
+      stagingDir,
       `media-${String(index).padStart(3, "0")}${ext}`
     );
     await fs.copyFile(file.path, dest);
     index += 1;
   }
+
+  await fs.rm(bestDir, { recursive: true, force: true });
+  await fs.rename(stagingDir, bestDir);
 }
 
 /**
@@ -159,9 +165,9 @@ function looksLikeFacebookPhotoPost(url) {
   return (
     /[?&]fbid=\d+/i.test(url) ||
     /\/photo/i.test(url) ||
-    /\/share\/p\//i.test(url) ||
+    /\/share\/(?:p|r|v|reel)\//i.test(url) ||
     /story_fbid=/i.test(url) ||
-    /\/posts\/\d+/i.test(url) ||
+    /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
     /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/i.test(url) ||
     /\/permalink\/\d+/i.test(url) ||
     /permalink\.php/i.test(url) ||
@@ -760,12 +766,15 @@ async function downloadFacebookMedia(url, originalUrl = url) {
   const preferGalleryFirst =
     looksLikeFacebookPhotoPost(url) ||
     looksLikeFacebookPhotoPost(originalUrl);
-  const photoPageUrl = looksLikeFacebookPhotoPost(originalUrl)
-    ? originalUrl
-    : url;
+  const photoPageUrl = originalUrl || url;
+  // Try both the canonical URL and the original /share/ URL. Facebook's
+  // downloaders sometimes expose the video on only one of those forms.
   const urlCandidates = preferGalleryFirst
-    ? buildFacebookUrlCandidates(url)
-    : [url];
+    ? [...new Set([
+        ...buildFacebookUrlCandidates(url),
+        ...buildFacebookUrlCandidates(originalUrl),
+      ])]
+    : [...new Set([url, originalUrl].filter(Boolean))];
 
   /** @type {Array<{ name: string, run: () => Promise<void> }>} */
   const strategies = [];
@@ -851,9 +860,29 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         continue;
       }
 
+      // A specific Facebook post cannot legitimately turn into a 100-item
+      // profile scrape. Never snapshot or upload a fallback batch larger than
+      // Facebook's per-post media limit.
+      if (files.length > 10) {
+        const reason =
+          `${strategy.name}: rejected suspicious bulk result (${files.length} files)`;
+        errors.push(reason);
+        console.warn(`Facebook ${reason}`);
+        continue;
+      }
+
       const imageCount = files.filter((f) => f.isImage).length;
       const videoCount = files.filter((f) => f.isVideo).length;
-      const score = scoreFiles(files, preferGalleryFirst);
+      const existingBest = await loadBestSnapshot(jobDir);
+      const bestHasImage = existingBest.some((file) => file.isImage);
+      const bestHasVideo = existingBest.some((file) => file.isVideo);
+      const addsMissingMediaType =
+        (bestHasImage && !bestHasVideo && videoCount > 0) ||
+        (bestHasVideo && !bestHasImage && imageCount > 0);
+      const candidateFiles = addsMissingMediaType
+        ? [...existingBest, ...files]
+        : files;
+      const score = scoreFiles(candidateFiles, preferGalleryFirst);
 
       console.log(
         `Facebook ${strategy.name}: ${files.length} file(s) ` +
@@ -862,8 +891,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
       if (score > bestScore) {
         bestScore = score;
-        bestStrategyName = strategy.name;
-        await snapshotBest(jobDir, files);
+        bestStrategyName = addsMissingMediaType
+          ? `${bestStrategyName} + ${strategy.name}`
+          : strategy.name;
+        await snapshotBest(jobDir, candidateFiles);
         console.log(
           `Facebook new best snapshot via ${strategy.name}`
         );
@@ -881,8 +912,8 @@ async function downloadFacebookMedia(url, originalUrl = url) {
       // For photo-post URLs, never stop merely because Facebook supplied
       // a generated preview MP4. Keep searching for the original images.
       if (
-        imageCount > 1 ||
-        (!preferGalleryFirst && videoCount > 0)
+        (!preferGalleryFirst && videoCount > 0) ||
+        (preferGalleryFirst && imageCount > 0 && videoCount > 0)
       ) {
         break;
       }
