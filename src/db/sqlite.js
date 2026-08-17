@@ -147,6 +147,52 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_message_log_posts_delete
       ON message_log_posts (delete_at);
+
+    CREATE TABLE IF NOT EXISTS community_guard_settings (
+      guild_id    TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      updated_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS community_guard_rules (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id   TEXT NOT NULL,
+      rule_type  TEXT NOT NULL CHECK (rule_type IN ('domain', 'url', 'phrase')),
+      pattern    TEXT NOT NULL,
+      action     TEXT NOT NULL CHECK (action IN ('flag', 'remove')),
+      category   TEXT NOT NULL,
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_community_guard_rules_guild
+      ON community_guard_rules (guild_id, enabled);
+
+    CREATE TABLE IF NOT EXISTS community_guard_safe_messages (
+      guild_id    TEXT NOT NULL,
+      message_id  TEXT NOT NULL,
+      marked_by   TEXT NOT NULL,
+      marked_at   TEXT NOT NULL,
+      PRIMARY KEY (guild_id, message_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS community_guard_actions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id      TEXT NOT NULL,
+      message_id    TEXT NOT NULL,
+      channel_id    TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      category      TEXT NOT NULL,
+      source        TEXT NOT NULL,
+      rule_id       INTEGER,
+      admin_id      TEXT,
+      dm_delivered  INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_community_guard_actions_guild_time
+      ON community_guard_actions (guild_id, created_at);
   `);
 
   const settingColumns = new Set(
