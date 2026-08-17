@@ -369,8 +369,13 @@ def main():
             break
 
     if root is None or not attachments:
+        shapes = []
+        for _, _, candidate in roots[:6]:
+            if isinstance(candidate, dict):
+                shapes.append(sorted(str(key) for key in candidate.keys())[:20])
         raise RuntimeError(
-            "Matched Facebook identity but no parent story contained verified attachments"
+            "Matched Facebook identity but no parent story contained verified attachments; "
+            "candidate key shapes=" + json.dumps(shapes, separators=(",", ":"))
         )
 
     print(PREFIX + json.dumps({
