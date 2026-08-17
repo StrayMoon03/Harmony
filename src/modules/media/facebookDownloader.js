@@ -384,201 +384,183 @@ async function runFacebookPhotoPage(url, jobDir, cookiesPath = null) {
     encodeURIComponent(url) +
     "&show_text=true&width=750";
 
-  const pageCandidates = [
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+  const documents = [];
+  const errors = [];
+
+  async function loadPage(candidate) {
+    try {
+      const response = await fetch(candidate, {
+        redirect: "follow",
+        headers,
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) {
+        errors.push(`${candidate}: HTTP ${response.status}`);
+        return;
+      }
+      documents.push({
+        url: response.url || candidate,
+        html: await response.text(),
+      });
+    } catch (error) {
+      errors.push(`${candidate}: ${error.message}`);
+    }
+  }
+
+  for (const candidate of [...new Set([
     original.toString(),
     mobile.toString(),
     basic.toString(),
     embedded,
-  ];
-  const pageErrors = [];
-  let html = "";
-
-  for (const candidate of [...new Set(pageCandidates)]) {
-    try {
-      const response = await fetch(candidate, {
-        redirect: "follow",
-        headers: {
-          "User-Agent":
-            candidate.includes("mbasic") || candidate.includes("m.facebook")
-              ? "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36"
-              : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-          Accept:
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-          ...(cookie ? { Cookie: cookie } : {}),
-        },
-      });
-
-      if (!response.ok) {
-        pageErrors.push(`${candidate}: HTTP ${response.status}`);
-        continue;
-      }
-
-      const body = await response.text();
-      if (body.length > html.length) {
-        html = body;
-      }
-
-      if (/scontent|fbcdn\.net/i.test(body)) {
-        console.log(
-          `Facebook photo page loaded via ${new URL(candidate).hostname}`
-        );
-        html = body;
-        break;
-      }
-    } catch (error) {
-      pageErrors.push(`${candidate}: ${error.message}`);
-    }
+  ])]) {
+    await loadPage(candidate);
   }
 
-  if (!html) {
+  if (!documents.length) {
     throw new Error(
-      "Facebook photo page could not be opened. " + pageErrors.join(" | ")
+      "Facebook post pages could not be opened. " + errors.join(" | ")
     );
   }
 
-  const matches = [];
-  const escapedUrlPattern =
-    /https(?:\\u003A|:)(?:\\\/|\/){2}(?:scontent|scontent-[a-z0-9-]+|lookaside)\.[^"'\\s<]+/gi;
+  // Mobile Facebook often hides a post's full-size photo behind photo.php.
+  // Follow only attachment links present inside this exact post page.
+  const attachmentLinks = new Set();
+  for (const document of documents) {
+    for (const match of document.html.matchAll(/href=(?:"([^"]+)"|'([^']+)')/gi)) {
+      const raw = (match[1] || match[2] || "")
+        .replace(/&amp;/g, "&")
+        .replace(/\\u0026/gi, "&")
+        .replace(/\\\//g, "/");
+      if (!/(?:photo(?:\.php|\/)|videos?\/|watch\/)/i.test(raw)) continue;
+      try {
+        const target = new URL(raw, document.url);
+        if (!/(^|\.)facebook\.com$/i.test(target.hostname)) continue;
+        attachmentLinks.add(target.toString());
+      } catch {
+        // Ignore malformed page links.
+      }
+    }
+  }
 
-  for (const match of html.matchAll(escapedUrlPattern)) {
-    const raw = match[0]
+  for (const attachment of [...attachmentLinks].slice(0, 10)) {
+    await loadPage(attachment);
+  }
+
+  const html = documents
+    .map((document) => document.html)
+    .join("\n")
+    .replace(/&quot;/g, '"');
+
+  function decodeMediaUrl(raw) {
+    return raw
       .replace(/\\u003A/gi, ":")
       .replace(/\\u0025/gi, "%")
       .replace(/\\u0026/gi, "&")
       .replace(/\\\//g, "/")
       .replace(/&amp;/g, "&");
+  }
 
-    let parsed;
-    try {
-      parsed = new URL(raw);
-    } catch {
-      continue;
-    }
+  const candidates = [];
+  const imagePattern =
+    /https(?:\\u003A|:)(?:\\\/|\/){2}(?:scontent|scontent-[a-z0-9-]+|lookaside)\.[^"'\\s<]+/gi;
+  for (const match of html.matchAll(imagePattern)) {
+    candidates.push({ url: decodeMediaUrl(match[0]), kind: "image" });
+  }
 
-    if (
-      !/(?:fbcdn\.net|facebook\.com)$/i.test(parsed.hostname) &&
-      !/\.fbcdn\.net$/i.test(parsed.hostname)
-    ) {
-      continue;
-    }
-
-    const nearby = html.slice(
-      Math.max(0, match.index - 450),
-      Math.min(html.length, match.index + match[0].length + 450)
-    );
-    const widths = [...nearby.matchAll(/"width"\s*:\s*(\d+)/g)].map(
-      (item) => Number(item[1])
-    );
-    const heights = [...nearby.matchAll(/"height"\s*:\s*(\d+)/g)].map(
-      (item) => Number(item[1])
-    );
-    const width = Math.max(0, ...widths);
-    const height = Math.max(0, ...heights);
-
-    // If Facebook supplied dimensions, reject obvious icons immediately.
-    // Mobile/embedded pages often omit them; ffprobe verifies those below.
-    if (
-      (width > 0 && width < 500) ||
-      (height > 0 && height < 500)
-    ) {
-      continue;
-    }
-
-    matches.push({
-      url: parsed.toString(),
-      key: `${parsed.hostname}${parsed.pathname}`,
-      area: width * height,
-    });
+  const videoPattern =
+    /"(?:browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url)"\s*:\s*"([^"]+)"/gi;
+  for (const match of html.matchAll(videoPattern)) {
+    candidates.push({ url: decodeMediaUrl(match[1]), kind: "video" });
   }
 
   const unique = [
-    ...new Map(
-      matches
-        .sort((a, b) => b.area - a.area)
-        .map((item) => [item.key, item])
-    ).values(),
-  ].slice(0, 60);
-
-  if (unique.length === 0) {
-    throw new Error(
-      "No Facebook CDN images were found in the available post pages"
-    );
-  }
+    ...new Map(candidates.map((item) => {
+      try {
+        const parsed = new URL(item.url);
+        return [`${item.kind}:${parsed.hostname}${parsed.pathname}`, item];
+      } catch {
+        return [item.url, item];
+      }
+    })).values(),
+  ].slice(0, 20);
 
   let saved = 0;
   for (const item of unique) {
-    const image = await fetch(item.url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        ...(cookie ? { Cookie: cookie } : {}),
-      },
-    });
-    if (!image.ok) continue;
-
-    const type = image.headers.get("content-type") || "";
-    if (!type.startsWith("image/")) continue;
-
-    const bytes = Buffer.from(await image.arrayBuffer());
-    if (bytes.length < 30 * 1024) continue;
-
-    const ext = type.includes("png")
-      ? ".png"
-      : type.includes("webp")
-        ? ".webp"
-        : ".jpg";
-    const dest = path.join(
-      jobDir,
-      `facebook-photo-${String(saved).padStart(3, "0")}${ext}`
-    );
-    await fs.writeFile(dest, bytes);
-
     try {
-      const { stdout } = await execFileAsync(
-        process.env.FFPROBE_PATH || "ffprobe",
-        [
-          "-v",
-          "error",
-          "-select_streams",
-          "v:0",
-          "-show_entries",
-          "stream=width,height",
-          "-of",
-          "csv=p=0:s=x",
-          dest,
-        ],
-        {
-          windowsHide: true,
-          maxBuffer: 1024 * 1024,
-        }
-      );
-      const dimensions = String(stdout)
-        .trim()
-        .match(/^(\d+)x(\d+)/);
-      if (
-        !dimensions ||
-        Number(dimensions[1]) < 500 ||
-        Number(dimensions[2]) < 500
-      ) {
-        await fs.rm(dest, { force: true });
-        continue;
-      }
-    } catch {
-      await fs.rm(dest, { force: true });
-      continue;
-    }
+      const response = await fetch(item.url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!response.ok) continue;
+      const type = response.headers.get("content-type") || "";
+      const isVideo = item.kind === "video" || type.startsWith("video/");
+      const isImage = !isVideo && type.startsWith("image/");
+      if (!isVideo && !isImage) continue;
 
-    saved += 1;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length < (isVideo ? 50 : 30) * 1024) continue;
+      const ext = isVideo
+        ? ".mp4"
+        : type.includes("png")
+          ? ".png"
+          : type.includes("webp")
+            ? ".webp"
+            : ".jpg";
+      const dest = path.join(
+        jobDir,
+        `facebook-post-${String(saved).padStart(3, "0")}${ext}`
+      );
+      await fs.writeFile(dest, bytes);
+
+      if (isImage) {
+        try {
+          const { stdout } = await execFileAsync(
+            process.env.FFPROBE_PATH || "ffprobe",
+            [
+              "-v", "error", "-select_streams", "v:0",
+              "-show_entries", "stream=width,height",
+              "-of", "csv=p=0:s=x", dest,
+            ],
+            { windowsHide: true, maxBuffer: 1024 * 1024 }
+          );
+          const dimensions = String(stdout).trim().match(/^(\d+)x(\d+)/);
+          if (!dimensions ||
+              Number(dimensions[1]) < 500 ||
+              Number(dimensions[2]) < 500) {
+            await fs.rm(dest, { force: true });
+            continue;
+          }
+        } catch {
+          await fs.rm(dest, { force: true });
+          continue;
+        }
+      }
+
+      saved += 1;
+      if (saved >= 10) break;
+    } catch {
+      // Try the next exact-post media candidate.
+    }
   }
 
-  if (saved === 0) {
+  if (!saved) {
     throw new Error(
-      "Facebook post images were found, but none were original-size photos"
+      "Facebook did not expose verified media inside this exact post."
     );
   }
 
   console.log(
-    `Facebook photo-page extraction saved ${saved} original image(s)`
+    `Facebook exact-post extraction saved ${saved} verified attachment(s)`
   );
 }
 
@@ -773,6 +755,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     looksLikeFacebookPhotoPost(url) ||
     looksLikeFacebookPhotoPost(originalUrl);
   const photoPageUrl = originalUrl || url;
+  const identitySensitive =
+    /\/groups\/[^/]+\/(?:posts|permalink)\//i.test(url) ||
+    /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
+    /\/share\/[vrp]\//i.test(originalUrl);
   // Try both the canonical URL and the original /share/ URL. Facebook's
   // downloaders sometimes expose the video on only one of those forms.
   // Downloaders operate on the resolved canonical post URL. The original
@@ -796,6 +782,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
   }
 
   for (const candidate of urlCandidates) {
+    // Exact post/permalink pages must never be handed to broad page-level
+    // downloaders; they can return an unrelated feed or profile item.
+    if (identitySensitive) break;
+
     const label =
       candidate === url ? "primary" : `alt:${candidate}`;
 
@@ -948,6 +938,19 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
   if (finalFiles.length === 0) {
     await fs.rm(jobDir, { recursive: true, force: true });
+
+    if (identitySensitive) {
+      console.warn(
+        "Facebook exact-post verification failed; using safe original-link fallback."
+      );
+      return {
+        files: [],
+        rawDir: null,
+        platform: "facebook",
+        creator: null,
+        linkOnly: true,
+      };
+    }
 
     throw new Error(
       "Harmony could not retrieve this Facebook post after trying every available download method.\n\n" +
