@@ -912,7 +912,7 @@ async function downloadFacebookMedia(url, originalUrl = url) {
       name: "facebook-browser+cookies (verified exact post)",
       run: async () => {
         const result = await runFacebookBrowser(
-          url,
+          photoPageUrl,
           jobDir,
           cookiesPath
         );
