@@ -108,6 +108,45 @@ function migrate(database) {
       announced_at  TEXT NOT NULL,
       PRIMARY KEY (guild_id, user_id, milestone)
     );
+
+    CREATE TABLE IF NOT EXISTS message_log_settings (
+      guild_id    TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      updated_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS message_log_exclusions (
+      guild_id    TEXT NOT NULL,
+      channel_id  TEXT NOT NULL,
+      PRIMARY KEY (guild_id, channel_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS message_snapshots (
+      message_id   TEXT PRIMARY KEY,
+      guild_id     TEXT NOT NULL,
+      channel_id   TEXT NOT NULL,
+      user_id      TEXT NOT NULL,
+      username     TEXT NOT NULL,
+      content      TEXT,
+      attachments  TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      expires_at   TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_message_snapshots_expiry
+      ON message_snapshots (expires_at);
+
+    CREATE TABLE IF NOT EXISTS message_log_posts (
+      message_id  TEXT PRIMARY KEY,
+      guild_id    TEXT NOT NULL,
+      channel_id  TEXT NOT NULL,
+      delete_at   TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_message_log_posts_delete
+      ON message_log_posts (delete_at);
   `);
 
   const settingColumns = new Set(
