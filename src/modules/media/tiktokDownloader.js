@@ -518,10 +518,7 @@ async function downloadTikTokVideoWithGalleryDl(url, jobDir) {
     );
   } else if (videoFiles.length > 0) {
     console.warn(
-      "TikTok gallery-dl fallback video has no audio stream."
-    );
-    throw new Error(
-      "Both TikTok download methods returned video without audio."
+      "TikTok gallery-dl fallback video has no audio stream. Handler will use streaming fallback."
     );
   }
 
