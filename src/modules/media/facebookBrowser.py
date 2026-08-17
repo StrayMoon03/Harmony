@@ -255,6 +255,11 @@ def parse_json_text(text):
     stripped = (text or "").strip()
     if not stripped:
         return payloads
+    stripped = re.sub(
+        r"^(?:for\s*\(;;\)|while\s*\(1\))\s*;\s*",
+        "",
+        stripped,
+    )
     try:
         payloads.append(json.loads(stripped))
         return payloads
