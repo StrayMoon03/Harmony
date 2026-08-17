@@ -311,7 +311,9 @@ async function runGalleryDl(url, jobDir, cookiesPath = null) {
     jobDir,
     // Do not stop after first image of a set.
     "--range",
-    "1-100",
+    // Fetch one item beyond Harmony's accepted per-post maximum. If this
+    // returns 11 files, the bulk-result guard rejects it immediately.
+    "1-11",
   ];
 
   if (cookiesPath) {
@@ -323,6 +325,8 @@ async function runGalleryDl(url, jobDir, cookiesPath = null) {
   await execFileAsync(galleryDlPath, args, {
     windowsHide: true,
     maxBuffer: 30 * 1024 * 1024,
+    timeout: 45 * 1000,
+    killSignal: "SIGKILL",
   });
 }
 
