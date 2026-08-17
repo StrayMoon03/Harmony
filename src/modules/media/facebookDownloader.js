@@ -293,6 +293,8 @@ async function runYtDlp(url, jobDir, cookiesPath = null) {
   await execFileAsync(ytDlpPath, args, {
     windowsHide: true,
     maxBuffer: 30 * 1024 * 1024,
+    timeout: 30 * 1000,
+    killSignal: "SIGKILL",
   });
 }
 
@@ -773,12 +775,12 @@ async function downloadFacebookMedia(url, originalUrl = url) {
   const photoPageUrl = originalUrl || url;
   // Try both the canonical URL and the original /share/ URL. Facebook's
   // downloaders sometimes expose the video on only one of those forms.
+  // Downloaders operate on the resolved canonical post URL. The original
+  // /share/ URL remains useful for page inspection, but yt-dlp and gallery-dl
+  // reject it and retrying it only delays a usable result.
   const urlCandidates = preferGalleryFirst
-    ? [...new Set([
-        ...buildFacebookUrlCandidates(url),
-        ...buildFacebookUrlCandidates(originalUrl),
-      ])]
-    : [...new Set([url, originalUrl].filter(Boolean))];
+    ? buildFacebookUrlCandidates(url)
+    : [url];
 
   /** @type {Array<{ name: string, run: () => Promise<void> }>} */
   const strategies = [];
@@ -819,24 +821,28 @@ async function downloadFacebookMedia(url, originalUrl = url) {
       }
     }
 
-    if (preferGalleryFirst) {
-      strategies.push({
-        name: `gallery-dl (${label})`,
-        run: () => runGalleryDl(candidate, jobDir, null),
-      });
-      strategies.push({
-        name: `yt-dlp (${label})`,
-        run: () => runYtDlp(candidate, jobDir, null),
-      });
-    } else {
-      strategies.push({
-        name: `yt-dlp (${label})`,
-        run: () => runYtDlp(candidate, jobDir, null),
-      });
-      strategies.push({
-        name: `gallery-dl (${label})`,
-        run: () => runGalleryDl(candidate, jobDir, null),
-      });
+    // Authenticated attempts are strictly better when valid cookies exist.
+    // Do not repeat every strategy without cookies after those attempts.
+    if (!cookiesUsable) {
+      if (preferGalleryFirst) {
+        strategies.push({
+          name: `gallery-dl (${label})`,
+          run: () => runGalleryDl(candidate, jobDir, null),
+        });
+        strategies.push({
+          name: `yt-dlp (${label})`,
+          run: () => runYtDlp(candidate, jobDir, null),
+        });
+      } else {
+        strategies.push({
+          name: `yt-dlp (${label})`,
+          run: () => runYtDlp(candidate, jobDir, null),
+        });
+        strategies.push({
+          name: `gallery-dl (${label})`,
+          run: () => runGalleryDl(candidate, jobDir, null),
+        });
+      }
     }
   }
 
