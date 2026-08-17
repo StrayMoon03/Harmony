@@ -131,18 +131,33 @@ def root_score(node, target_ids):
 
 def candidate_roots(value, target_ids, found):
     if isinstance(value, dict):
-        score = root_score(value, target_ids)
-        if score:
+        direct_score = root_score(value, target_ids)
+        descendant_match = False
+        for child in value.values():
+            if candidate_roots(child, target_ids, found):
+                descendant_match = True
+
+        matched = direct_score > 0 or descendant_match
+        if matched:
             try:
                 size = len(json.dumps(value, separators=(",", ":")))
             except Exception:
                 size = 10**9
+            # Facebook often stores the matching permalink/id in a small child
+            # beside the attachment renderer. Promote that match through its
+            # ancestors so the smallest parent story with media can win.
+            score = direct_score if direct_score > 0 else 70
             found.append((score, size, value))
-        for child in value.values():
-            candidate_roots(child, target_ids, found)
-    elif isinstance(value, list):
+        return matched
+
+    if isinstance(value, list):
+        matched = False
         for child in value:
-            candidate_roots(child, target_ids, found)
+            if candidate_roots(child, target_ids, found):
+                matched = True
+        return matched
+
+    return False
 
 
 def valid_media_url(value):
@@ -342,10 +357,26 @@ def main():
         raise RuntimeError("No GraphQL node matched the requested Facebook post")
 
     roots.sort(key=lambda item: (-item[0], item[1]))
-    score, _, root = roots[0]
-    attachments = collect_attachments(root)
-    if not attachments:
-        raise RuntimeError("Matched Facebook post contained no verified attachments")
+    score = 0
+    root = None
+    attachments = []
+    for candidate_score, _, candidate in roots:
+        candidate_attachments = collect_attachments(candidate)
+        if candidate_attachments:
+            score = candidate_score
+            root = candidate
+            attachments = candidate_attachments
+            break
+
+    if root is None or not attachments:
+        shapes = []
+        for _, _, candidate in roots[:6]:
+            if isinstance(candidate, dict):
+                shapes.append(sorted(str(key) for key in candidate.keys())[:20])
+        raise RuntimeError(
+            "Matched Facebook identity but no parent story contained verified attachments; "
+            "candidate key shapes=" + json.dumps(shapes, separators=(",", ":"))
+        )
 
     print(PREFIX + json.dumps({
         "finalUrl": final_url,
