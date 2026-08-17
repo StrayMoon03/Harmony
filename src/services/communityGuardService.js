@@ -136,12 +136,12 @@ async function removeMessage(message, {
     throw new Error("Harmony can only moderate a member’s server message.");
   }
 
-  const dmDelivered = await dmMember(message, category);
-  await deleteMirroredReplies(message);
-  store.removeContributionForMessage(message.guild.id, message.id);
   await message.delete().catch((error) => {
     throw new Error("I couldn’t delete that message. Check my Manage Messages permission.", { cause: error });
   });
+  await deleteMirroredReplies(message);
+  store.removeContributionForMessage(message.guild.id, message.id);
+  const dmDelivered = await dmMember(message, category);
   store.addAction({
     guildId: message.guild.id,
     messageId: message.id,
