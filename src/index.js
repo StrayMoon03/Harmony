@@ -3,7 +3,7 @@ require("dotenv").config();
 const { prepareRuntimeSecrets } = require("./services/runtimeSecrets");
 prepareRuntimeSecrets();
 
-const { Client, GatewayIntentBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
@@ -15,7 +15,14 @@ const welcomePassModeCommand = require("./commands/welcomePassMode");
 const collectionStatsCommand = require("./commands/collectionStats");
 const collectionLeaderboardCommand = require("./commands/collectionLeaderboard");
 const collectionAdminCommand = require("./commands/collectionAdmin");
+const messageLogsCommand = require("./commands/messageLogs");
 const shareStore = require("./stores/shareStore");
+const {
+  handleLoggedMessageCreate,
+  handleLoggedMessageUpdate,
+  handleLoggedMessageDelete,
+  startMessageLogCleanup,
+} = require("./services/messageLogService");
 const {
   getGreetingSettings,
   renderGreetingMessage,
@@ -42,6 +49,7 @@ const commands = [
   collectionStatsCommand,
   collectionLeaderboardCommand,
   collectionAdminCommand,
+  messageLogsCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -61,6 +69,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
+  partials: [Partials.Message, Partials.Channel],
 });
 
 startWelcomePassServer(client);
@@ -77,7 +86,7 @@ async function registerGuildCommands(guild) {
     "Harmony commands ready in " + guild.name + ": " +
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
-      "/harmony-stats, /harmony-leaderboard, /harmony-collection"
+      "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs"
   );
 }
 
@@ -106,6 +115,7 @@ client.once("clientReady", async () => {
 
   await assignAllApprovedWelcomePasses(client);
   startCollectionScheduler(client);
+  startMessageLogCleanup(client);
 });
 
 client.on("guildCreate", async (guild) => {
@@ -262,7 +272,16 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
 
 client.on("messageCreate", async (message) => {
   console.log("MESSAGE RECEIVED:", message.content);
+  await handleLoggedMessageCreate(message);
   await handleMediaMessage(message);
+});
+
+client.on("messageUpdate", async (oldMessage, newMessage) => {
+  await handleLoggedMessageUpdate(oldMessage, newMessage);
+});
+
+client.on("messageDelete", async (message) => {
+  await handleLoggedMessageDelete(message);
 });
 
 client.on("interactionCreate", async (interaction) => {
