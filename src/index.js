@@ -16,6 +16,8 @@ const collectionStatsCommand = require("./commands/collectionStats");
 const collectionLeaderboardCommand = require("./commands/collectionLeaderboard");
 const collectionAdminCommand = require("./commands/collectionAdmin");
 const messageLogsCommand = require("./commands/messageLogs");
+const communityGuardCommand = require("./commands/communityGuard");
+const moderateMessageCommand = require("./commands/moderateMessage");
 const shareStore = require("./stores/shareStore");
 const {
   handleLoggedMessageCreate,
@@ -38,6 +40,10 @@ const {
   handleNewCollectionShare,
   startCollectionScheduler,
 } = require("./services/collectionService");
+const {
+  handleGuardedMessage,
+  handleGuardComponent,
+} = require("./services/communityGuardService");
 
 const commands = [
   forgetShareCommand,
@@ -50,6 +56,8 @@ const commands = [
   collectionLeaderboardCommand,
   collectionAdminCommand,
   messageLogsCommand,
+  communityGuardCommand,
+  moderateMessageCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -86,7 +94,8 @@ async function registerGuildCommands(guild) {
     "Harmony commands ready in " + guild.name + ": " +
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
-      "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs"
+      "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
+      "/harmony-guard, Harmony: Moderate Message"
   );
 }
 
@@ -272,6 +281,14 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
 
 client.on("messageCreate", async (message) => {
   console.log("MESSAGE RECEIVED:", message.content);
+
+  try {
+    const heldOrRemoved = await handleGuardedMessage(message);
+    if (heldOrRemoved) return;
+  } catch (error) {
+    console.error("Community Guard message check failed:", error);
+  }
+
   await handleLoggedMessageCreate(message);
   await handleMediaMessage(message);
 });
@@ -285,7 +302,14 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  if (interaction.isButton() || interaction.isStringSelectMenu()) {
+    if (await handleGuardComponent(interaction)) return;
+  }
+
+  if (
+    !interaction.isChatInputCommand() &&
+    !interaction.isMessageContextMenuCommand()
+  ) return;
 
   const command = commandsByName.get(interaction.commandName);
   if (!command) return;
