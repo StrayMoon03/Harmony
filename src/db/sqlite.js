@@ -89,6 +89,16 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_shares_guild_user_time
       ON shares (guild_id, shared_by_id, shared_at);
 
+    CREATE TABLE IF NOT EXISTS share_output_messages (
+      original_message_id  TEXT NOT NULL,
+      bot_message_id       TEXT NOT NULL,
+      channel_id           TEXT NOT NULL,
+      PRIMARY KEY (original_message_id, bot_message_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_share_outputs_original
+      ON share_output_messages (original_message_id);
+
     CREATE TABLE IF NOT EXISTS collection_settings (
       guild_id            TEXT PRIMARY KEY,
       channel_id          TEXT NOT NULL,
