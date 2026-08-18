@@ -20,6 +20,9 @@ const communityGuardCommand = require("./commands/communityGuard");
 const moderateMessageCommand = require("./commands/moderateMessage");
 const shareStore = require("./stores/shareStore");
 const {
+  handleDeletedShare,
+} = require("./services/shareDeletionService");
+const {
   handleLoggedMessageCreate,
   handleLoggedMessageUpdate,
   handleLoggedMessageDelete,
@@ -299,6 +302,12 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
 
 client.on("messageDelete", async (message) => {
   await handleLoggedMessageDelete(message);
+
+  try {
+    await handleDeletedShare(message);
+  } catch (error) {
+    console.error("Could not forget a deleted share:", error);
+  }
 });
 
 client.on("interactionCreate", async (interaction) => {
