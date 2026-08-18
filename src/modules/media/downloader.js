@@ -150,18 +150,27 @@ async function downloadMedia(url) {
       .join(" ")
       .toLowerCase();
 
+    const missingAudio =
+      errorText.includes("instagram_audio_missing");
     const shouldUseGalleryDl =
+      missingAudio ||
       errorText.includes("there is no video in this post") ||
       errorText.includes("no video formats found") ||
       errorText.includes("requested format is not available");
 
     if (shouldUseGalleryDl) {
       console.log(
-        "Instagram photo/carousel detected. Falling back to gallery-dl..."
+        missingAudio
+          ? "Instagram yt-dlp result was silent. Trying gallery-dl merged audio fallback..."
+          : "Instagram photo/carousel detected. Falling back to gallery-dl..."
       );
 
       try {
-        return await downloadWithGalleryDl(url, jobDir);
+        await fs.rm(jobDir, { recursive: true, force: true });
+        await fs.mkdir(jobDir, { recursive: true });
+        return await downloadWithGalleryDl(url, jobDir, {
+          requireAudio: missingAudio,
+        });
       } catch (galleryError) {
         await fs.rm(jobDir, {
           recursive: true,
@@ -287,7 +296,8 @@ async function downloadWithYtDlp(url, jobDir) {
   }
 
   const video = files.find((file) => file.isVideo);
-  if (video && !(await hasAudioStream(video.path))) {
+  let audioRecovered = !video || (await hasAudioStream(video.path));
+  if (video && !audioRecovered) {
     console.warn(
       "Instagram download had no audio stream. Retrying with separate video and audio formats..."
     );
@@ -314,6 +324,7 @@ async function downloadWithYtDlp(url, jobDir) {
         );
         paths = retryPaths;
         files = retryFiles;
+        audioRecovered = true;
         console.log(
           "Instagram audio retry succeeded; merged video contains audio."
         );
@@ -333,6 +344,10 @@ async function downloadWithYtDlp(url, jobDir) {
     }
   }
 
+  if (video && !audioRecovered) {
+    throw new Error("INSTAGRAM_AUDIO_MISSING");
+  }
+
   return {
     files,
     rawDir: jobDir,
@@ -345,9 +360,10 @@ async function downloadWithYtDlp(url, jobDir) {
  *
  * @param {string} url
  * @param {string} jobDir
+ * @param {{ requireAudio?: boolean }} [options]
  * @returns {Promise<DownloadResult>}
  */
-async function downloadWithGalleryDl(url, jobDir) {
+async function downloadWithGalleryDl(url, jobDir, options = {}) {
   const galleryDlPath =
     process.env.GALLERYDL_PATH || "gallery-dl";
 
@@ -363,6 +379,8 @@ async function downloadWithGalleryDl(url, jobDir) {
     [
       "--cookies",
       cookiesPath,
+      "-o",
+      "extractor.instagram.videos=merged",
       "-d",
       jobDir,
       url,
@@ -400,6 +418,18 @@ async function downloadWithGalleryDl(url, jobDir) {
   if (files.length === 0) {
     throw new Error(
       "gallery-dl did not produce any supported media files."
+    );
+  }
+
+  if (options.requireAudio) {
+    const video = files.find((file) => file.isVideo);
+    if (!video || !(await hasAudioStream(video.path))) {
+      throw new Error(
+        "Instagram did not expose a merged video with audio."
+      );
+    }
+    console.log(
+      "Instagram gallery-dl merged fallback contains audio."
     );
   }
 
