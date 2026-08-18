@@ -140,14 +140,14 @@ async function sendYouTubeStreamingPreview(
   message,
   { originalUrl, cardText, durationMinutes }
 ) {
-  await message.reply({
+  const linkMessage = await message.reply({
     content: originalUrl,
     allowedMentions: {
       repliedUser: false,
     },
   });
 
-  await message.channel.send({
+  const cardMessage = await message.channel.send({
     embeds: [
       new EmbedBuilder()
         .setColor(0xff0000)
@@ -166,6 +166,9 @@ async function sendYouTubeStreamingPreview(
     },
   });
 
+  shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
+  shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
+
   await suppressOriginalEmbeds(message);
 }
 
@@ -180,12 +183,12 @@ async function sendTikTokStreamingPreview(
   message,
   { originalUrl, cardText, durationMinutes }
 ) {
-  await message.reply({
+  const linkMessage = await message.reply({
     content: originalUrl,
     allowedMentions: { repliedUser: false },
   });
 
-  await message.channel.send({
+  const cardMessage = await message.channel.send({
     embeds: [
       new EmbedBuilder()
         .setColor(0xff4fa3)
@@ -199,6 +202,9 @@ async function sendTikTokStreamingPreview(
     ],
     allowedMentions: { parse: [] },
   });
+
+  shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
+  shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
 
   await suppressOriginalEmbeds(message);
 }

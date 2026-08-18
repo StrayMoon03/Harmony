@@ -128,9 +128,66 @@ function remove(platform, mediaId) {
   return Number(result.changes) > 0;
 }
 
+/**
+ * Remembers every Discord message Harmony created for an original share.
+ */
+function addOutputMessage(originalMessageId, botMessageId, channelId) {
+  if (!originalMessageId || !botMessageId || !channelId) return;
+
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO share_output_messages (
+        original_message_id, bot_message_id, channel_id
+      ) VALUES (?, ?, ?)`
+    )
+    .run(originalMessageId, botMessageId, channelId);
+}
+
+/**
+ * Removes a share by its original Discord message ID.
+ * Collection totals update automatically because they are calculated from shares.
+ *
+ * @returns {{ share: ShareRecord|null, outputs: Array<{bot_message_id:string, channel_id:string}> }|null}
+ */
+function removeByMessageId(messageId) {
+  const database = getDb();
+  const share = database
+    .prepare(`SELECT * FROM shares WHERE message_id = ? LIMIT 1`)
+    .get(messageId) ?? null;
+  const outputs = database
+    .prepare(
+      `SELECT bot_message_id, channel_id
+       FROM share_output_messages
+       WHERE original_message_id = ?`
+    )
+    .all(messageId);
+
+  if (!share && outputs.length === 0) return null;
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare(`DELETE FROM shares WHERE message_id = ?`)
+      .run(messageId);
+    database
+      .prepare(
+        `DELETE FROM share_output_messages WHERE original_message_id = ?`
+      )
+      .run(messageId);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { share, outputs };
+}
+
 module.exports = {
   onInserted,
   find,
   insert,
   remove,
+  addOutputMessage,
+  removeByMessageId,
 };

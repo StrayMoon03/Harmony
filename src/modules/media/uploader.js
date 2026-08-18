@@ -3,6 +3,7 @@ const path = require("node:path");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { EmbedBuilder } = require("discord.js");
+const shareStore = require("../../stores/shareStore");
 
 const execFileAsync = promisify(execFile);
 
@@ -694,6 +695,7 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * @param {string} cardText
  * @param {string|number} [rawDirOrColor]
  * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean }} [options]
+ * @returns {Promise<string[]>} Discord message IDs created by Harmony
  */
 async function uploadMedia(
   message,
@@ -729,6 +731,8 @@ async function uploadMedia(
 
   /** @type {string[]} */
   const paths = [];
+  /** @type {string[]} */
+  const sentMessageIds = [];
 
   try {
     for (const file of files) {
@@ -777,12 +781,16 @@ async function uploadMedia(
         ];
       }
 
-      if (isFirst) {
-        await message.reply(payload);
-      } else {
-        // Follow-up messages for remaining carousel images.
-        await message.channel.send(payload);
-      }
+      const sentMessage = isFirst
+        ? await message.reply(payload)
+        : await message.channel.send(payload);
+
+      sentMessageIds.push(sentMessage.id);
+      shareStore.addOutputMessage(
+        message.id,
+        sentMessage.id,
+        sentMessage.channelId
+      );
     }
   } finally {
     await Promise.all(paths.map((p) => safeUnlink(p)));
@@ -793,6 +801,8 @@ async function uploadMedia(
       await Promise.all(files.map((f) => safeUnlink(f.path)));
     }
   }
+
+  return sentMessageIds;
 }
 
 module.exports = {
