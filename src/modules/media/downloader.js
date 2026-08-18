@@ -152,7 +152,8 @@ async function downloadMedia(url) {
 
     const shouldUseGalleryDl =
       errorText.includes("there is no video in this post") ||
-      errorText.includes("no video formats found");
+      errorText.includes("no video formats found") ||
+      errorText.includes("requested format is not available");
 
     if (shouldUseGalleryDl) {
       console.log(
@@ -187,37 +188,87 @@ async function downloadMedia(url) {
  * @param {string} jobDir
  * @returns {Promise<DownloadResult>}
  */
-async function downloadWithYtDlp(url, jobDir) {
-  const ytDlpPath =
-    process.env.YTDLP_PATH || "yt-dlp";
+async function hasAudioStream(filePath) {
+  const ffprobePath = process.env.FFPROBE_PATH || "ffprobe";
 
-  const outputTemplate = path.join(
-    jobDir,
-    "harmony-%(id)s.%(ext)s"
-  );
+  try {
+    const { stdout } = await execFileAsync(
+      ffprobePath,
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        filePath,
+      ],
+      { windowsHide: true, maxBuffer: 1024 * 1024 }
+    );
+    return String(stdout).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
 
-  const { stdout } = await execFileAsync(
-    ytDlpPath,
-    [
-      "--no-playlist",
-      "--no-warnings",
-      "--print",
-      "after_move:filepath",
-      "-o",
-      outputTemplate,
-      url,
-    ],
-    {
-      windowsHide: true,
-      maxBuffer: 20 * 1024 * 1024,
-    }
-  );
+async function runInstagramYtDlp(url, outputTemplate, format) {
+  const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
+  const cookiesPath =
+    process.env.INSTAGRAM_COOKIES ||
+    path.resolve(__dirname, "../../instagram-cookies.txt");
+  const args = [
+    "--no-playlist",
+    "--no-warnings",
+    "--print",
+    "after_move:filepath",
+    "-f",
+    format,
+    "--merge-output-format",
+    "mp4",
+    "-o",
+    outputTemplate,
+  ];
 
-  const paths = stdout
+  try {
+    await fs.access(cookiesPath);
+    args.push("--cookies", cookiesPath);
+  } catch {
+    console.warn("Instagram cookies were not available for this download.");
+  }
+
+  args.push(url);
+  const { stdout } = await execFileAsync(ytDlpPath, args, {
+    windowsHide: true,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+
+  return stdout
     .trim()
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+/**
+ * Downloads Instagram video with an audio-preserving retry.
+ *
+ * @param {string} url
+ * @param {string} jobDir
+ * @returns {Promise<DownloadResult>}
+ */
+async function downloadWithYtDlp(url, jobDir) {
+  const firstTemplate = path.join(
+    jobDir,
+    "harmony-%(id)s.%(ext)s"
+  );
+
+  let paths = await runInstagramYtDlp(
+    url,
+    firstTemplate,
+    "bv*+ba/b"
+  );
 
   if (paths.length === 0) {
     throw new Error(
@@ -225,7 +276,7 @@ async function downloadWithYtDlp(url, jobDir) {
     );
   }
 
-  const files = paths
+  let files = paths
     .map(probeFile)
     .filter((file) => file.isImage || file.isVideo);
 
@@ -233,6 +284,53 @@ async function downloadWithYtDlp(url, jobDir) {
     throw new Error(
       "yt-dlp did not produce any supported media files."
     );
+  }
+
+  const video = files.find((file) => file.isVideo);
+  if (video && !(await hasAudioStream(video.path))) {
+    console.warn(
+      "Instagram download had no audio stream. Retrying with separate video and audio formats..."
+    );
+
+    const retryTemplate = path.join(
+      jobDir,
+      "harmony-with-audio-%(id)s.%(ext)s"
+    );
+
+    try {
+      const retryPaths = await runInstagramYtDlp(
+        url,
+        retryTemplate,
+        "bv+ba/b[acodec!=none]"
+      );
+      const retryFiles = retryPaths
+        .map(probeFile)
+        .filter((file) => file.isImage || file.isVideo);
+      const retryVideo = retryFiles.find((file) => file.isVideo);
+
+      if (retryVideo && (await hasAudioStream(retryVideo.path))) {
+        await Promise.all(
+          paths.map((filePath) => fs.unlink(filePath).catch(() => {}))
+        );
+        paths = retryPaths;
+        files = retryFiles;
+        console.log(
+          "Instagram audio retry succeeded; merged video contains audio."
+        );
+      } else {
+        await Promise.all(
+          retryPaths.map((filePath) => fs.unlink(filePath).catch(() => {}))
+        );
+        console.warn(
+          "Instagram did not expose a usable audio stream; keeping the original video."
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "Instagram audio retry failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 
   return {
