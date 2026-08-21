@@ -53,6 +53,7 @@ const {
 } = require("../modules/media/threadsDownloader");
 const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
+const { logMediaError } = require("../services/errorInboxService");
 
 /**
  * Format a friendly "already shared" reply.
@@ -95,6 +96,10 @@ function formatAlreadySharedReply(record) {
  */
 async function replyWithHarmonyError(message, error) {
   console.error("Harmony Error:", error);
+
+  await logMediaError(message, error).catch((reportError) => {
+    console.error("Could not send media failure to Harmony’s error inbox:", reportError);
+  });
 
   await message
     .reply({
@@ -421,6 +426,12 @@ async function handleMediaMessage(message) {
         );
 
       if (downloadResult.linkOnly) {
+        await logMediaError(
+          message,
+          new Error("FACEBOOK_UNVERIFIED_MEDIA")
+        ).catch((reportError) => {
+          console.error("Could not send Facebook failure to Harmony’s error inbox:", reportError);
+        });
         await message.reply({
           content:
             "Facebook did not expose media that Harmony could verify belongs to this exact post, so I left the original link above instead of showing the wrong preview.\n\n💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
