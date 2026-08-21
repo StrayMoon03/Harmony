@@ -16,6 +16,7 @@ const collectionStatsCommand = require("./commands/collectionStats");
 const collectionLeaderboardCommand = require("./commands/collectionLeaderboard");
 const collectionAdminCommand = require("./commands/collectionAdmin");
 const messageLogsCommand = require("./commands/messageLogs");
+const errorInboxCommand = require("./commands/errorInbox");
 const communityGuardCommand = require("./commands/communityGuard");
 const moderateMessageCommand = require("./commands/moderateMessage");
 const shareStore = require("./stores/shareStore");
@@ -59,6 +60,7 @@ const commands = [
   collectionLeaderboardCommand,
   collectionAdminCommand,
   messageLogsCommand,
+  errorInboxCommand,
   communityGuardCommand,
   moderateMessageCommand,
 ];
@@ -98,7 +100,7 @@ async function registerGuildCommands(guild) {
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
       "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
-      "/harmony-guard, Harmony: Moderate Message"
+      "/harmony-errors, /harmony-guard, Harmony: Moderate Message"
   );
 }
 
