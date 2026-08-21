@@ -203,6 +203,14 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_community_guard_actions_guild_time
       ON community_guard_actions (guild_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS error_inbox_settings (
+      id                      INTEGER PRIMARY KEY CHECK (id = 1),
+      destination_guild_id    TEXT NOT NULL,
+      destination_channel_id  TEXT NOT NULL,
+      enabled                 INTEGER NOT NULL DEFAULT 1,
+      updated_at              TEXT NOT NULL
+    );
   `);
 
   const settingColumns = new Set(
