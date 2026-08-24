@@ -115,7 +115,8 @@ function attachWelcomePassBirthdayProfile(code) {
   ).get(link.guild_id, link.user_id);
 
   if (existing && existing.id !== pending.id) {
-    const merge = db.transaction(() => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
       // Remove the temporary code-only row first so the UNIQUE code can
       // safely move onto an existing manually managed member profile.
       db.prepare("DELETE FROM birthday_profiles WHERE id = ?").run(pending.id);
@@ -139,8 +140,11 @@ function attachWelcomePassBirthdayProfile(code) {
         new Date().toISOString(),
         existing.id
       );
-    });
-    merge();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
     return true;
   }
 
