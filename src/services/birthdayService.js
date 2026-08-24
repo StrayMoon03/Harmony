@@ -144,20 +144,34 @@ async function announceBirthdays(client, settings, parts) {
     const member = await guild.members.fetch(profile.user_id).catch(() => null);
     if (!member) continue;
 
+    let roleAdded = false;
     if (settings.role_id && !member.roles.cache.has(settings.role_id)) {
-      await member.roles.add(
-        settings.role_id,
-        "Harmony birthday celebration"
-      ).catch((error) => {
+      try {
+        await member.roles.add(
+          settings.role_id,
+          "Harmony birthday celebration"
+        );
+        roleAdded = true;
+      } catch (error) {
         console.error("Could not grant birthday role:", error);
-      });
+      }
     }
 
-    await channel.send({
-      content: `🎉 <@${member.id}>`,
-      embeds: [buildBirthdayEmbed(profile, parts.year)],
-      allowedMentions: { users: [member.id] },
-    });
+    try {
+      await channel.send({
+        content: `🎉 <@${member.id}>`,
+        embeds: [buildBirthdayEmbed(profile, parts.year)],
+        allowedMentions: { users: [member.id] },
+      });
+    } catch (error) {
+      if (roleAdded) {
+        await member.roles.remove(
+          settings.role_id,
+          "Birthday announcement could not be delivered"
+        ).catch(() => {});
+      }
+      throw error;
+    }
 
     store.markBirthdayAnnounced(
       profile.id,
@@ -247,19 +261,28 @@ async function postMonthlyRecap(client, settings, parts) {
 async function removeExpiredBirthdayRoles(client) {
   const expired = store.listExpiredBirthdayRoles(new Date().toISOString());
   for (const profile of expired) {
+    const guild = await fetchGuild(client, profile.guild_id);
+    if (!guild) continue;
+
+    const member = await guild.members.fetch(profile.user_id).catch(() => null);
+    if (!member) {
+      // The member left the server, so there is no role left to remove.
+      store.clearBirthdayRoleTimer(profile.id);
+      continue;
+    }
+
     try {
-      const guild = await fetchGuild(client, profile.guild_id);
-      const member = await guild?.members.fetch(profile.user_id).catch(() => null);
-      if (member && profile.role_id && member.roles.cache.has(profile.role_id)) {
+      if (profile.role_id && member.roles.cache.has(profile.role_id)) {
         await member.roles.remove(
           profile.role_id,
           "Harmony birthday celebration ended"
         );
       }
-    } catch (error) {
-      console.error("Could not remove expired birthday role:", error);
-    } finally {
       store.clearBirthdayRoleTimer(profile.id);
+    } catch (error) {
+      // Keep the timer so Harmony retries after a temporary Discord or
+      // permissions failure instead of leaving the role behind forever.
+      console.error("Could not remove expired birthday role:", error);
     }
   }
 }
