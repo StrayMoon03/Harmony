@@ -105,6 +105,10 @@ async function execute(interaction) {
       return;
     }
     const me = interaction.guild.members.me;
+    if (role.managed || role.id === interaction.guild.id) {
+      await interaction.editReply("Please choose a regular role created for birthdays, not @everyone or an integration-managed role.");
+      return;
+    }
     if (!me?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position >= me.roles.highest.position) {
       await interaction.editReply("Harmony needs **Manage Roles**, and the birthday role must be below Harmony's highest role.");
       return;
