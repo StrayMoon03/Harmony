@@ -5,6 +5,9 @@ const {
   isValidWelcomePassCode,
   recordWelcomePassApproval,
 } = require("../stores/welcomePassStore");
+const { saveWelcomePassBirthdayProfile } = require("../stores/birthdayStore");
+const { normalizeBias } = require("./birthdayPresets");
+const { validMmdd } = require("./birthdayService");
 const {
   autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
@@ -96,6 +99,23 @@ function startWelcomePassServer(client) {
         code,
         approverName: body.approverName,
       });
+
+      const birthdayOptIn =
+        body.birthdayOptIn === true &&
+        validMmdd(body.birthdayMmdd);
+      saveWelcomePassBirthdayProfile({
+        code,
+        celebrationEnabled: birthdayOptIn,
+        birthdayMmdd: birthdayOptIn ? String(body.birthdayMmdd) : null,
+        birthdayName: birthdayOptIn
+          ? String(body.birthdayName || "").trim().slice(0, 80)
+          : null,
+        timezone: birthdayOptIn
+          ? String(body.timezone || "").trim().slice(0, 100)
+          : null,
+        bias: birthdayOptIn ? normalizeBias(body.birthdayBias) : null,
+      });
+
       const matchResult = await autoLinkWelcomePassByDiscordUsername(
         client,
         code,
