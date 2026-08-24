@@ -211,6 +211,59 @@ function migrate(database) {
       enabled                 INTEGER NOT NULL DEFAULT 1,
       updated_at              TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS birthday_settings (
+      guild_id                TEXT PRIMARY KEY,
+      channel_id              TEXT NOT NULL,
+      role_id                 TEXT,
+      timezone                TEXT NOT NULL DEFAULT 'America/New_York',
+      announcement_hour       INTEGER NOT NULL DEFAULT 9,
+      weekly_enabled          INTEGER NOT NULL DEFAULT 1,
+      weekly_day              INTEGER NOT NULL DEFAULT 0,
+      monthly_recap_enabled   INTEGER NOT NULL DEFAULT 1,
+      enabled                 INTEGER NOT NULL DEFAULT 1,
+      last_daily_key          TEXT,
+      last_weekly_key         TEXT,
+      last_monthly_key        TEXT,
+      updated_at              TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS birthday_profiles (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      welcome_pass_code    TEXT UNIQUE,
+      guild_id             TEXT,
+      user_id              TEXT,
+      celebration_enabled  INTEGER NOT NULL DEFAULT 0,
+      birthday_mmdd        TEXT,
+      birthday_name        TEXT,
+      timezone             TEXT,
+      bias                 TEXT,
+      custom_message       TEXT,
+      custom_image_url     TEXT,
+      last_announced_year  INTEGER,
+      role_remove_at       TEXT,
+      created_at           TEXT NOT NULL,
+      updated_at           TEXT NOT NULL,
+      UNIQUE (guild_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_birthday_profiles_guild_date
+      ON birthday_profiles (guild_id, birthday_mmdd);
+
+    CREATE INDEX IF NOT EXISTS idx_birthday_profiles_role_remove
+      ON birthday_profiles (role_remove_at);
+
+    CREATE TABLE IF NOT EXISTS birthday_announcement_history (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id       TEXT NOT NULL,
+      user_id        TEXT NOT NULL,
+      birthday_mmdd  TEXT NOT NULL,
+      announced_at   TEXT NOT NULL,
+      UNIQUE (guild_id, user_id, announced_at)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_birthday_history_guild_time
+      ON birthday_announcement_history (guild_id, announced_at);
   `);
 
   const settingColumns = new Set(
