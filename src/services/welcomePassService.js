@@ -7,6 +7,9 @@ const {
   markWelcomePassAssigned,
   renderWelcomePassReleaseMessage,
 } = require("../stores/welcomePassStore");
+const {
+  attachWelcomePassBirthdayProfile,
+} = require("../stores/birthdayStore");
 
 async function fetchTextChannel(guild, channelId) {
   if (!channelId) return null;
@@ -125,6 +128,11 @@ async function assignApprovedWelcomePass(client, code) {
   if (!assignment.guild_id || !assignment.user_id) {
     return { status: "waiting_for_link" };
   }
+
+  // Welcome Pass birthday details arrive before the Discord account may be
+  // linked. Attach them as soon as both guild and member are known.
+  attachWelcomePassBirthdayProfile(code);
+
   if (assignment.assigned_at) return { status: "already_assigned" };
 
   const settings = getWelcomePassSettings(assignment.guild_id);
