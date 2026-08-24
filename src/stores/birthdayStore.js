@@ -115,27 +115,32 @@ function attachWelcomePassBirthdayProfile(code) {
   ).get(link.guild_id, link.user_id);
 
   if (existing && existing.id !== pending.id) {
-    db.prepare(`
-      UPDATE birthday_profiles SET
-        welcome_pass_code = ?,
-        celebration_enabled = ?,
-        birthday_mmdd = ?,
-        birthday_name = ?,
-        timezone = ?,
-        bias = ?,
-        updated_at = ?
-      WHERE id = ?
-    `).run(
-      code,
-      pending.celebration_enabled,
-      pending.birthday_mmdd,
-      pending.birthday_name,
-      pending.timezone,
-      pending.bias,
-      new Date().toISOString(),
-      existing.id
-    );
-    db.prepare("DELETE FROM birthday_profiles WHERE id = ?").run(pending.id);
+    const merge = db.transaction(() => {
+      // Remove the temporary code-only row first so the UNIQUE code can
+      // safely move onto an existing manually managed member profile.
+      db.prepare("DELETE FROM birthday_profiles WHERE id = ?").run(pending.id);
+      db.prepare(`
+        UPDATE birthday_profiles SET
+          welcome_pass_code = ?,
+          celebration_enabled = ?,
+          birthday_mmdd = ?,
+          birthday_name = ?,
+          timezone = ?,
+          bias = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        code,
+        pending.celebration_enabled,
+        pending.birthday_mmdd,
+        pending.birthday_name,
+        pending.timezone,
+        pending.bias,
+        new Date().toISOString(),
+        existing.id
+      );
+    });
+    merge();
     return true;
   }
 
