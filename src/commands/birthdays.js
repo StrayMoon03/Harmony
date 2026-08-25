@@ -23,7 +23,7 @@ const weekdayChoices = [
 ].map(([name, value]) => ({ name, value }));
 const adminActions = new Set([
   "setup", "status", "set-member", "customize", "clear-custom",
-  "preview", "upcoming", "match-all", "off",
+  "preview", "upcoming", "match-all", "match-member", "off",
 ]);
 
 const data = new SlashCommandBuilder()
@@ -66,6 +66,18 @@ const data = new SlashCommandBuilder()
   .addSubcommand((sub) => sub
     .setName("match-all")
     .setDescription("Connect imported birthdays to current Discord members"))
+  .addSubcommand((sub) => sub
+    .setName("match-member")
+    .setDescription("Connect one unmatched imported birthday to a member")
+    .addStringOption((o) => o
+      .setName("imported-name")
+      .setDescription("Name shown in the match-all results")
+      .setRequired(true)
+      .setMaxLength(100))
+    .addUserOption((o) => o
+      .setName("member")
+      .setDescription("Correct Discord member")
+      .setRequired(true)))
   .addSubcommand((sub) => sub.setName("next").setDescription("Show the next opted-in birthdays"))
   .addSubcommand((sub) => sub
     .setName("month")
@@ -321,6 +333,45 @@ async function execute(interaction) {
     }
 
     await interaction.editReply(formatMatchReport(result));
+    return;
+  }
+
+  if (action === "match-member") {
+    const importedName = interaction.options.getString("imported-name", true).trim();
+    const member = interaction.options.getUser("member", true);
+    const target = normalizeMemberName(importedName);
+    const pending = store.listUnlinkedWelcomePassBirthdayProfiles();
+    const matches = pending.filter((profile) => [
+      profile.birthday_name,
+      profile.discord_username,
+      profile.welcome_pass_code,
+    ].some((value) => normalizeMemberName(value) === target));
+
+    if (!matches.length) {
+      await interaction.editReply(`No unmatched imported birthday was found for **${importedName}**. Run \`/harmony-birthdays match-all\` to see the current list.`);
+      return;
+    }
+    if (matches.length > 1) {
+      await interaction.editReply(`More than one unmatched birthday uses **${importedName}**. Use the member's \`YS-XXXXXXXX\` confirmation code in the imported-name box instead.`);
+      return;
+    }
+
+    const profile = matches[0];
+    const linked = linkWelcomePassCode({
+      code: profile.welcome_pass_code,
+      guildId: interaction.guildId,
+      userId: member.id,
+    });
+    if (!linked.ok) {
+      await interaction.editReply("Harmony could not connect that record because the Welcome Pass or Discord member is already linked to a different account.");
+      return;
+    }
+    if (!store.attachWelcomePassBirthdayProfile(profile.welcome_pass_code)) {
+      await interaction.editReply("The Welcome Pass was linked, but Harmony could not attach its birthday profile. Please check the Railway logs before trying again.");
+      return;
+    }
+
+    await interaction.editReply(`Connected **${importedName}** to <@${member.id}>. Their existing birthday details were preserved.`);
     return;
   }
 
