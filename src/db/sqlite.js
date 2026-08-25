@@ -236,6 +236,7 @@ function migrate(database) {
       celebration_enabled  INTEGER NOT NULL DEFAULT 0,
       birthday_mmdd        TEXT,
       birthday_name        TEXT,
+      discord_username     TEXT,
       timezone             TEXT,
       bias                 TEXT,
       custom_message       TEXT,
@@ -283,6 +284,16 @@ function migrate(database) {
   if (!settingColumns.has("grant_mode")) {
     database.exec(
       "ALTER TABLE welcome_pass_settings ADD COLUMN grant_mode TEXT NOT NULL DEFAULT 'automatic'"
+    );
+  }
+
+  const birthdayProfileColumns = new Set(
+    database.prepare("PRAGMA table_info(birthday_profiles)").all()
+      .map((column) => column.name)
+  );
+  if (!birthdayProfileColumns.has("discord_username")) {
+    database.exec(
+      "ALTER TABLE birthday_profiles ADD COLUMN discord_username TEXT"
     );
   }
 }

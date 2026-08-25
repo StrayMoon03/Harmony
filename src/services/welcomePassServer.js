@@ -110,6 +110,7 @@ function startWelcomePassServer(client) {
         birthdayName: birthdayOptIn
           ? String(body.birthdayName || "").trim().slice(0, 80)
           : null,
+        discordUsername: String(body.discordUsername || "").slice(0, 100),
         timezone: birthdayOptIn
           ? String(body.timezone || "").trim().slice(0, 100)
           : null,
