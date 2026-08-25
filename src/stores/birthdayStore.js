@@ -73,18 +73,20 @@ function saveWelcomePassBirthdayProfile({
   celebrationEnabled,
   birthdayMmdd,
   birthdayName,
+  discordUsername,
   timezone,
   bias,
 }) {
   getDb().prepare(`
     INSERT INTO birthday_profiles (
       welcome_pass_code, celebration_enabled, birthday_mmdd,
-      birthday_name, timezone, bias, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      birthday_name, discord_username, timezone, bias, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(welcome_pass_code) DO UPDATE SET
       celebration_enabled = excluded.celebration_enabled,
       birthday_mmdd = excluded.birthday_mmdd,
       birthday_name = excluded.birthday_name,
+      discord_username = excluded.discord_username,
       timezone = excluded.timezone,
       bias = excluded.bias,
       updated_at = excluded.updated_at
@@ -93,11 +95,23 @@ function saveWelcomePassBirthdayProfile({
     celebrationEnabled ? 1 : 0,
     celebrationEnabled ? birthdayMmdd : null,
     celebrationEnabled ? birthdayName : null,
+    String(discordUsername || "").trim().slice(0, 100) || null,
     celebrationEnabled ? timezone : null,
     celebrationEnabled ? bias : null,
     new Date().toISOString(),
     new Date().toISOString()
   );
+}
+
+function listUnlinkedWelcomePassBirthdayProfiles() {
+  return getDb().prepare(`
+    SELECT * FROM birthday_profiles
+    WHERE celebration_enabled = 1
+      AND birthday_mmdd IS NOT NULL
+      AND welcome_pass_code IS NOT NULL
+      AND user_id IS NULL
+    ORDER BY birthday_name, welcome_pass_code
+  `).all();
 }
 
 function attachWelcomePassBirthdayProfile(code) {
@@ -121,11 +135,12 @@ function attachWelcomePassBirthdayProfile(code) {
       // safely move onto an existing manually managed member profile.
       db.prepare("DELETE FROM birthday_profiles WHERE id = ?").run(pending.id);
       db.prepare(`
-        UPDATE birthday_profiles SET
+      UPDATE birthday_profiles SET
           welcome_pass_code = ?,
           celebration_enabled = ?,
           birthday_mmdd = ?,
           birthday_name = ?,
+          discord_username = ?,
           timezone = ?,
           bias = ?,
           updated_at = ?
@@ -135,6 +150,7 @@ function attachWelcomePassBirthdayProfile(code) {
         pending.celebration_enabled,
         pending.birthday_mmdd,
         pending.birthday_name,
+        pending.discord_username,
         pending.timezone,
         pending.bias,
         new Date().toISOString(),
@@ -310,6 +326,7 @@ module.exports = {
   disableBirthdaySettings,
   updateBirthdayRunKey,
   saveWelcomePassBirthdayProfile,
+  listUnlinkedWelcomePassBirthdayProfiles,
   attachWelcomePassBirthdayProfile,
   upsertBirthdayProfile,
   getBirthdayProfile,
