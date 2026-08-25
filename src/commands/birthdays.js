@@ -4,6 +4,9 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 const store = require("../stores/birthdayStore");
+const {
+  linkWelcomePassCode,
+} = require("../stores/welcomePassStore");
 const { BIASES, normalizeBias } = require("../services/birthdayPresets");
 const {
   validTimezone,
@@ -20,7 +23,7 @@ const weekdayChoices = [
 ].map(([name, value]) => ({ name, value }));
 const adminActions = new Set([
   "setup", "status", "set-member", "customize", "clear-custom",
-  "preview", "upcoming", "off",
+  "preview", "upcoming", "match-all", "off",
 ]);
 
 const data = new SlashCommandBuilder()
@@ -60,6 +63,9 @@ const data = new SlashCommandBuilder()
     .setDescription("Preview a member's birthday announcement")
     .addUserOption((o) => o.setName("member").setDescription("Member").setRequired(true)))
   .addSubcommand((sub) => sub.setName("upcoming").setDescription("Privately list the next 30 days"))
+  .addSubcommand((sub) => sub
+    .setName("match-all")
+    .setDescription("Connect imported birthdays to current Discord members"))
   .addSubcommand((sub) => sub.setName("next").setDescription("Show the next opted-in birthdays"))
   .addSubcommand((sub) => sub
     .setName("month")
@@ -80,6 +86,44 @@ function listEmbed(title, profiles) {
     .setTitle(title)
     .setDescription(description)
     .setFooter({ text: "Harmony stores no birth year or age." });
+}
+
+function normalizeMemberName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^@/, "")
+    .toLocaleLowerCase();
+}
+
+function memberNames(member) {
+  const names = [
+    member.user.username,
+    member.user.globalName,
+    member.displayName,
+  ];
+  if (member.user.discriminator && member.user.discriminator !== "0") {
+    names.push(`${member.user.username}#${member.user.discriminator}`);
+  }
+  return new Set(names.map(normalizeMemberName).filter(Boolean));
+}
+
+function formatMatchReport(result) {
+  const lines = [
+    "🎂 **Birthday matching complete**",
+    `Connected: **${result.connected}**`,
+    `Still needs attention: **${result.unresolved.length}**`,
+  ];
+  if (result.unresolved.length) {
+    const visible = result.unresolved.slice(0, 20)
+      .map((item) => `• ${item.name} — ${item.reason}`);
+    lines.push("", "**Not connected:**", ...visible);
+    if (result.unresolved.length > visible.length) {
+      lines.push(`• …and ${result.unresolved.length - visible.length} more`);
+    }
+  } else {
+    lines.push("", "Every imported birthday is connected. 💜");
+  }
+  return lines.join("\n");
 }
 
 async function execute(interaction) {
@@ -215,6 +259,68 @@ async function execute(interaction) {
   if (action === "upcoming") {
     const profiles = upcomingProfiles(interaction.guildId, 30);
     await interaction.editReply({ embeds: [listEmbed("📅 Birthdays in the next 30 days", profiles)] });
+    return;
+  }
+
+  if (action === "match-all") {
+    const pending = store.listUnlinkedWelcomePassBirthdayProfiles();
+    if (!pending.length) {
+      await interaction.editReply("Every imported birthday is already connected, or no imported birthdays are waiting.");
+      return;
+    }
+
+    const fetched = await interaction.guild.members.fetch().catch(() => null);
+    if (!fetched) {
+      await interaction.editReply("Harmony could not read the server member list. Confirm that **Server Members Intent** is enabled, then try again.");
+      return;
+    }
+
+    const members = [...fetched.values()].filter((member) => !member.user.bot);
+    const result = { connected: 0, unresolved: [] };
+
+    for (const profile of pending) {
+      const target = normalizeMemberName(profile.discord_username);
+      const label = profile.birthday_name || profile.discord_username || profile.welcome_pass_code;
+      if (!target) {
+        result.unresolved.push({ name: label, reason: "sync once more to import the Discord username" });
+        continue;
+      }
+
+      const usernameMatches = members.filter(
+        (member) => normalizeMemberName(member.user.username) === target ||
+          (member.user.discriminator !== "0" &&
+            normalizeMemberName(`${member.user.username}#${member.user.discriminator}`) === target)
+      );
+      const matches = usernameMatches.length
+        ? usernameMatches
+        : members.filter((member) => memberNames(member).has(target));
+
+      if (matches.length !== 1) {
+        result.unresolved.push({
+          name: label,
+          reason: matches.length ? "more than one member has that name" : "no matching server member",
+        });
+        continue;
+      }
+
+      const linked = linkWelcomePassCode({
+        code: profile.welcome_pass_code,
+        guildId: interaction.guildId,
+        userId: matches[0].id,
+      });
+      if (!linked.ok) {
+        result.unresolved.push({ name: label, reason: "Welcome Pass link conflict" });
+        continue;
+      }
+
+      if (store.attachWelcomePassBirthdayProfile(profile.welcome_pass_code)) {
+        result.connected += 1;
+      } else {
+        result.unresolved.push({ name: label, reason: "birthday profile could not be attached" });
+      }
+    }
+
+    await interaction.editReply(formatMatchReport(result));
     return;
   }
 
