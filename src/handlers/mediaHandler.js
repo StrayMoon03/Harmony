@@ -788,13 +788,40 @@ async function handleMediaMessage(message) {
         heart: "🖤",
       });
 
-      await uploadMedia(
-        message,
-        classification.files,
-        cardText,
-        downloadResult.rawDir,
-        { embedColor: 0x000000 }
-      );
+      try {
+        await uploadMedia(
+          message,
+          classification.files,
+          cardText,
+          downloadResult.rawDir,
+          { embedColor: 0x000000 }
+        );
+      } catch (uploadError) {
+        const sizeFailure = /compress|too large|size limit|under discord limit/i.test(
+          String(uploadError?.message || uploadError)
+        );
+        if (!sizeFailure) throw uploadError;
+
+        console.warn(
+          "X attachment could not fit; preserving the original playable link."
+        );
+        const linkMessage = await message.reply({
+          content: originalUrl,
+          allowedMentions: { repliedUser: false },
+        });
+        const cardMessage = await message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x000000)
+              .setDescription(
+                `${cardText}\n\nThis post plays through X so it can keep its original quality.`
+              ),
+          ],
+          allowedMentions: { parse: [] },
+        });
+        shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
+        shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
+      }
 
       await suppressOriginalEmbeds(message);
 
