@@ -138,55 +138,37 @@ async function createJobDirectory() {
  */
 async function downloadMedia(url) {
   const jobDir = await createJobDirectory();
+  const errors = [];
+
+  for (const useCookies of [true, false]) {
+    try {
+      return await downloadWithYtDlp(url, jobDir, { useCookies });
+    } catch (error) {
+      errors.push(error);
+      console.warn(
+        `Instagram yt-dlp ${useCookies ? "cookie" : "public"} attempt failed; ` +
+          `${useCookies ? "retrying without cookies" : "trying gallery-dl"}.`
+      );
+      await fs.rm(jobDir, { recursive: true, force: true });
+      await fs.mkdir(jobDir, { recursive: true });
+    }
+  }
 
   try {
-    return await downloadWithYtDlp(url, jobDir);
-  } catch (err) {
-    const errorText = [
-      err.stderr || "",
-      err.stdout || "",
-      err.message || "",
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    const missingAudio =
-      errorText.includes("instagram_audio_missing");
-    const shouldUseGalleryDl =
-      missingAudio ||
-      errorText.includes("there is no video in this post") ||
-      errorText.includes("no video formats found") ||
-      errorText.includes("requested format is not available");
-
-    if (shouldUseGalleryDl) {
-      console.log(
-        missingAudio
-          ? "Instagram yt-dlp result was silent. Trying gallery-dl merged audio fallback..."
-          : "Instagram photo/carousel detected. Falling back to gallery-dl..."
-      );
-
-      try {
-        await fs.rm(jobDir, { recursive: true, force: true });
-        await fs.mkdir(jobDir, { recursive: true });
-        return await downloadWithGalleryDl(url, jobDir, {
-          requireAudio: missingAudio,
-        });
-      } catch (galleryError) {
-        await fs.rm(jobDir, {
-          recursive: true,
-          force: true,
-        });
-
-        throw galleryError;
-      }
-    }
-
-    await fs.rm(jobDir, {
-      recursive: true,
-      force: true,
+    console.log("Instagram falling back to gallery-dl for the exact post.");
+    return await downloadWithGalleryDl(url, jobDir, {
+      requireAudio: errors.some((error) =>
+        String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")
+      ),
     });
-
-    throw err;
+  } catch (galleryError) {
+    errors.push(galleryError);
+    await fs.rm(jobDir, { recursive: true, force: true });
+    const summary = errors
+      .map((error) => String(error?.stderr || error?.message || error))
+      .filter(Boolean)
+      .join(" | ");
+    throw new Error(`Instagram exhausted its safe download methods: ${summary}`);
   }
 }
 
@@ -222,7 +204,7 @@ async function hasAudioStream(filePath) {
   }
 }
 
-async function runInstagramYtDlp(url, outputTemplate, format) {
+async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
   const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
   const cookiesPath =
     process.env.INSTAGRAM_COOKIES ||
@@ -240,16 +222,20 @@ async function runInstagramYtDlp(url, outputTemplate, format) {
     outputTemplate,
   ];
 
-  try {
-    await fs.access(cookiesPath);
-    args.push("--cookies", cookiesPath);
-  } catch {
-    console.warn("Instagram cookies were not available for this download.");
+  if (options.useCookies !== false) {
+    try {
+      await fs.access(cookiesPath);
+      args.push("--cookies", cookiesPath);
+    } catch {
+      console.warn("Instagram cookies were not available for this download.");
+    }
   }
 
   args.push(url);
   const { stdout } = await execFileAsync(ytDlpPath, args, {
     windowsHide: true,
+    timeout: 120000,
+    killSignal: "SIGKILL",
     maxBuffer: 20 * 1024 * 1024,
   });
 
@@ -267,7 +253,7 @@ async function runInstagramYtDlp(url, outputTemplate, format) {
  * @param {string} jobDir
  * @returns {Promise<DownloadResult>}
  */
-async function downloadWithYtDlp(url, jobDir) {
+async function downloadWithYtDlp(url, jobDir, options = {}) {
   const firstTemplate = path.join(
     jobDir,
     "harmony-%(id)s.%(ext)s"
@@ -276,7 +262,8 @@ async function downloadWithYtDlp(url, jobDir) {
   let paths = await runInstagramYtDlp(
     url,
     firstTemplate,
-    "bv*+ba/b"
+    "bv*+ba/b",
+    options
   );
 
   if (paths.length === 0) {
@@ -311,7 +298,8 @@ async function downloadWithYtDlp(url, jobDir) {
       const retryPaths = await runInstagramYtDlp(
         url,
         retryTemplate,
-        "bv+ba/b[acodec!=none]"
+        "bv+ba/b[acodec!=none]",
+        options
       );
       const retryFiles = retryPaths
         .map(probeFile)
@@ -374,19 +362,27 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
       "../../instagram-cookies.txt"
     );
 
+  const args = [
+    "-o",
+    "extractor.instagram.videos=merged",
+    "-d",
+    jobDir,
+  ];
+  try {
+    await fs.access(cookiesPath);
+    args.unshift("--cookies", cookiesPath);
+  } catch {
+    console.warn("Instagram gallery-dl is continuing without cookies.");
+  }
+  args.push(url);
+
   await execFileAsync(
     galleryDlPath,
-    [
-      "--cookies",
-      cookiesPath,
-      "-o",
-      "extractor.instagram.videos=merged",
-      "-d",
-      jobDir,
-      url,
-    ],
+    args,
     {
       windowsHide: true,
+      timeout: 120000,
+      killSignal: "SIGKILL",
       maxBuffer: 20 * 1024 * 1024,
     }
   );

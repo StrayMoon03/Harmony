@@ -103,6 +103,28 @@ def identities_from_url(value):
     return {item for item in ids if item}
 
 
+def page_identity_urls(page):
+    """Return only browser-declared URLs for the currently opened post."""
+    values = [page.url]
+    selectors = (
+        'link[rel="canonical"]',
+        'meta[property="og:url"]',
+        'meta[property="al:android:url"]',
+        'meta[property="al:ios:url"]',
+    )
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() == 0:
+                continue
+            value = locator.get_attribute("href") or locator.get_attribute("content")
+            if value:
+                values.append(value)
+        except Exception:
+            continue
+    return list(dict.fromkeys(values))
+
+
 def normalized_text(value):
     if isinstance(value, (str, int)):
         return str(value)
@@ -299,6 +321,7 @@ def main():
 
     payloads = []
     final_url = target_url
+    identity_urls = [target_url]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -333,6 +356,11 @@ def main():
             page.mouse.wheel(0, 500)
             page.wait_for_timeout(2500)
             final_url = page.url
+            identity_urls.extend(page_identity_urls(page))
+            for identity_url in identity_urls:
+                if identities_from_url(identity_url) - identities_from_url(target_url):
+                    final_url = identity_url
+                    break
 
             lowered_url = final_url.lower()
             body_text = page.locator("body").inner_text(timeout=5000).lower()
@@ -346,7 +374,9 @@ def main():
         finally:
             browser.close()
 
-    target_ids = identities_from_url(target_url) | identities_from_url(final_url)
+    target_ids = set()
+    for identity_url in identity_urls:
+        target_ids |= identities_from_url(identity_url)
     if not target_ids:
         raise RuntimeError("Facebook post identity could not be resolved")
 
