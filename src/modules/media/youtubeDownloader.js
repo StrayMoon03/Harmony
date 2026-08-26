@@ -69,15 +69,44 @@ async function downloadYouTubeMedia(url) {
 
   const cookiesPath = process.env.YOUTUBE_COOKIES;
   if (cookiesPath) {
-    ytDlpArgs.push("--cookies", cookiesPath);
-    console.log("YouTube cookies: ready.");
+    console.log("YouTube cookies: ready (public retry is enabled if they are stale).");
   } else {
     console.warn(
       "YouTube cookies: missing — Railway may be blocked as a bot."
     );
   }
 
-  ytDlpArgs.push(url);
+  async function runYtDlp(baseArgs, options) {
+    const modes = cookiesPath ? ["cookies", "public"] : ["public"];
+    const failures = [];
+    for (const mode of modes) {
+      const args = [...baseArgs];
+      if (mode === "cookies") {
+        args.push("--cookies", cookiesPath);
+      }
+      args.push(url);
+      try {
+        const result = await execFileAsync(ytDlpPath, args, options);
+        if (mode === "public" && cookiesPath) {
+          console.log("YouTube public retry succeeded after the cookie attempt failed.");
+        }
+        return result;
+      } catch (error) {
+        failures.push(error);
+        if (mode === "cookies") {
+          console.warn("YouTube cookie attempt failed; retrying publicly.");
+        }
+      }
+    }
+    const last = failures.at(-1);
+    const details = failures
+      .map((error) => String(error?.stderr || error?.message || error))
+      .filter(Boolean)
+      .join(" | ");
+    const failure = new Error(`YouTube access attempts failed: ${details}`);
+    failure.cause = last;
+    throw failure;
+  }
 
   try {
     const inspectArgs = [
@@ -92,13 +121,7 @@ async function downloadYouTubeMedia(url) {
       "HARMONY_CREATOR:%(uploader)s",
     ];
 
-    if (cookiesPath) {
-      inspectArgs.push("--cookies", cookiesPath);
-    }
-    inspectArgs.push(url);
-
-    const { stdout: inspectStdout } = await execFileAsync(
-      ytDlpPath,
+    const { stdout: inspectStdout } = await runYtDlp(
       inspectArgs,
       {
         windowsHide: true,
@@ -157,8 +180,7 @@ async function downloadYouTubeMedia(url) {
       `YouTube download starting (${isShort ? "Short up to 720p" : "video up to 480p"}).`
     );
 
-    const { stdout } = await execFileAsync(
-      ytDlpPath,
+    const { stdout } = await runYtDlp(
       ytDlpArgs,
       {
         windowsHide: true,
@@ -231,7 +253,18 @@ async function downloadYouTubeMedia(url) {
       );
     }
 
-    throw error;
+    console.warn(
+      "YouTube download was unavailable; using the original YouTube player instead:",
+      error instanceof Error ? error.message : error
+    );
+    return {
+      files: [],
+      rawDir: null,
+      platform: "youtube",
+      creator: null,
+      linkOnly: true,
+      durationSeconds: null,
+    };
   }
 }
 
