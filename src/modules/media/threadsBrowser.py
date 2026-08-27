@@ -156,12 +156,19 @@ def main():
             exact_post_url = preferred[0]
         elif len(exact_urls) == 1:
             exact_post_url = exact_urls[0]
+        elif urlparse(target_url).path.lower().startswith("/share/"):
+            # Newer Threads share URLs can be the public identity of the
+            # post itself instead of redirecting to /@user/post/{code}.
+            exact_post_url = target_url
         else:
             raise RuntimeError(
-                "Threads share did not resolve to one verifiable post"
+                "Threads page did not resolve to one verifiable post"
             )
 
-        if canonical_post_url(page.url) != exact_post_url:
+        if (
+            canonical_post_url(exact_post_url)
+            and canonical_post_url(page.url) != exact_post_url
+        ):
             page.goto(exact_post_url, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(6000)
 
