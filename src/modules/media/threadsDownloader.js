@@ -197,6 +197,24 @@ function collectCandidateUrls(html) {
   ].slice(0, 20);
 }
 
+function isThreadsShareUrl(url) {
+  try {
+    return /^\/share\//i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isExactThreadsPostUrl(url) {
+  try {
+    return /^\/@[^/]+\/post\/[A-Za-z0-9_-]+\/?$/i.test(
+      new URL(url).pathname
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function inspectThreadsWithBrowser(url) {
   const pythonPath = process.env.PYTHON_PATH || "python3";
   const cookiePath = process.env.THREADS_COOKIES || "";
@@ -499,12 +517,15 @@ async function downloadThreadsMedia(url) {
   try {
     console.log("Threads page inspection starting.");
 
+    const shareUrl = isThreadsShareUrl(url);
     const pageResult = await fetchThreadsPage(url);
     const { html, sourceUrl, status } = pageResult;
     let finalUrl = pageResult.finalUrl;
     const decodedHtml = decodePageText(html);
     const diagnostics = inspectThreadsPage(decodedHtml);
-    let candidates = collectCandidateUrls(decodedHtml);
+    let candidates = shareUrl
+      ? []
+      : collectCandidateUrls(decodedHtml);
 
     console.log("Threads page diagnostics:", {
       status,
@@ -519,6 +540,12 @@ async function downloadThreadsMedia(url) {
         await inspectThreadsWithBrowser(url);
       candidates = browserResult.candidates;
       finalUrl = browserResult.finalUrl || finalUrl;
+    }
+
+    if (shareUrl && !isExactThreadsPostUrl(finalUrl)) {
+      throw new Error(
+        "Threads share did not resolve to a verifiable exact post."
+      );
     }
 
     if (candidates.length === 0) {
