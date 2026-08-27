@@ -523,9 +523,7 @@ async function downloadThreadsMedia(url) {
     let finalUrl = pageResult.finalUrl;
     const decodedHtml = decodePageText(html);
     const diagnostics = inspectThreadsPage(decodedHtml);
-    let candidates = shareUrl
-      ? []
-      : collectCandidateUrls(decodedHtml);
+    let candidates = collectCandidateUrls(decodedHtml);
 
     console.log("Threads page diagnostics:", {
       status,
@@ -542,9 +540,13 @@ async function downloadThreadsMedia(url) {
       finalUrl = browserResult.finalUrl || finalUrl;
     }
 
-    if (shareUrl && !isExactThreadsPostUrl(finalUrl)) {
+    if (
+      shareUrl &&
+      !isExactThreadsPostUrl(finalUrl) &&
+      !isThreadsShareUrl(finalUrl)
+    ) {
       throw new Error(
-        "Threads share did not resolve to a verifiable exact post."
+        "Threads share did not remain on a verifiable Threads post."
       );
     }
 
