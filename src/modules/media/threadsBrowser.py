@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+import re
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
@@ -78,6 +79,17 @@ def allowed_media_url(value):
     )
 
 
+def canonical_post_url(value):
+    if not isinstance(value, str):
+        return None
+    match = re.search(
+        r"https?://(?:www\.)?threads\.(?:com|net)/@[^/?#]+/post/[A-Za-z0-9_-]+",
+        value,
+        re.IGNORECASE,
+    )
+    return match.group(0) if match else None
+
+
 def main():
     if len(sys.argv) < 2:
         raise RuntimeError("Threads URL is required")
@@ -90,7 +102,6 @@ def main():
         clean_path = clean_path[:-len("/media")]
     target_url = parsed._replace(path=clean_path, query="", fragment="").geturl()
 
-    observed = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -112,35 +123,75 @@ def main():
 
         page = context.new_page()
 
-        def record_response(response):
-            try:
-                content_type = response.headers.get("content-type", "").lower()
-                if (
-                    content_type.startswith("image/")
-                    or content_type.startswith("video/")
-                    or ".mp4" in response.url.lower()
-                ) and allowed_media_url(response.url):
-                    observed.append(response.url)
-            except Exception:
-                pass
-
-        page.on("response", record_response)
         page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(8000)
 
-        dom_media = page.evaluate(
+        identity_candidates = page.evaluate(
             """() => {
+              const values = [location.href];
+              const canonical = document.querySelector('link[rel="canonical"]');
+              const ogUrl = document.querySelector('meta[property="og:url"]');
+              if (canonical?.href) values.push(canonical.href);
+              if (ogUrl?.content) values.push(ogUrl.content);
+              for (const anchor of document.querySelectorAll('a[href*="/post/"]')) {
+                values.push(anchor.href);
+              }
+              return values;
+            }"""
+        )
+
+        exact_urls = []
+        for value in identity_candidates or []:
+            exact = canonical_post_url(value)
+            if exact and exact not in exact_urls:
+                exact_urls.append(exact)
+
+        preferred = []
+        for value in (page.url,) + tuple((identity_candidates or [])[:3]):
+            exact = canonical_post_url(value)
+            if exact and exact not in preferred:
+                preferred.append(exact)
+
+        if preferred:
+            exact_post_url = preferred[0]
+        elif len(exact_urls) == 1:
+            exact_post_url = exact_urls[0]
+        else:
+            raise RuntimeError(
+                "Threads share did not resolve to one verifiable post"
+            )
+
+        if canonical_post_url(page.url) != exact_post_url:
+            page.goto(exact_post_url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(6000)
+
+        exact_path = urlparse(exact_post_url).path.rstrip("/")
+
+        dom_media = page.evaluate(
+            """(exactPath) => {
               const results = [];
-              for (const video of document.querySelectorAll("video")) {
+              const normalizePath = (value) => {
+                try { return new URL(value, location.href).pathname.replace(/\\/$/, ''); }
+                catch { return ''; }
+              };
+              const articles = [...document.querySelectorAll('article')];
+              const matched = articles.find((article) =>
+                [...article.querySelectorAll('a[href]')].some(
+                  (anchor) => normalizePath(anchor.href) === exactPath
+                )
+              );
+              const target = matched || (articles.length === 1 ? articles[0] : null);
+              if (!target) return [];
+
+              for (const video of target.querySelectorAll("video")) {
                 const value = video.currentSrc || video.src;
                 if (value) results.push(value);
-                if (video.poster) results.push(video.poster);
               }
-              for (const source of document.querySelectorAll("video source")) {
+              for (const source of target.querySelectorAll("video source")) {
                 if (source.src) results.push(source.src);
               }
               const seenImages = new Set();
-              for (const image of document.querySelectorAll("img")) {
+              for (const image of target.querySelectorAll("img")) {
                 if (image.naturalWidth < 300 || image.naturalHeight < 300) {
                   continue;
                 }
@@ -169,16 +220,17 @@ def main():
                 results.push(value);
               }
               return results;
-            }"""
+            }""",
+            exact_path,
         )
 
-        final_url = page.url
+        final_url = exact_post_url
         title = page.title()
         browser.close()
 
     ordered = []
     seen = set()
-    for value in list(dom_media or []) + observed:
+    for value in list(dom_media or []):
         if not allowed_media_url(value) or value in seen:
             continue
         seen.add(value)
