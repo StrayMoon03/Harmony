@@ -537,7 +537,7 @@ async function downloadThreadsMedia(url) {
 
     if (candidates.length === 0) {
       const browserResult =
-        await inspectThreadsWithBrowser(url);
+        await inspectThreadsWithBrowser(finalUrl);
       candidates = browserResult.candidates;
       finalUrl = browserResult.finalUrl || finalUrl;
     }
