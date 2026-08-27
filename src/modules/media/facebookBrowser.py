@@ -230,10 +230,22 @@ def collect_attachments(root):
             "order": len(ordered),
         })
 
-    def walk(value, inherited_id=None, inherited_type=None, in_attachment=False):
+    def walk(
+        value,
+        inherited_id=None,
+        inherited_type=None,
+        in_attachment=False,
+        inside_video=False,
+    ):
         if isinstance(value, list):
             for child in value:
-                walk(child, inherited_id, inherited_type, in_attachment)
+                walk(
+                    child,
+                    inherited_id,
+                    inherited_type,
+                    in_attachment,
+                    inside_video,
+                )
             return
         if not isinstance(value, dict):
             return
@@ -241,7 +253,11 @@ def collect_attachments(root):
         media_id = infer_id(value, inherited_id)
         typename = str(value.get("__typename", "")).lower()
         media_type = inherited_type
-        if "video" in typename or any(key in value for key in VIDEO_KEYS):
+        is_video_node = (
+            "video" in typename or any(key in value for key in VIDEO_KEYS)
+        )
+        current_inside_video = inside_video or is_video_node
+        if current_inside_video:
             media_type = "video"
         elif "photo" in typename or "image" in typename:
             media_type = "photo"
@@ -250,7 +266,11 @@ def collect_attachments(root):
         if in_attachment and video_url:
             add(media_id, "video", video_url)
 
-        if in_attachment and media_type != "video":
+        # Facebook nests poster frames and preview thumbnails inside video
+        # nodes. They are not separate post attachments, so never promote
+        # those nested images to photos. A genuine photo in a mixed post is a
+        # sibling attachment and therefore starts with inside_video=False.
+        if in_attachment and media_type != "video" and not current_inside_video:
             for key in ("uri", "src", "url"):
                 image_url = valid_media_url(value.get(key))
                 if image_url:
@@ -263,11 +283,17 @@ def collect_attachments(root):
                 word in lowered for word in ATTACHMENT_WORDS
             )
             child_type = media_type
-            if "video" in lowered:
+            if current_inside_video or "video" in lowered:
                 child_type = "video"
             elif "photo" in lowered or "image" in lowered:
                 child_type = "photo"
-            walk(child, media_id, child_type, child_attachment)
+            walk(
+                child,
+                media_id,
+                child_type,
+                child_attachment,
+                current_inside_video,
+            )
 
     walk(root)
     return ordered[:10]
