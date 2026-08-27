@@ -180,7 +180,10 @@ def main():
                   (anchor) => normalizePath(anchor.href) === exactPath
                 )
               );
-              const target = matched || (articles.length === 1 ? articles[0] : null);
+              // The browser is opened on the already-resolved exact post URL.
+              // Threads may omit a self-link from the root post, so use the
+              // first article (the root post) when no exact self-link exists.
+              const target = matched || articles[0] || null;
               if (!target) return [];
 
               for (const video of target.querySelectorAll("video")) {
