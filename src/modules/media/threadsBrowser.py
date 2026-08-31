@@ -90,11 +90,32 @@ def canonical_post_url(value):
     return match.group(0) if match else None
 
 
-def document_permalink(page):
-    """Use only this document's own URL, canonical link, and og:url.
+def permalinks_from_text(text):
+    found = []
+    seen = set()
+    for match in re.finditer(
+        r"https?://(?:www\.)?threads\.(?:com|net)/@[A-Za-z0-9._]+/post/[A-Za-z0-9_-]+",
+        text or "",
+        re.IGNORECASE,
+    ):
+        exact = canonical_post_url(match.group(0))
+        if not exact:
+            continue
+        key = exact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(exact)
+    return found
 
-    Never scan every /post/ anchor on the page — those include
-    recommended posts, replies, and quoted posts.
+
+def document_permalink(page):
+    """Resolve this page's post without scanning the whole feed.
+
+    Allowed sources, in order:
+    1. location / canonical / og:url
+    2. exactly one /@user/post/ID in the first article
+    3. exactly one /@user/post/ID in the hydrated HTML
     """
     values = page.evaluate(
         """() => {
@@ -111,14 +132,51 @@ def document_permalink(page):
         exact = canonical_post_url(value)
         if exact:
             return exact
+
+    first_article = page.evaluate(
+        """() => {
+          const collect = (root) => {
+            const urls = [];
+            if (!root) return urls;
+            for (const anchor of root.querySelectorAll('a[href*="/post/"]')) {
+              try {
+                const parsed = new URL(anchor.href, location.href);
+                const match = parsed.pathname.match(
+                  /^(\\/@[^/]+\\/post\\/[A-Za-z0-9_-]+)/i
+                );
+                if (!match) continue;
+                const exact = parsed.origin + match[1];
+                if (!urls.includes(exact)) urls.push(exact);
+              } catch {}
+            }
+            return urls;
+          };
+          const article = document.querySelector('main article, article');
+          const urls = collect(article);
+          return urls.length === 1 ? urls[0] : null;
+        }"""
+    )
+    exact = canonical_post_url(first_article)
+    if exact:
+        return exact
+
+    unique = permalinks_from_text(page.content())
+    if len(unique) == 1:
+        return unique[0]
     return None
 
 
-def wait_for_permalink(page, timeout_ms=10000):
+def wait_for_permalink(page, timeout_ms=15000):
     deadline = time.time() + (timeout_ms / 1000.0)
     found = document_permalink(page)
     while found is None and time.time() < deadline:
-        page.wait_for_timeout(500)
+        try:
+            page.wait_for_selector(
+                'a[href*="/post/"], link[rel="canonical"], meta[property="og:url"]',
+                timeout=500,
+            )
+        except Exception:
+            page.wait_for_timeout(500)
         found = document_permalink(page)
     return found
 
@@ -182,12 +240,12 @@ def main():
         page = context.new_page()
 
         page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(4000)
 
         exact_post_url = canonical_post_url(target_url) or document_permalink(page)
         if exact_post_url is None:
             page.mouse.wheel(0, 400)
-            exact_post_url = wait_for_permalink(page, timeout_ms=10000)
+            exact_post_url = wait_for_permalink(page, timeout_ms=15000)
 
         # A /share/ URL is not a post identity. If hydration never exposes
         # this document's own /@user/post/ID, fail closed instead of
