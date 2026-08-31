@@ -45,12 +45,21 @@ async function readThreadsCookieHeader(hostname) {
       const domain = rawDomain.replace(/^\./, "").toLowerCase();
       const requestHost = hostname.toLowerCase();
       const expiry = Number(rawExpiry);
+      const alternateDomain = domain.endsWith("threads.com")
+        ? domain.replace(/threads\.com$/i, "threads.net")
+        : domain.endsWith("threads.net")
+          ? domain.replace(/threads\.net$/i, "threads.com")
+          : "";
+
+      const hostMatches = (cookieDomain) =>
+        Boolean(cookieDomain) &&
+        (requestHost === cookieDomain ||
+          requestHost.endsWith("." + cookieDomain));
 
       if (
         !name ||
         (Number.isFinite(expiry) && expiry > 0 && expiry < now) ||
-        (requestHost !== domain &&
-          !requestHost.endsWith("." + domain))
+        (!hostMatches(domain) && !hostMatches(alternateDomain))
       ) {
         continue;
       }
@@ -259,6 +268,15 @@ async function inspectThreadsWithBrowser(url) {
     console.log("Threads browser fallback complete:", {
       cookieCount: Number(result.cookieCount) || 0,
       candidateCount: candidates.length,
+      finalPath: (() => {
+        try {
+          return new URL(
+            typeof result.finalUrl === "string" ? result.finalUrl : url
+          ).pathname;
+        } catch {
+          return "";
+        }
+      })(),
     });
 
     return {
@@ -675,51 +693,4 @@ async function downloadThreadsMedia(url) {
       const retainedPaths = new Set(
         retained.map((item) => item.file.path)
       );
-      for (const item of downloaded) {
-        if (!retainedPaths.has(item.file.path)) {
-          await fs.rm(item.file.path, { force: true });
-        }
-      }
-
-      console.log("Threads image selection:", {
-        downloadedImageCount: images.length,
-        retainedImageCount: retained.filter(
-          (item) => item.file.isImage
-        ).length,
-        largestArea,
-      });
-    }
-
-    const files = retained.map((item) => item.file);
-
-    if (files.length === 0) {
-      throw new Error(
-        "Threads media URLs were found, but no usable photos or videos could be downloaded."
-      );
-    }
-
-    console.log(
-      `Threads download complete (${files.length} file(s)).`
-    );
-
-    return {
-      files,
-      rawDir: jobDir,
-      platform: "threads",
-      creator:
-        extractThreadsCreator(finalUrl) ||
-        extractThreadsCreator(url),
-    };
-  } catch (error) {
-    await fs.rm(jobDir, {
-      recursive: true,
-      force: true,
-    });
-    throw error;
-  }
-}
-
-module.exports = {
-  downloadThreadsMedia,
-  collectCandidateUrls,
-};
+      for (const item 
