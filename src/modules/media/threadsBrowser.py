@@ -157,8 +157,8 @@ def main():
         elif len(exact_urls) == 1:
             exact_post_url = exact_urls[0]
         elif urlparse(target_url).path.lower().startswith("/share/"):
-            # Newer Threads share URLs can be the public identity of the
-            # post itself instead of redirecting to /@user/post/{code}.
+            # Some current Threads share URLs remain the public identity of
+            # the post instead of redirecting to /@user/post/{code}.
             exact_post_url = target_url
         else:
             raise RuntimeError(
@@ -172,6 +172,10 @@ def main():
             page.goto(exact_post_url, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(6000)
 
+        # Threads lazy-loads media in its newer div-based post layout.
+        page.mouse.wheel(0, 500)
+        page.wait_for_timeout(2500)
+
         exact_path = urlparse(exact_post_url).path.rstrip("/")
 
         dom_media = page.evaluate(
@@ -181,16 +185,60 @@ def main():
                 try { return new URL(value, location.href).pathname.replace(/\\/$/, ''); }
                 catch { return ''; }
               };
+              const mediaCount = (root) => {
+                if (!root) return 0;
+                const videos = root.querySelectorAll('video, video source').length;
+                const images = [...root.querySelectorAll('img')].filter(
+                  (image) => image.naturalWidth >= 300 && image.naturalHeight >= 300
+                ).length;
+                return videos + images;
+              };
               const articles = [...document.querySelectorAll('article')];
               const matched = articles.find((article) =>
                 [...article.querySelectorAll('a[href]')].some(
                   (anchor) => normalizePath(anchor.href) === exactPath
                 )
               );
-              // The browser is opened on the already-resolved exact post URL.
-              // Threads may omit a self-link from the root post, so use the
-              // first article (the root post) when no exact self-link exists.
-              const target = matched || articles[0] || null;
+              // Never use an arbitrary first article: Threads may place a
+              // recommended post there, which caused the prior mismatch.
+              let target = matched || null;
+
+              // Threads now frequently renders posts as nested divs without
+              // an <article>. Anchor the search to this post's own permalink,
+              // then choose the smallest ancestor that contains its media.
+              if (!target) {
+                const selfLink = [...document.querySelectorAll('a[href]')].find(
+                  (anchor) => normalizePath(anchor.href) === exactPath
+                );
+                let node = selfLink?.parentElement || null;
+                for (let depth = 0; node && depth < 12; depth += 1) {
+                  if (mediaCount(node) > 0) {
+                    target = node;
+                    break;
+                  }
+                  if (node.matches?.('main, body')) break;
+                  node = node.parentElement;
+                }
+              }
+
+              // On an exact post page the root post can omit its own link.
+              // Start at the first substantial media element and climb only
+              // to its nearest post-sized container, never the entire feed.
+              if (!target) {
+                const media = [...document.querySelectorAll('main video, main img')].find(
+                  (element) => element.tagName === 'VIDEO' ||
+                    (element.naturalWidth >= 300 && element.naturalHeight >= 300)
+                );
+                let node = media?.parentElement || null;
+                let best = null;
+                for (let depth = 0; node && depth < 8; depth += 1) {
+                  const count = mediaCount(node);
+                  if (count > 0 && count <= 20) best = node;
+                  if (node.matches?.('main, body') || count > 20) break;
+                  node = node.parentElement;
+                }
+                target = best;
+              }
               if (!target) return [];
 
               for (const video of target.querySelectorAll("video")) {
