@@ -178,7 +178,7 @@ def main():
 
         exact_path = urlparse(exact_post_url).path.rstrip("/")
 
-        dom_media = page.evaluate(
+        dom_result = page.evaluate(
             """(exactPath) => {
               const results = [];
               const normalizePath = (value) => {
@@ -239,7 +239,11 @@ def main():
                 }
                 target = best;
               }
-              if (!target) return [];
+              if (!target) return { media: [], postUrls: [] };
+
+              const postUrls = [...target.querySelectorAll('a[href*="/post/"]')]
+                .map((anchor) => anchor.href)
+                .filter(Boolean);
 
               for (const video of target.querySelectorAll("video")) {
                 const value = video.currentSrc || video.src;
@@ -277,10 +281,28 @@ def main():
                 seenImages.add(identity);
                 results.push(value);
               }
-              return results;
+              return { media: results, postUrls };
             }""",
             exact_path,
         )
+
+        dom_media = (dom_result or {}).get("media", [])
+        target_post_urls = []
+        for value in (dom_result or {}).get("postUrls", []):
+            exact = canonical_post_url(value)
+            if exact and exact not in target_post_urls:
+                target_post_urls.append(exact)
+
+        # A /share/ page often keeps the short URL in the address bar even
+        # though the rendered post contains its exact /@user/post/code link.
+        # Promote only a single permalink found inside the same matched media
+        # container. This satisfies the downloader's identity check without
+        # ever accepting a neighboring feed post.
+        if (
+            urlparse(exact_post_url).path.lower().startswith("/share/")
+            and len(target_post_urls) == 1
+        ):
+            exact_post_url = target_post_urls[0]
 
         final_url = exact_post_url
         title = page.title()
