@@ -536,13 +536,41 @@ async function downloadThreadsMedia(url) {
     console.log("Threads page inspection starting.");
 
     const shareUrl = isThreadsShareUrl(url);
-    const pageResult = await fetchThreadsPage(url);
-    const { html, sourceUrl, status } = pageResult;
-    let finalUrl = pageResult.finalUrl;
+    let html = "";
+    let sourceUrl = url;
+    let status = 0;
+    let finalUrl = url;
+    let pageFetchFailed = false;
+
+    try {
+      const pageResult = await fetchThreadsPage(url);
+      html = pageResult.html;
+      sourceUrl = pageResult.sourceUrl;
+      status = pageResult.status;
+      finalUrl = pageResult.finalUrl;
+    } catch (error) {
+      pageFetchFailed = true;
+      console.warn(
+        "Threads static page fetch failed; continuing with browser:",
+        error instanceof Error ? error.message : error
+      );
+    }
+
     const decodedHtml = decodePageText(html);
-    const diagnostics = inspectThreadsPage(decodedHtml);
+    const diagnostics = html
+      ? inspectThreadsPage(decodedHtml)
+      : {
+          characters: 0,
+          hasOgImage: false,
+          hasOgVideo: false,
+          hasImageVersions: false,
+          hasVideoVersions: false,
+          hasLoginPrompt: false,
+          cdnUrlCount: 0,
+        };
     const postScopedBrowserRequired =
       shareUrl ||
+      pageFetchFailed ||
       isExactThreadsPostUrl(url) ||
       isExactThreadsPostUrl(finalUrl);
     let candidates = postScopedBrowserRequired
