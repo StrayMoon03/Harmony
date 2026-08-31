@@ -523,7 +523,13 @@ async function downloadThreadsMedia(url) {
     let finalUrl = pageResult.finalUrl;
     const decodedHtml = decodePageText(html);
     const diagnostics = inspectThreadsPage(decodedHtml);
-    let candidates = collectCandidateUrls(decodedHtml);
+    const postScopedBrowserRequired =
+      shareUrl ||
+      isExactThreadsPostUrl(url) ||
+      isExactThreadsPostUrl(finalUrl);
+    let candidates = postScopedBrowserRequired
+      ? []
+      : collectCandidateUrls(decodedHtml);
 
     console.log("Threads page diagnostics:", {
       status,
@@ -531,9 +537,15 @@ async function downloadThreadsMedia(url) {
       finalHost: new URL(finalUrl).hostname,
       ...diagnostics,
       candidateCount: candidates.length,
+      postScopedBrowserRequired,
     });
 
-    if (candidates.length === 0) {
+    // Static Threads HTML can contain media from suggested or neighboring
+    // feed posts. For a share URL or an exact post URL, never trust those
+    // page-wide candidates. The browser helper scopes extraction to the root
+    // post article; if it cannot prove that scope, fail closed instead of
+    // uploading unrelated media.
+    if (postScopedBrowserRequired || candidates.length === 0) {
       const browserResult =
         await inspectThreadsWithBrowser(finalUrl);
       candidates = browserResult.candidates;
