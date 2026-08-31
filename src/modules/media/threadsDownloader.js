@@ -693,4 +693,51 @@ async function downloadThreadsMedia(url) {
       const retainedPaths = new Set(
         retained.map((item) => item.file.path)
       );
-      for (const item 
+      for (const item of downloaded) {
+        if (!retainedPaths.has(item.file.path)) {
+          await fs.rm(item.file.path, { force: true });
+        }
+      }
+
+      console.log("Threads image selection:", {
+        downloadedImageCount: images.length,
+        retainedImageCount: retained.filter(
+          (item) => item.file.isImage
+        ).length,
+        largestArea,
+      });
+    }
+
+    const files = retained.map((item) => item.file);
+
+    if (files.length === 0) {
+      throw new Error(
+        "Threads media URLs were found, but no usable photos or videos could be downloaded."
+      );
+    }
+
+    console.log(
+      `Threads download complete (${files.length} file(s)).`
+    );
+
+    return {
+      files,
+      rawDir: jobDir,
+      platform: "threads",
+      creator:
+        extractThreadsCreator(finalUrl) ||
+        extractThreadsCreator(url),
+    };
+  } catch (error) {
+    await fs.rm(jobDir, {
+      recursive: true,
+      force: true,
+    });
+    throw error;
+  }
+}
+
+module.exports = {
+  downloadThreadsMedia,
+  collectCandidateUrls,
+};
