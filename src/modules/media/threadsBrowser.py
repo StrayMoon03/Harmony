@@ -90,6 +90,39 @@ def canonical_post_url(value):
     return match.group(0) if match else None
 
 
+def document_permalink(page):
+    """Use only this document's own URL, canonical link, and og:url.
+
+    Never scan every /post/ anchor on the page — those include
+    recommended posts, replies, and quoted posts.
+    """
+    values = page.evaluate(
+        """() => {
+          const values = [];
+          if (location.href) values.push(location.href);
+          const canonical = document.querySelector('link[rel="canonical"]');
+          const ogUrl = document.querySelector('meta[property="og:url"]');
+          if (canonical && canonical.href) values.push(canonical.href);
+          if (ogUrl && ogUrl.content) values.push(ogUrl.content);
+          return values;
+        }"""
+    )
+    for value in values or []:
+        exact = canonical_post_url(value)
+        if exact:
+            return exact
+    return None
+
+
+def wait_for_permalink(page, timeout_ms=10000):
+    deadline = time.time() + (timeout_ms / 1000.0)
+    found = document_permalink(page)
+    while found is None and time.time() < deadline:
+        page.wait_for_timeout(500)
+        found = document_permalink(page)
+    return found
+
+
 def main():
     if len(sys.argv) < 2:
         raise RuntimeError("Threads URL is required")
@@ -119,58 +152,54 @@ def main():
 
         cookies = load_netscape_cookies(cookie_path)
         if cookies:
-            context.add_cookies(cookies)
+            mirrored = []
+            seen = set()
+            for item in cookies:
+                variants = [item]
+                domain = item.get("domain") or ""
+                if "threads.com" in domain.lower() and "threads.net" not in domain.lower():
+                    twin = dict(item)
+                    twin["domain"] = domain.replace("threads.com", "threads.net").replace(
+                        "THREADS.COM", "threads.net"
+                    )
+                    variants.append(twin)
+                elif "threads.net" in domain.lower():
+                    twin = dict(item)
+                    twin["domain"] = domain.replace("threads.net", "threads.com")
+                    variants.append(twin)
+                for variant in variants:
+                    key = (
+                        variant.get("name"),
+                        variant.get("domain"),
+                        variant.get("path", "/"),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    mirrored.append(variant)
+            context.add_cookies(mirrored)
 
         page = context.new_page()
 
         page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(3000)
 
-        identity_candidates = page.evaluate(
-            """() => {
-              const values = [location.href];
-              const canonical = document.querySelector('link[rel="canonical"]');
-              const ogUrl = document.querySelector('meta[property="og:url"]');
-              if (canonical?.href) values.push(canonical.href);
-              if (ogUrl?.content) values.push(ogUrl.content);
-              for (const anchor of document.querySelectorAll('a[href*="/post/"]')) {
-                values.push(anchor.href);
-              }
-              return values;
-            }"""
-        )
+        exact_post_url = canonical_post_url(target_url) or document_permalink(page)
+        if exact_post_url is None:
+            page.mouse.wheel(0, 400)
+            exact_post_url = wait_for_permalink(page, timeout_ms=10000)
 
-        exact_urls = []
-        for value in identity_candidates or []:
-            exact = canonical_post_url(value)
-            if exact and exact not in exact_urls:
-                exact_urls.append(exact)
-
-        preferred = []
-        for value in (page.url,) + tuple((identity_candidates or [])[:3]):
-            exact = canonical_post_url(value)
-            if exact and exact not in preferred:
-                preferred.append(exact)
-
-        if preferred:
-            exact_post_url = preferred[0]
-        elif len(exact_urls) == 1:
-            exact_post_url = exact_urls[0]
-        elif urlparse(target_url).path.lower().startswith("/share/"):
-            # Some current Threads share URLs remain the public identity of
-            # the post instead of redirecting to /@user/post/{code}.
-            exact_post_url = target_url
-        else:
+        # A /share/ URL is not a post identity. If hydration never exposes
+        # this document's own /@user/post/ID, fail closed instead of
+        # scraping neighboring feed media.
+        if exact_post_url is None:
             raise RuntimeError(
                 "Threads page did not resolve to one verifiable post"
             )
 
-        if (
-            canonical_post_url(exact_post_url)
-            and canonical_post_url(page.url) != exact_post_url
-        ):
+        if canonical_post_url(page.url) != exact_post_url:
             page.goto(exact_post_url, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(6000)
+            page.wait_for_timeout(4000)
 
         # Threads lazy-loads media in its newer div-based post layout.
         page.mouse.wheel(0, 500)
@@ -224,7 +253,10 @@ def main():
               // On an exact post page the root post can omit its own link.
               // Start at the first substantial media element and climb only
               // to its nearest post-sized container, never the entire feed.
-              if (!target) {
+              // Never do this on a /share/ or feed URL — pagePath must
+              // already be this post's permalink.
+              const pagePath = normalizePath(location.href);
+              if (!target && pagePath === exactPath) {
                 const media = [...document.querySelectorAll('main video, main img')].find(
                   (element) => element.tagName === 'VIDEO' ||
                     (element.naturalWidth >= 300 && element.naturalHeight >= 300)
@@ -287,23 +319,6 @@ def main():
         )
 
         dom_media = (dom_result or {}).get("media", [])
-        target_post_urls = []
-        for value in (dom_result or {}).get("postUrls", []):
-            exact = canonical_post_url(value)
-            if exact and exact not in target_post_urls:
-                target_post_urls.append(exact)
-
-        # A /share/ page often keeps the short URL in the address bar even
-        # though the rendered post contains its exact /@user/post/code link.
-        # Promote only a single permalink found inside the same matched media
-        # container. This satisfies the downloader's identity check without
-        # ever accepting a neighboring feed post.
-        if (
-            urlparse(exact_post_url).path.lower().startswith("/share/")
-            and len(target_post_urls) == 1
-        ):
-            exact_post_url = target_post_urls[0]
-
         final_url = exact_post_url
         title = page.title()
         browser.close()
