@@ -891,6 +891,9 @@ async function downloadFacebookMedia(url, originalUrl = url) {
   const identitySensitive =
     /\/groups\/[^/]+\/(?:posts|permalink)\//i.test(url) ||
     /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
+    /\/reels?\/[^/?#]+/i.test(url) ||
+    /\/videos\/\d+/i.test(url) ||
+    /[?&]v=\d+/i.test(url) ||
     /\/share\/[vrp]\//i.test(originalUrl);
   // Try both the canonical URL and the original /share/ URL. Facebook's
   // downloaders sometimes expose the video on only one of those forms.
@@ -1019,15 +1022,12 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
       const imageCount = files.filter((f) => f.isImage).length;
       const videoCount = files.filter((f) => f.isVideo).length;
-      const existingBest = await loadBestSnapshot(jobDir);
-      const bestHasImage = existingBest.some((file) => file.isImage);
-      const bestHasVideo = existingBest.some((file) => file.isVideo);
-      const addsMissingMediaType =
-        (bestHasImage && !bestHasVideo && videoCount > 0) ||
-        (bestHasVideo && !bestHasImage && imageCount > 0);
-      const candidateFiles = addsMissingMediaType
-        ? [...existingBest, ...files]
-        : files;
+      // Never assemble one Facebook post by combining output from
+      // different extractors. Each strategy can see a different feed item;
+      // merging their files is how unrelated photos and videos become one
+      // false "multi-photo" post. A winning snapshot must come entirely from
+      // one post-bound strategy.
+      const candidateFiles = files;
       const score = scoreFiles(candidateFiles, preferGalleryFirst);
 
       console.log(
@@ -1037,9 +1037,7 @@ async function downloadFacebookMedia(url, originalUrl = url) {
 
       if (score > bestScore) {
         bestScore = score;
-        bestStrategyName = addsMissingMediaType
-          ? `${bestStrategyName} + ${strategy.name}`
-          : strategy.name;
+        bestStrategyName = strategy.name;
         await snapshotBest(jobDir, candidateFiles);
         console.log(
           `Facebook new best snapshot via ${strategy.name}`
