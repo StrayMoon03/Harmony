@@ -201,7 +201,7 @@ function looksLikeFacebookVideoPost(url) {
     /\/reels?\/[^/?#]+/i.test(url) ||
     /\/videos\/\d+/i.test(url) ||
     /[?&]v=\d+/i.test(url) ||
-    /\/share\/(?:v|reel)\//i.test(url)
+    /\/share\/(?:r|v|reel)\//i.test(url)
   );
 }
 
