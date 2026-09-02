@@ -170,7 +170,7 @@ function looksLikeFacebookPhotoPost(url) {
   return (
     /[?&]fbid=\d+/i.test(url) ||
     /\/photo/i.test(url) ||
-    /\/share\/(?:p|r|v|reel)\//i.test(url) ||
+    /\/share\/p\//i.test(url) ||
     /story_fbid=/i.test(url) ||
     /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
     /\/groups\/[^/]+\/(?:posts|permalink)\/\d+/i.test(url) ||
@@ -189,6 +189,22 @@ function looksLikeFacebookPhotoPost(url) {
  * @param {string} url
  * @returns {boolean}
  */
+/**
+ * A Facebook video surface must never be classified from its poster frames.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function looksLikeFacebookVideoPost(url) {
+  if (!url) return false;
+  return (
+    /\/reels?\/[^/?#]+/i.test(url) ||
+    /\/videos\/\d+/i.test(url) ||
+    /[?&]v=\d+/i.test(url) ||
+    /\/share\/(?:r|v|reel)\//i.test(url)
+  );
+}
+
 function isExplicitSinglePhotoFbid(url) {
   if (!url) return false;
   try {
@@ -884,9 +900,13 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     }`
   );
 
+  const videoSurface =
+    looksLikeFacebookVideoPost(url) ||
+    looksLikeFacebookVideoPost(originalUrl);
   const preferGalleryFirst =
-    looksLikeFacebookPhotoPost(url) ||
-    looksLikeFacebookPhotoPost(originalUrl);
+    !videoSurface &&
+    (looksLikeFacebookPhotoPost(url) ||
+      looksLikeFacebookPhotoPost(originalUrl));
   const photoPageUrl = originalUrl || url;
   const identitySensitive =
     /\/groups\/[^/]+\/(?:posts|permalink)\//i.test(url) ||
@@ -1020,14 +1040,34 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         continue;
       }
 
-      const imageCount = files.filter((f) => f.isImage).length;
-      const videoCount = files.filter((f) => f.isVideo).length;
+      const extractedImageCount = files.filter((f) => f.isImage).length;
+      const extractedVideoCount = files.filter((f) => f.isVideo).length;
+      // Facebook often exposes a Reel's poster and preview frames beside the
+      // actual MP4. Those images are not separate post attachments. Once a
+      // verified video exists on a video surface, keep only video files so a
+      // single Reel cannot become a false "Multi-Photo" collage.
+      const candidateFiles =
+        videoSurface && extractedVideoCount > 0
+          ? files.filter((f) => f.isVideo)
+          : files;
+      const imageCount = candidateFiles.filter((f) => f.isImage).length;
+      const videoCount = candidateFiles.filter((f) => f.isVideo).length;
+
+      if (
+        videoSurface &&
+        extractedVideoCount > 0 &&
+        extractedImageCount > 0
+      ) {
+        console.log(
+          `Facebook video surface: ignored ${extractedImageCount} poster/preview image(s).`
+        );
+      }
+
       // Never assemble one Facebook post by combining output from
       // different extractors. Each strategy can see a different feed item;
       // merging their files is how unrelated photos and videos become one
       // false "multi-photo" post. A winning snapshot must come entirely from
       // one post-bound strategy.
-      const candidateFiles = files;
       const score = scoreFiles(candidateFiles, preferGalleryFirst);
 
       console.log(
@@ -1078,7 +1118,20 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     }
   }
 
-  const finalFiles = await loadBestSnapshot(jobDir);
+  let finalFiles = await loadBestSnapshot(jobDir);
+
+  // Final invariant: a known Reel/video with a playable video must never
+  // leave this downloader carrying Facebook's poster frames as photos.
+  if (videoSurface && finalFiles.some((file) => file.isVideo)) {
+    const videoFiles = finalFiles.filter((file) => file.isVideo);
+    const removed = finalFiles.length - videoFiles.length;
+    if (removed > 0) {
+      console.log(
+        `Facebook final Reel guard removed ${removed} poster/preview image(s).`
+      );
+    }
+    finalFiles = videoFiles;
+  }
 
   if (finalFiles.length === 0) {
     await fs.rm(jobDir, { recursive: true, force: true });
