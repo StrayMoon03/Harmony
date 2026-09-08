@@ -543,6 +543,7 @@ async function downloadThreadsMedia(url, options = {}) {
     let status = 0;
     let finalUrl = url;
     let pageFetchFailed = false;
+    let fallbackCreator = null;
 
     try {
       const pageResult = await fetchThreadsPage(url);
@@ -600,13 +601,16 @@ async function downloadThreadsMedia(url, options = {}) {
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
       } catch (browserError) {
-        const fallback = options.discordEmbedFallback;
+        const fallback = typeof options.getDiscordEmbedFallback === "function"
+          ? await options.getDiscordEmbedFallback()
+          : options.discordEmbedFallback;
         const fallbackCandidates = Array.isArray(fallback?.candidates)
           ? fallback.candidates.map(validCdnUrl).filter(Boolean)
           : [];
         if (!fallbackCandidates.length) throw browserError;
         candidates = fallbackCandidates;
         finalUrl = fallback.finalUrl || finalUrl;
+        fallbackCreator = fallback.creator || null;
         console.log(
           `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
         );
@@ -768,6 +772,7 @@ async function downloadThreadsMedia(url, options = {}) {
       rawDir: jobDir,
       platform: "threads",
       creator:
+        fallbackCreator ||
         options.discordEmbedFallback?.creator ||
         extractThreadsCreator(finalUrl) ||
         extractThreadsCreator(url),
