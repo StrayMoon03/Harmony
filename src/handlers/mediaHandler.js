@@ -214,14 +214,6 @@ async function sendTikTokStreamingPreview(
   await suppressOriginalEmbeds(message);
 }
 
-function safeUrlHost(value) {
-  try {
-    return value ? new URL(value).hostname.toLowerCase() : null;
-  } catch {
-    return value ? "invalid-url" : null;
-  }
-}
-
 async function getThreadsDiscordEmbedFallback(message, originalUrl) {
   const expectedId = extractThreadsId(originalUrl);
 
@@ -240,48 +232,43 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
       }
     }
 
-    console.log("Threads Discord embed poll:", {
-      attempt,
-      fetchFailed,
-      embedCount: current.embeds.length,
-      embeds: current.embeds.map((item) => ({
-        provider: item.provider?.name || null,
-        urlHost: safeUrlHost(item.url),
-        shortcodeMatches: Boolean(
-          expectedId && String(item.url || "").includes(expectedId)
-        ),
-        hasVideoUrl: Boolean(item.video?.url),
-        videoHost: safeUrlHost(item.video?.url),
-        hasVideoProxy: Boolean(item.video?.proxyURL),
-        videoProxyHost: safeUrlHost(item.video?.proxyURL),
-        hasImageUrl: Boolean(item.image?.url),
-        imageHost: safeUrlHost(item.image?.url),
-        hasImageProxy: Boolean(item.image?.proxyURL),
-        imageProxyHost: safeUrlHost(item.image?.proxyURL),
-        hasThumbnailUrl: Boolean(item.thumbnail?.url),
-        thumbnailHost: safeUrlHost(item.thumbnail?.url),
-        hasThumbnailProxy: Boolean(item.thumbnail?.proxyURL),
-        thumbnailProxyHost: safeUrlHost(item.thumbnail?.proxyURL),
-      })),
-    });
     const embed = current.embeds.find((item) => {
       const provider = String(item.provider?.name || "").toLowerCase();
       const url = String(item.url || "").toLowerCase();
-      return provider.includes("threads") || url.includes("threads.com") || url.includes("threads.net");
+      const belongsToPost = Boolean(
+        expectedId && url.includes(expectedId.toLowerCase())
+      );
+      return belongsToPost && (
+        provider.includes("threads") ||
+        url.includes("threads.com") ||
+        url.includes("threads.net")
+      );
     });
 
     if (embed) {
       const video = embed.video?.url || embed.video?.proxyURL;
       const image = embed.image?.url || embed.image?.proxyURL;
       const candidates = video ? [video] : image ? [image] : [];
-      if (candidates.length) {
-        const titleCreator = String(embed.title || "")
-          .replace(/\s+on Threads\s*$/i, "")
-          .trim();
+      const titleCreator = String(embed.title || "")
+        .replace(/\s+on Threads\s*$/i, "")
+        .trim();
+      const identityText = `${embed.author?.name || ""} ${embed.title || ""}`;
+      const handle = identityText.match(/@([A-Za-z0-9._]+)/)?.[1] || null;
+      const canonicalUrl = handle && expectedId
+        ? `https://www.threads.com/@${handle}/post/${expectedId}`
+        : null;
+
+      if (candidates.length || canonicalUrl) {
+        console.log(
+          candidates.length
+            ? "Threads Discord embed supplied exact-message media."
+            : "Threads Discord embed supplied canonical post identity."
+        );
         return {
           candidates,
           creator: embed.author?.name || titleCreator || null,
           finalUrl: embed.url || null,
+          canonicalUrl,
         };
       }
     }
@@ -290,7 +277,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
-  console.warn("Threads Discord embed fallback found no video or image candidate.");
+  console.warn("Threads Discord embed fallback found no usable media or post identity.");
   return null;
 }
 
