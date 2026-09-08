@@ -125,7 +125,9 @@ function validCdnUrl(raw) {
       !host.endsWith(".fbcdn.net") &&
       !host.endsWith(".cdninstagram.com") &&
       !host.endsWith(".threads.net") &&
-      !host.endsWith(".threads.com")
+      !host.endsWith(".threads.com") &&
+      host !== "media.discordapp.net" &&
+      !host.endsWith(".discordapp.net")
     ) {
       return null;
     }
@@ -523,7 +525,7 @@ async function fetchThreadsPage(url) {
  *   creator: string|null
  * }>}
  */
-async function downloadThreadsMedia(url) {
+async function downloadThreadsMedia(url, options = {}) {
   await fs.mkdir(TEMP_ROOT, { recursive: true });
 
   const jobDir = path.join(
@@ -592,10 +594,23 @@ async function downloadThreadsMedia(url) {
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
     if (postScopedBrowserRequired || candidates.length === 0) {
-      const browserResult =
-        await inspectThreadsWithBrowser(finalUrl);
-      candidates = browserResult.candidates;
-      finalUrl = browserResult.finalUrl || finalUrl;
+      try {
+        const browserResult =
+          await inspectThreadsWithBrowser(finalUrl);
+        candidates = browserResult.candidates;
+        finalUrl = browserResult.finalUrl || finalUrl;
+      } catch (browserError) {
+        const fallback = options.discordEmbedFallback;
+        const fallbackCandidates = Array.isArray(fallback?.candidates)
+          ? fallback.candidates.map(validCdnUrl).filter(Boolean)
+          : [];
+        if (!fallbackCandidates.length) throw browserError;
+        candidates = fallbackCandidates;
+        finalUrl = fallback.finalUrl || finalUrl;
+        console.log(
+          `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
+        );
+      }
     }
 
     if (
@@ -753,6 +768,7 @@ async function downloadThreadsMedia(url) {
       rawDir: jobDir,
       platform: "threads",
       creator:
+        options.discordEmbedFallback?.creator ||
         extractThreadsCreator(finalUrl) ||
         extractThreadsCreator(url),
     };
