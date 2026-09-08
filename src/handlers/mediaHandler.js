@@ -214,11 +214,56 @@ async function sendTikTokStreamingPreview(
   await suppressOriginalEmbeds(message);
 }
 
-async function getThreadsDiscordEmbedFallback(message) {
+function safeUrlHost(value) {
+  try {
+    return value ? new URL(value).hostname.toLowerCase() : null;
+  } catch {
+    return value ? "invalid-url" : null;
+  }
+}
+
+async function getThreadsDiscordEmbedFallback(message, originalUrl) {
+  const expectedId = extractThreadsId(originalUrl);
+
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const current = attempt === 0
-      ? message
-      : await message.fetch().catch(() => message);
+    let current = message;
+    let fetchFailed = false;
+    if (attempt > 0) {
+      try {
+        current = await message.fetch(true);
+      } catch (error) {
+        fetchFailed = true;
+        console.warn(
+          `Threads Discord embed fetch attempt ${attempt} failed:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+
+    console.log("Threads Discord embed poll:", {
+      attempt,
+      fetchFailed,
+      embedCount: current.embeds.length,
+      embeds: current.embeds.map((item) => ({
+        provider: item.provider?.name || null,
+        urlHost: safeUrlHost(item.url),
+        shortcodeMatches: Boolean(
+          expectedId && String(item.url || "").includes(expectedId)
+        ),
+        hasVideoUrl: Boolean(item.video?.url),
+        videoHost: safeUrlHost(item.video?.url),
+        hasVideoProxy: Boolean(item.video?.proxyURL),
+        videoProxyHost: safeUrlHost(item.video?.proxyURL),
+        hasImageUrl: Boolean(item.image?.url),
+        imageHost: safeUrlHost(item.image?.url),
+        hasImageProxy: Boolean(item.image?.proxyURL),
+        imageProxyHost: safeUrlHost(item.image?.proxyURL),
+        hasThumbnailUrl: Boolean(item.thumbnail?.url),
+        thumbnailHost: safeUrlHost(item.thumbnail?.url),
+        hasThumbnailProxy: Boolean(item.thumbnail?.proxyURL),
+        thumbnailProxyHost: safeUrlHost(item.thumbnail?.proxyURL),
+      })),
+    });
     const embed = current.embeds.find((item) => {
       const provider = String(item.provider?.name || "").toLowerCase();
       const url = String(item.url || "").toLowerCase();
@@ -245,6 +290,7 @@ async function getThreadsDiscordEmbedFallback(message) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
+  console.warn("Threads Discord embed fallback found no video or image candidate.");
   return null;
 }
 
@@ -1125,7 +1171,7 @@ async function handleMediaMessage(message) {
       const downloadResult =
         await downloadThreadsMedia(originalUrl, {
           getDiscordEmbedFallback: () =>
-            getThreadsDiscordEmbedFallback(message),
+            getThreadsDiscordEmbedFallback(message, originalUrl),
         });
 
       const classification = classify(
