@@ -607,6 +607,12 @@ async function downloadThreadsMedia(url, options = {}) {
         const fallbackCandidates = Array.isArray(fallback?.candidates)
           ? fallback.candidates.map(validCdnUrl).filter(Boolean)
           : [];
+        console.log("Threads Discord fallback filtering:", {
+          suppliedCount: Array.isArray(fallback?.candidates)
+            ? fallback.candidates.length
+            : 0,
+          acceptedCount: fallbackCandidates.length,
+        });
         if (!fallbackCandidates.length) throw browserError;
         candidates = fallbackCandidates;
         finalUrl = fallback.finalUrl || finalUrl;
