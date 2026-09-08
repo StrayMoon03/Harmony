@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import html
 import os
 import sys
 import time
@@ -91,16 +92,39 @@ def canonical_post_url(value):
 
 
 def permalinks_from_text(text):
+    decoded = html.unescape(text or "")
+    # Threads places the post permalink inside hydrated JSON using several
+    # escape styles. Decode only URL punctuation before matching; the result
+    # is still accepted only when the page exposes exactly one post URL.
+    decoded = re.sub(r"\\u002[fF]", "/", decoded)
+    decoded = re.sub(r"\\u003[aA]", ":", decoded)
+    decoded = re.sub(r"\\u002[eE]", ".", decoded)
+    decoded = decoded.replace(r"\/", "/")
+
     found = []
     seen = set()
     for match in re.finditer(
         r"https?://(?:www\.)?threads\.(?:com|net)/@[A-Za-z0-9._]+/post/[A-Za-z0-9_-]+",
-        text or "",
+        decoded,
         re.IGNORECASE,
     ):
         exact = canonical_post_url(match.group(0))
         if not exact:
             continue
+        key = exact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(exact)
+
+    # Some hydrated payloads store only the pathname. It is safe to promote
+    # one unique pathname, but never choose between multiple feed posts.
+    for match in re.finditer(
+        r"(?<![A-Za-z0-9._-])/@[A-Za-z0-9._]+/post/[A-Za-z0-9_-]+",
+        decoded,
+        re.IGNORECASE,
+    ):
+        exact = "https://www.threads.com" + match.group(0)
         key = exact.lower()
         if key in seen:
             continue
