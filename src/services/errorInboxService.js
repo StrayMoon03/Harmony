@@ -1,6 +1,9 @@
 const { EmbedBuilder } = require("discord.js");
 const { getErrorInboxSettings } = require("../stores/errorInboxStore");
 
+const recentMediaErrors = new Map();
+const ERROR_DEDUPE_MS = 5 * 60 * 1000;
+
 function firstLink(content) {
   return String(content || "").match(/https?:\/\/[^\s<>]+/i)?.[0] || null;
 }
@@ -70,6 +73,19 @@ async function logMediaError(message, error) {
   const settings = getErrorInboxSettings();
   if (!settings?.enabled || !message?.client) return false;
 
+  const dedupeKey = message.id ||
+    `${message.guild?.id || "dm"}:${message.channelId || "unknown"}:${firstLink(message.content) || "no-link"}`;
+  const now = Date.now();
+  const previous = recentMediaErrors.get(dedupeKey);
+  if (previous && now - previous < ERROR_DEDUPE_MS) {
+    console.log(`Duplicate Harmony media error suppressed for message ${dedupeKey}.`);
+    return false;
+  }
+  recentMediaErrors.set(dedupeKey, now);
+  for (const [key, timestamp] of recentMediaErrors) {
+    if (now - timestamp >= ERROR_DEDUPE_MS) recentMediaErrors.delete(key);
+  }
+
   const destination = await resolveDestination(message.client, settings);
   if (!destination) {
     console.warn("Harmony error inbox channel is unavailable.");
@@ -115,7 +131,7 @@ async function logMediaError(message, error) {
     allowedMentions: { parse: [] },
   });
 
-  console.log(`Harmony media error reported as ${errorId}.`);
+  console.error(`Harmony media error reported as ${errorId}:`, error);
   return true;
 }
 
