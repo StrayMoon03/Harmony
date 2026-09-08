@@ -131,7 +131,9 @@ async function logMediaError(message, error) {
     allowedMentions: { parse: [] },
   });
 
-  console.error(`Harmony media error reported as ${errorId}:`, error);
+  console.log(
+    `Harmony media error reported as ${errorId}: ${error?.message || String(error)}`
+  );
   return true;
 }
 
