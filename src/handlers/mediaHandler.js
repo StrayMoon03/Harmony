@@ -214,6 +214,40 @@ async function sendTikTokStreamingPreview(
   await suppressOriginalEmbeds(message);
 }
 
+async function getThreadsDiscordEmbedFallback(message) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = attempt === 0
+      ? message
+      : await message.fetch().catch(() => message);
+    const embed = current.embeds.find((item) => {
+      const provider = String(item.provider?.name || "").toLowerCase();
+      const url = String(item.url || "").toLowerCase();
+      return provider.includes("threads") || url.includes("threads.com") || url.includes("threads.net");
+    });
+
+    if (embed) {
+      const video = embed.video?.url || embed.video?.proxyURL;
+      const image = embed.image?.url || embed.image?.proxyURL;
+      const candidates = video ? [video] : image ? [image] : [];
+      if (candidates.length) {
+        const titleCreator = String(embed.title || "")
+          .replace(/\s+on Threads\s*$/i, "")
+          .trim();
+        return {
+          candidates,
+          creator: embed.author?.name || titleCreator || null,
+          finalUrl: embed.url || null,
+        };
+      }
+    }
+
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  return null;
+}
+
 /**
  * Handles supported social-media links
  * in a Discord message.
@@ -1088,8 +1122,13 @@ async function handleMediaMessage(message) {
         `Threads link accepted: ${mediaId}`
       );
 
+      const discordEmbedFallback =
+        await getThreadsDiscordEmbedFallback(message);
+
       const downloadResult =
-        await downloadThreadsMedia(originalUrl);
+        await downloadThreadsMedia(originalUrl, {
+          discordEmbedFallback,
+        });
 
       const classification = classify(
         downloadResult.files,
