@@ -252,23 +252,13 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
       const titleCreator = String(embed.title || "")
         .replace(/\s+on Threads\s*$/i, "")
         .trim();
-      const identityText = `${embed.author?.name || ""} ${embed.title || ""}`;
-      const handle = identityText.match(/@([A-Za-z0-9._]+)/)?.[1] || null;
-      const canonicalUrl = handle && expectedId
-        ? `https://www.threads.com/@${handle}/post/${expectedId}`
-        : null;
 
-      if (candidates.length || canonicalUrl) {
-        console.log(
-          candidates.length
-            ? "Threads Discord embed supplied exact-message media."
-            : "Threads Discord embed supplied canonical post identity."
-        );
+      if (candidates.length) {
+        console.log("Threads Discord embed supplied exact-message media.");
         return {
           candidates,
           creator: embed.author?.name || titleCreator || null,
           finalUrl: embed.url || null,
-          canonicalUrl,
         };
       }
     }
@@ -277,7 +267,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
-  console.warn("Threads Discord embed fallback found no usable media or post identity.");
+  console.warn("Threads Discord embed fallback found no usable video or image media.");
   return null;
 }
 

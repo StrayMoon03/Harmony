@@ -226,6 +226,83 @@ function isExactThreadsPostUrl(url) {
   }
 }
 
+function exactThreadsPostUrl(raw, baseUrl) {
+  try {
+    const parsed = new URL(raw, baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      parsed.protocol !== "https:" ||
+      !(
+        host === "threads.com" ||
+        host.endsWith(".threads.com") ||
+        host === "threads.net" ||
+        host.endsWith(".threads.net")
+      ) ||
+      !/^\/@[^/]+\/post\/[A-Za-z0-9_-]+\/?$/i.test(
+        decodeURIComponent(parsed.pathname)
+      )
+    ) {
+      return null;
+    }
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveThreadsShareRedirect(url) {
+  const userAgents = [
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+  ];
+
+  for (const userAgent of userAgents) {
+    for (const method of ["HEAD", "GET"]) {
+      try {
+        const response = await fetch(url, {
+          method,
+          redirect: "manual",
+          headers: {
+            "User-Agent": userAgent,
+            Accept: "text/html,application/xhtml+xml",
+          },
+          signal: AbortSignal.timeout(15000),
+        });
+        const location = response.headers.get("location");
+        const redirectUrl = location
+          ? exactThreadsPostUrl(location, url)
+          : null;
+        if (redirectUrl) {
+          console.log("Threads share redirect resolved:", {
+            finalPath: new URL(redirectUrl).pathname,
+          });
+          return redirectUrl;
+        }
+
+        if (method === "GET" && response.ok) {
+          const html = await response.text();
+          const ogUrl = metaContent(decodePageText(html), "og:url");
+          const canonicalUrl = exactThreadsPostUrl(ogUrl, url);
+          if (canonicalUrl) {
+            console.log("Threads share OG identity resolved:", {
+              finalPath: new URL(canonicalUrl).pathname,
+            });
+            return canonicalUrl;
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `Threads share ${method} resolution attempt failed:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+  }
+
+  return null;
+}
+
 async function inspectThreadsWithBrowser(url) {
   const pythonPath = process.env.PYTHON_PATH || "python3";
   const cookiePath = process.env.THREADS_COOKIES || "";
@@ -538,6 +615,14 @@ async function downloadThreadsMedia(url, options = {}) {
     console.log("Threads page inspection starting.");
 
     const shareUrl = isThreadsShareUrl(url);
+    if (shareUrl) {
+      const resolvedUrl = await resolveThreadsShareRedirect(url);
+      if (resolvedUrl) {
+        url = resolvedUrl;
+      } else {
+        console.warn("Threads share redirect did not expose one exact post URL.");
+      }
+    }
     let html = "";
     let sourceUrl = url;
     let status = 0;
@@ -614,21 +699,6 @@ async function downloadThreadsMedia(url, options = {}) {
           console.log(
             `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
           );
-        } else if (isExactThreadsPostUrl(fallback?.canonicalUrl)) {
-          console.log("Threads retrying with Discord's exact canonical post URL.");
-          try {
-            const canonicalResult = await inspectThreadsWithBrowser(
-              fallback.canonicalUrl
-            );
-            candidates = canonicalResult.candidates;
-            finalUrl = canonicalResult.finalUrl || fallback.canonicalUrl;
-            fallbackCreator = fallback.creator || null;
-          } catch (canonicalError) {
-            throw new Error(
-              `Threads canonical post retry failed: ${canonicalError.message}`,
-              { cause: browserError }
-            );
-          }
         } else {
           throw browserError;
         }
