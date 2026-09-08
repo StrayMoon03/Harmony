@@ -428,7 +428,10 @@ async function handleMediaMessage(message) {
       if (downloadResult.linkOnly) {
         await logMediaError(
           message,
-          new Error("FACEBOOK_UNVERIFIED_MEDIA")
+          new Error(
+            downloadResult.failureReason ||
+            "FACEBOOK_UNVERIFIED_MEDIA"
+          )
         ).catch((reportError) => {
           console.error("Could not send Facebook failure to Harmony’s error inbox:", reportError);
         });
