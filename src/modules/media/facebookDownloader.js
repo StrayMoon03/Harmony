@@ -368,6 +368,42 @@ async function buildCookieHeader(cookiesPath) {
   }
 }
 
+async function hasFacebookSessionCookies(cookiesPath) {
+  if (!cookiesPath) return false;
+
+  try {
+    const text = await fs.readFile(cookiesPath, "utf8");
+    const now = Math.floor(Date.now() / 1000);
+    const names = new Set();
+
+    for (const rawLine of text.split(/\r?\n/)) {
+      let line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith("#HttpOnly_")) {
+        line = line.slice("#HttpOnly_".length);
+      } else if (line.startsWith("#")) {
+        continue;
+      }
+
+      const parts = line.split("\t");
+      if (parts.length < 7) continue;
+      const domain = parts[0].replace(/^\./, "").toLowerCase();
+      const expiry = Number(parts[4]);
+      if (
+        (domain !== "facebook.com" && !domain.endsWith(".facebook.com")) ||
+        (Number.isFinite(expiry) && expiry > 0 && expiry < now)
+      ) {
+        continue;
+      }
+      names.add(parts[5]);
+    }
+
+    return names.has("c_user") && names.has("xs");
+  } catch {
+    return false;
+  }
+}
+
 function validFacebookCdnUrl(value) {
   try {
     const parsed = new URL(value);
@@ -859,9 +895,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     path.resolve(__dirname, "../../facebook-cookies.txt");
 
   const hasCookies = await fileExists(cookiesPath);
-  let cookiesUsable = hasCookies;
+  let cookiesUsable = hasCookies &&
+    await hasFacebookSessionCookies(cookiesPath);
 
-  if (hasCookies) {
+  if (cookiesUsable) {
     try {
       const stat = await fs.stat(cookiesPath);
       // Real Facebook exports are typically many KB; tiny files are stubs.
@@ -1093,6 +1130,9 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         platform: "facebook",
         creator: null,
         linkOnly: true,
+        failureReason: cookiesUsable
+          ? `FACEBOOK_EXACT_POST_FAILED: ${errors.join(" | ")}`
+          : "FACEBOOK_AUTH_REQUIRED: Facebook login cookies are missing or expired.",
       };
     }
 
