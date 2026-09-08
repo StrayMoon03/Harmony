@@ -1122,12 +1122,10 @@ async function handleMediaMessage(message) {
         `Threads link accepted: ${mediaId}`
       );
 
-      const discordEmbedFallback =
-        await getThreadsDiscordEmbedFallback(message);
-
       const downloadResult =
         await downloadThreadsMedia(originalUrl, {
-          discordEmbedFallback,
+          getDiscordEmbedFallback: () =>
+            getThreadsDiscordEmbedFallback(message),
         });
 
       const classification = classify(
