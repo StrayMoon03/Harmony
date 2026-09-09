@@ -180,6 +180,112 @@ function inspectThreadsPage(html) {
   };
 }
 
+function findThreadsPostRecord(value, expectedCode) {
+  if (!value || typeof value !== "object") return null;
+
+  if (
+    !Array.isArray(value) &&
+    String(value.code || "") === expectedCode
+  ) {
+    return value;
+  }
+
+  const children = Array.isArray(value)
+    ? value
+    : Object.values(value);
+  for (const child of children) {
+    const found = findThreadsPostRecord(child, expectedCode);
+    if (found) return found;
+  }
+  return null;
+}
+
+function bestThreadsMediaCandidate(media) {
+  if (!media || typeof media !== "object") return null;
+
+  const video = Array.isArray(media.video_versions)
+    ? media.video_versions
+        .map((item) => validCdnUrl(item?.url))
+        .find(Boolean)
+    : null;
+  if (video) return video;
+
+  const images = Array.isArray(media.image_versions2?.candidates)
+    ? media.image_versions2.candidates
+    : [];
+  return images
+    .slice()
+    .sort(
+      (first, second) =>
+        Number(second?.width || 0) * Number(second?.height || 0) -
+        Number(first?.width || 0) * Number(first?.height || 0)
+    )
+    .map((item) => validCdnUrl(item?.url))
+    .find(Boolean) || null;
+}
+
+function collectThreadsPostRecordMedia(post) {
+  const candidates = [];
+  const items = Array.isArray(post?.carousel_media)
+    ? post.carousel_media
+    : [post];
+
+  for (const item of items) {
+    const candidate = bestThreadsMediaCandidate(item);
+    if (candidate) candidates.push(candidate);
+  }
+
+  // A Threads text post can quote or repost another post whose media is
+  // intentionally displayed as part of the requested root post. Use it only
+  // when the root post itself has no downloadable attachment.
+  if (candidates.length === 0) {
+    const shareInfo = post?.text_post_app_info?.share_info || {};
+    const attachedPost =
+      shareInfo.quoted_attachment_post ||
+      shareInfo.quoted_post ||
+      shareInfo.reposted_post ||
+      post?.reposted_post ||
+      null;
+    if (attachedPost) {
+      const attachedItems = Array.isArray(attachedPost.carousel_media)
+        ? attachedPost.carousel_media
+        : [attachedPost];
+      for (const item of attachedItems) {
+        const candidate = bestThreadsMediaCandidate(item);
+        if (candidate) candidates.push(candidate);
+      }
+    }
+  }
+
+  return [...new Set(candidates)];
+}
+
+function collectPostScopedJsonMedia(html, exactPostUrl) {
+  let expectedCode = null;
+  try {
+    const match = decodeURIComponent(new URL(exactPostUrl).pathname)
+      .match(/\/post\/([A-Za-z0-9_-]+)\/?$/i);
+    expectedCode = match?.[1] || null;
+  } catch {
+    return [];
+  }
+  if (!expectedCode) return [];
+
+  const scripts = String(html || "").matchAll(
+    /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+  for (const match of scripts) {
+    try {
+      const data = JSON.parse(match[1]);
+      const post = findThreadsPostRecord(data, expectedCode);
+      if (post) return collectThreadsPostRecordMedia(post);
+    } catch {
+      // Ignore unrelated or incomplete script payloads.
+    }
+  }
+  return [];
+}
+
 function collectCandidateUrls(html) {
   const videos = firstUrlAfterKey(html, '"video_versions"');
   const images = firstUrlAfterKey(html, '"image_versions2"');
@@ -516,20 +622,27 @@ async function fetchThreadsPage(url) {
       : "Threads cookies: missing — public pages may return an empty app shell."
   );
 
+  const exactPostRequest = isExactThreadsPostUrl(url);
+  const userAgents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+    ...(exactPostRequest
+      ? ["Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"]
+      : []),
+  ];
+
   for (const candidate of [
     canonical.toString(),
     alternate.toString(),
     original.toString(),
   ]) {
-    try {
+    for (const userAgent of userAgents) try {
       const candidateHost = new URL(candidate).hostname;
       const cookieHeader =
         await readThreadsCookieHeader(candidateHost);
       const response = await fetch(candidate, {
         redirect: "follow",
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+          "User-Agent": userAgent,
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
@@ -547,6 +660,9 @@ async function fetchThreadsPage(url) {
         const decodedHtml = decodePageText(html);
         const mediaCandidateCount =
           collectCandidateUrls(decodedHtml).length;
+        const scopedCandidates = exactPostRequest
+          ? collectPostScopedJsonMedia(html, url)
+          : [];
         const cookieCount = cookieHeader
           ? cookieHeader.split("; ").length
           : 0;
@@ -555,6 +671,7 @@ async function fetchThreadsPage(url) {
           finalUrl: response.url || candidate,
           sourceUrl: candidate,
           status: response.status,
+          scopedCandidates,
         };
 
         console.log("Threads page candidate:", {
@@ -564,9 +681,13 @@ async function fetchThreadsPage(url) {
           characters: html.length,
           cookieCount,
           mediaCandidateCount,
+          scopedCandidateCount: scopedCandidates.length,
         });
 
-        if (mediaCandidateCount > 0) {
+        if (
+          scopedCandidates.length > 0 ||
+          (!exactPostRequest && mediaCandidateCount > 0)
+        ) {
           return page;
         }
 
@@ -629,6 +750,7 @@ async function downloadThreadsMedia(url, options = {}) {
     let finalUrl = url;
     let pageFetchFailed = false;
     let fallbackCreator = null;
+    let scopedCandidates = [];
 
     try {
       const pageResult = await fetchThreadsPage(url);
@@ -636,6 +758,7 @@ async function downloadThreadsMedia(url, options = {}) {
       sourceUrl = pageResult.sourceUrl;
       status = pageResult.status;
       finalUrl = pageResult.finalUrl;
+      scopedCandidates = pageResult.scopedCandidates || [];
     } catch (error) {
       pageFetchFailed = true;
       console.warn(
@@ -661,9 +784,11 @@ async function downloadThreadsMedia(url, options = {}) {
       pageFetchFailed ||
       isExactThreadsPostUrl(url) ||
       isExactThreadsPostUrl(finalUrl);
-    let candidates = postScopedBrowserRequired
-      ? []
-      : collectCandidateUrls(decodedHtml);
+    let candidates = scopedCandidates.length > 0
+      ? scopedCandidates
+      : postScopedBrowserRequired
+        ? []
+        : collectCandidateUrls(decodedHtml);
 
     console.log("Threads page diagnostics:", {
       status,
@@ -679,7 +804,7 @@ async function downloadThreadsMedia(url, options = {}) {
     // page-wide candidates. The browser helper scopes extraction to the root
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
-    if (postScopedBrowserRequired || candidates.length === 0) {
+    if (candidates.length === 0) {
       try {
         const browserResult =
           await inspectThreadsWithBrowser(finalUrl);
