@@ -332,27 +332,12 @@ def main():
                 }
               }
 
-              // On an exact post page the root post can omit its own link.
-              // Start at the first substantial media element and climb only
-              // to its nearest post-sized container, never the entire feed.
-              // Never do this on a /share/ or feed URL — pagePath must
-              // already be this post's permalink.
-              const pagePath = normalizePath(location.href);
-              if (!target && pagePath === exactPath) {
-                const media = [...document.querySelectorAll('main video, main img')].find(
-                  (element) => element.tagName === 'VIDEO' ||
-                    (element.naturalWidth >= 300 && element.naturalHeight >= 300)
-                );
-                let node = media?.parentElement || null;
-                let best = null;
-                for (let depth = 0; node && depth < 8; depth += 1) {
-                  const count = mediaCount(node);
-                  if (count > 0 && count <= 20) best = node;
-                  if (node.matches?.('main, body') || count > 20) break;
-                  node = node.parentElement;
-                }
-                target = best;
-              }
+              // Do not fall back to the first large media element merely
+              // because the browser is on an exact-looking post URL.
+              // Threads can render recommended posts on missing, blocked,
+              // or partially hydrated pages. Without an article or self-link
+              // tied to exactPath, no media on the page is verifiably the
+              // requested post.
               if (!target) return { media: [], postUrls: [] };
 
               const postUrls = [...target.querySelectorAll('a[href*="/post/"]')]
