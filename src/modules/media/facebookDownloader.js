@@ -1115,7 +1115,27 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     }
   }
 
-  const finalFiles = await loadBestSnapshot(jobDir);
+  let finalFiles = await loadBestSnapshot(jobDir);
+
+  // Facebook's exact-post browser can return a Reel's MP4 together with
+  // one or more poster/preview images. Those images are representations of
+  // the same Reel, not a multi-photo post. Keep only the playable media for
+  // URLs Facebook identifies as Reels.
+  const isReelUrl =
+    /\/reels?\/[^/?#]+/i.test(url) ||
+    /\/reels?\/[^/?#]+/i.test(originalUrl) ||
+    /\/share\/r\//i.test(originalUrl);
+  if (
+    isReelUrl &&
+    finalFiles.some((file) => file.isVideo) &&
+    finalFiles.some((file) => file.isImage)
+  ) {
+    const posterCount = finalFiles.filter((file) => file.isImage).length;
+    finalFiles = finalFiles.filter((file) => file.isVideo);
+    console.log(
+      `Facebook Reel: discarded ${posterCount} poster image(s); keeping ${finalFiles.length} video file(s).`
+    );
+  }
 
   if (finalFiles.length === 0) {
     await fs.rm(jobDir, { recursive: true, force: true });
