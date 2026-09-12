@@ -212,6 +212,17 @@ function migrate(database) {
       updated_at              TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS member_count_settings (
+      guild_id           TEXT PRIMARY KEY,
+      role_id            TEXT NOT NULL,
+      category_id        TEXT NOT NULL,
+      total_channel_id   TEXT NOT NULL,
+      stay_channel_id    TEXT NOT NULL,
+      no_role_channel_id TEXT NOT NULL,
+      enabled            INTEGER NOT NULL DEFAULT 1,
+      updated_at         TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS birthday_settings (
       guild_id                TEXT PRIMARY KEY,
       channel_id              TEXT NOT NULL,
