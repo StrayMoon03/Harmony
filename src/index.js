@@ -20,6 +20,7 @@ const errorInboxCommand = require("./commands/errorInbox");
 const communityGuardCommand = require("./commands/communityGuard");
 const moderateMessageCommand = require("./commands/moderateMessage");
 const birthdaysCommand = require("./commands/birthdays");
+const memberCountsCommand = require("./commands/memberCounts");
 const shareStore = require("./stores/shareStore");
 const {
   handleDeletedShare,
@@ -52,6 +53,10 @@ const {
 const {
   startBirthdayScheduler,
 } = require("./services/birthdayService");
+const {
+  scheduleMemberCountRefresh,
+  startMemberCountScheduler,
+} = require("./services/memberCountService");
 
 const commands = [
   forgetShareCommand,
@@ -68,6 +73,7 @@ const commands = [
   communityGuardCommand,
   moderateMessageCommand,
   birthdaysCommand,
+  memberCountsCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -105,7 +111,8 @@ async function registerGuildCommands(guild) {
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
       "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
-      "/harmony-errors, /harmony-guard, /harmony-birthdays, Harmony: Moderate Message"
+      "/harmony-errors, /harmony-guard, /harmony-birthdays, /harmony-member-counts, " +
+      "Harmony: Moderate Message"
   );
 }
 
@@ -136,6 +143,7 @@ client.once("clientReady", async () => {
   startCollectionScheduler(client);
   startMessageLogCleanup(client);
   startBirthdayScheduler(client);
+  startMemberCountScheduler(client);
 });
 
 client.on("guildCreate", async (guild) => {
@@ -174,6 +182,8 @@ client.on("guildMemberAdd", async (member) => {
     console.log("Greeting skipped: joining account is a bot.");
     return;
   }
+
+  scheduleMemberCountRefresh(member.guild);
 
   const settings = getGreetingSettings(member.guild.id);
   if (!settings || !settings.enabled) {
@@ -232,6 +242,8 @@ client.on("guildMemberAdd", async (member) => {
 client.on("guildMemberRemove", async (member) => {
   if (member.user.bot) return;
 
+  scheduleMemberCountRefresh(member.guild);
+
   const settings = getGreetingSettings(member.guild.id);
   if (!settings || !settings.enabled) return;
 
@@ -287,6 +299,10 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
       "Could not process a manually granted Welcome Pass role:",
       error
     );
+  }
+
+  if (!newMember.user.bot) {
+    scheduleMemberCountRefresh(newMember.guild);
   }
 });
 
