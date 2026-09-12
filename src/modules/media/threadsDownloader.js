@@ -738,11 +738,12 @@ async function downloadThreadsMedia(url, options = {}) {
     const shareUrl = isThreadsShareUrl(url);
     if (shareUrl) {
       const resolvedUrl = await resolveThreadsShareRedirect(url);
-      if (resolvedUrl) {
-        url = resolvedUrl;
-      } else {
-        console.warn("Threads share redirect did not expose one exact post URL.");
+      if (!resolvedUrl) {
+        throw new Error(
+          "Threads share link did not resolve to one exact post."
+        );
       }
+      url = resolvedUrl;
     }
     let html = "";
     let sourceUrl = url;
@@ -1002,4 +1003,7 @@ async function downloadThreadsMedia(url, options = {}) {
 module.exports = {
   downloadThreadsMedia,
   collectCandidateUrls,
+  collectPostScopedJsonMedia,
+  exactThreadsPostUrl,
+  resolveThreadsShareRedirect,
 };
