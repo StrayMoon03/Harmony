@@ -386,6 +386,21 @@ def main():
         )
 
         dom_media = (dom_result or {}).get("media", [])
+        scoped_post_urls = (dom_result or {}).get("postUrls", [])
+        foreign_post_paths = []
+        for value in scoped_post_urls:
+            exact = canonical_post_url(value)
+            if exact and urlparse(exact).path.rstrip("/") != exact_path:
+                foreign_post_paths.append(urlparse(exact).path.rstrip("/"))
+
+        # A container containing another post permalink is too broad. Its
+        # media may belong to a recommended/neighboring post, so never return
+        # any of it as though it belonged to the requested post.
+        if foreign_post_paths:
+            raise RuntimeError(
+                "Threads exact-post container also contained unrelated posts"
+            )
+
         final_url = exact_post_url
         title = page.title()
         browser.close()
