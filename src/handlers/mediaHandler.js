@@ -134,6 +134,37 @@ async function suppressOriginalEmbeds(message) {
   }
 }
 
+
+/**
+ * Keeps Discord's typing indicator visible during longer media jobs.
+ * Returns a function that stops future refreshes.
+ *
+ * @param {import("discord.js").Message} message
+ * @returns {() => void}
+ */
+function startTypingIndicator(message) {
+  let stopped = false;
+
+  const refresh = () => {
+    if (stopped) return;
+    message.channel.sendTyping().catch((error) => {
+      console.warn(
+        "Could not refresh typing indicator:",
+        error instanceof Error ? error.message : error
+      );
+    });
+  };
+
+  refresh();
+  const timer = setInterval(refresh, 8000);
+  timer.unref?.();
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
 /**
  * Sends a long YouTube video as two messages so Discord can generate its
  * native player without competing with Harmony's custom red card embed.
@@ -325,6 +356,8 @@ async function handleMediaMessage(message) {
     }
 
     const platform = "instagram";
+
+    let stopThreadsTyping = null;
 
     try {
       const existing =
@@ -1140,7 +1173,7 @@ async function handleMediaMessage(message) {
         return;
       }
 
-      await message.channel.sendTyping();
+      stopThreadsTyping = startTypingIndicator(message);
       console.log(
         `Threads link accepted: ${mediaId}`
       );
@@ -1211,6 +1244,8 @@ async function handleMediaMessage(message) {
         message,
         error
       );
+    } finally {
+      stopThreadsTyping?.();
     }
 
     return;
