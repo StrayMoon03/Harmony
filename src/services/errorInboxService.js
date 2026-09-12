@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
 const { getErrorInboxSettings } = require("../stores/errorInboxStore");
+const { reportMediaErrorToGitHub } = require("./githubErrorReporter");
 
 const recentMediaErrors = new Map();
 const ERROR_DEDUPE_MS = 5 * 60 * 1000;
@@ -70,6 +71,13 @@ async function resolveDestination(client, settings) {
 }
 
 async function logMediaError(message, error) {
+  await reportMediaErrorToGitHub(message, error).catch((reportError) => {
+    console.error(
+      "Private GitHub error reporter failed:",
+      reportError instanceof Error ? reportError.message : String(reportError)
+    );
+  });
+
   const settings = getErrorInboxSettings();
   if (!settings?.enabled || !message?.client) return false;
 
