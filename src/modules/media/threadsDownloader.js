@@ -425,6 +425,7 @@ async function inspectThreadsWithBrowser(url) {
           timeout: 75000,
           killSignal: "SIGKILL",
           maxBuffer: 5 * 1024 * 1024,
+          encoding: "utf8",
         }
       )
     );
@@ -481,16 +482,28 @@ async function inspectThreadsWithBrowser(url) {
       );
     }
 
-    const stderr =
-      error && typeof error.stderr === "string"
-        ? error.stderr
-            .split(/\r?\n/)
-            .find((line) =>
-              line.startsWith(
-                "HARMONY_THREADS_BROWSER_ERROR:"
-              )
-            )
-        : "";
+    const stderrText = String(error?.stderr || "");
+    const stderr = stderrText
+      .split(/\r?\n/)
+      .find((line) =>
+        line.startsWith(
+          "HARMONY_THREADS_BROWSER_ERROR:"
+        )
+      ) || "";
+    const firstErrorLine = stderrText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) || "";
+
+    console.error("Threads browser helper failed:", {
+      exitCode: Number.isInteger(error?.code)
+        ? error.code
+        : null,
+      signal: error?.signal || null,
+      hasStructuredError: Boolean(stderr),
+      firstErrorLine: firstErrorLine.slice(0, 240),
+    });
+
     throw new Error(
       stderr ||
         "Threads browser could not inspect this post."
