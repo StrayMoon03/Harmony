@@ -17,6 +17,7 @@ const collectionLeaderboardCommand = require("./commands/collectionLeaderboard")
 const collectionAdminCommand = require("./commands/collectionAdmin");
 const messageLogsCommand = require("./commands/messageLogs");
 const errorInboxCommand = require("./commands/errorInbox");
+const errorMonitorCommand = require("./commands/errorMonitor");
 const communityGuardCommand = require("./commands/communityGuard");
 const moderateMessageCommand = require("./commands/moderateMessage");
 const birthdaysCommand = require("./commands/birthdays");
@@ -70,6 +71,7 @@ const commands = [
   collectionAdminCommand,
   messageLogsCommand,
   errorInboxCommand,
+  errorMonitorCommand,
   communityGuardCommand,
   moderateMessageCommand,
   birthdaysCommand,
@@ -111,7 +113,7 @@ async function registerGuildCommands(guild) {
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
       "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
-      "/harmony-errors, /harmony-guard, /harmony-birthdays, /harmony-member-counts, " +
+      "/harmony-errors, /harmony-monitor, /harmony-guard, /harmony-birthdays, /harmony-member-counts, " +
       "Harmony: Moderate Message"
   );
 }
