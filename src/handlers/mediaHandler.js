@@ -357,7 +357,6 @@ async function handleMediaMessage(message) {
 
     const platform = "instagram";
 
-    let stopThreadsTyping = null;
 
     try {
       const existing =
@@ -1156,6 +1155,9 @@ async function handleMediaMessage(message) {
       return;
     }
 
+    let stopThreadsTyping = null;
+    let threadsStatusMessage = null;
+
     try {
       const existing =
         shareStore.find(platform, mediaId);
@@ -1174,6 +1176,18 @@ async function handleMediaMessage(message) {
       }
 
       stopThreadsTyping = startTypingIndicator(message);
+      threadsStatusMessage = await message.reply({
+        content: "-# 💜 Harmony is working on your post—just a moment…",
+        allowedMentions: {
+          repliedUser: false,
+        },
+      }).catch((error) => {
+        console.warn(
+          "Could not send Threads processing message:",
+          error instanceof Error ? error.message : error
+        );
+        return null;
+      });
       console.log(
         `Threads link accepted: ${mediaId}`
       );
@@ -1246,6 +1260,14 @@ async function handleMediaMessage(message) {
       );
     } finally {
       stopThreadsTyping?.();
+      if (threadsStatusMessage?.deletable) {
+        await threadsStatusMessage.delete().catch((error) => {
+          console.warn(
+            "Could not remove Threads processing message:",
+            error instanceof Error ? error.message : error
+          );
+        });
+      }
     }
 
     return;
