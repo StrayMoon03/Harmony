@@ -30,7 +30,7 @@ async function execute(interaction) {
   if (action === "on") {
     if (
       !String(process.env.HARMONY_ERROR_GITHUB_TOKEN || "").trim() ||
-      !/^[-\\w.]+\/[-\\w.]+$/.test(String(process.env.HARMONY_ERROR_GITHUB_REPO || "").trim())
+      !/^[-A-Za-z0-9_.]+\/[-A-Za-z0-9_.]+$/.test(String(process.env.HARMONY_ERROR_GITHUB_REPO || "").trim())
     ) {
       return interaction.editReply(
         "I can’t turn monitoring on because the private GitHub repository variables are missing or invalid in Railway."
