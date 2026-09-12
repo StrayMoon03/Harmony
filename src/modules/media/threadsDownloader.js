@@ -125,9 +125,7 @@ function validCdnUrl(raw) {
       !host.endsWith(".fbcdn.net") &&
       !host.endsWith(".cdninstagram.com") &&
       !host.endsWith(".threads.net") &&
-      !host.endsWith(".threads.com") &&
-      host !== "media.discordapp.net" &&
-      !host.endsWith(".discordapp.net")
+      !host.endsWith(".threads.com")
     ) {
       return null;
     }
@@ -225,47 +223,23 @@ function bestThreadsMediaCandidate(media) {
 }
 
 function collectThreadsPostRecordMedia(post) {
-  const candidates = [];
   const items = Array.isArray(post?.carousel_media)
     ? post.carousel_media
     : [post];
 
-  for (const item of items) {
-    const candidate = bestThreadsMediaCandidate(item);
-    if (candidate) candidates.push(candidate);
-  }
-
-  // A Threads text post can quote or repost another post whose media is
-  // intentionally displayed as part of the requested root post. Use it only
-  // when the root post itself has no downloadable attachment.
-  if (candidates.length === 0) {
-    const shareInfo = post?.text_post_app_info?.share_info || {};
-    const attachedPost =
-      shareInfo.quoted_attachment_post ||
-      shareInfo.quoted_post ||
-      shareInfo.reposted_post ||
-      post?.reposted_post ||
-      null;
-    if (attachedPost) {
-      const attachedItems = Array.isArray(attachedPost.carousel_media)
-        ? attachedPost.carousel_media
-        : [attachedPost];
-      for (const item of attachedItems) {
-        const candidate = bestThreadsMediaCandidate(item);
-        if (candidate) candidates.push(candidate);
-      }
-    }
-  }
-
-  return [...new Set(candidates)];
+  return items
+    .map(bestThreadsMediaCandidate)
+    .filter(Boolean)
+    .filter((candidate, index, values) =>
+      values.indexOf(candidate) === index
+    );
 }
 
 function collectPostScopedJsonMedia(html, exactPostUrl) {
   let expectedCode = null;
   try {
-    const match = decodeURIComponent(new URL(exactPostUrl).pathname)
-      .match(/\/post\/([A-Za-z0-9_-]+)\/?$/i);
-    expectedCode = match?.[1] || null;
+    expectedCode = decodeURIComponent(new URL(exactPostUrl).pathname)
+      .match(/\/post\/([A-Za-z0-9_-]+)\/?$/i)?.[1] || null;
   } catch {
     return [];
   }
@@ -350,6 +324,7 @@ function exactThreadsPostUrl(raw, baseUrl) {
     ) {
       return null;
     }
+    parsed.search = "";
     parsed.hash = "";
     return parsed.toString();
   } catch {
@@ -376,25 +351,25 @@ async function resolveThreadsShareRedirect(url) {
           signal: AbortSignal.timeout(15000),
         });
         const location = response.headers.get("location");
-        const redirectUrl = location
+        const redirected = location
           ? exactThreadsPostUrl(location, url)
           : null;
-        if (redirectUrl) {
+        if (redirected) {
           console.log("Threads share redirect resolved:", {
-            finalPath: new URL(redirectUrl).pathname,
+            finalPath: new URL(redirected).pathname,
           });
-          return redirectUrl;
+          return redirected;
         }
 
         if (method === "GET" && response.ok) {
           const html = await response.text();
           const ogUrl = metaContent(decodePageText(html), "og:url");
-          const canonicalUrl = exactThreadsPostUrl(ogUrl, url);
-          if (canonicalUrl) {
+          const canonical = exactThreadsPostUrl(ogUrl, url);
+          if (canonical) {
             console.log("Threads share OG identity resolved:", {
-              finalPath: new URL(canonicalUrl).pathname,
+              finalPath: new URL(canonical).pathname,
             });
-            return canonicalUrl;
+            return canonical;
           }
         }
       } catch (error) {
@@ -615,13 +590,6 @@ async function fetchThreadsPage(url) {
   const errors = [];
   let bestPage = null;
   const hasThreadsCookies = Boolean(process.env.THREADS_COOKIES);
-
-  console.log(
-    hasThreadsCookies
-      ? "Threads cookies: ready."
-      : "Threads cookies: missing — public pages may return an empty app shell."
-  );
-
   const exactPostRequest = isExactThreadsPostUrl(url);
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
@@ -629,6 +597,12 @@ async function fetchThreadsPage(url) {
       ? ["Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"]
       : []),
   ];
+
+  console.log(
+    hasThreadsCookies
+      ? "Threads cookies: ready."
+      : "Threads cookies: missing — public pages may return an empty app shell."
+  );
 
   for (const candidate of [
     canonical.toString(),
@@ -723,7 +697,7 @@ async function fetchThreadsPage(url) {
  *   creator: string|null
  * }>}
  */
-async function downloadThreadsMedia(url, options = {}) {
+async function downloadThreadsMedia(url) {
   await fs.mkdir(TEMP_ROOT, { recursive: true });
 
   const jobDir = path.join(
@@ -738,18 +712,18 @@ async function downloadThreadsMedia(url, options = {}) {
     const shareUrl = isThreadsShareUrl(url);
     if (shareUrl) {
       const resolvedUrl = await resolveThreadsShareRedirect(url);
-      if (resolvedUrl) {
-        url = resolvedUrl;
-      } else {
-        console.warn("Threads share redirect did not expose one exact post URL.");
+      if (!resolvedUrl) {
+        throw new Error(
+          "Threads share link did not resolve to one exact post."
+        );
       }
+      url = resolvedUrl;
     }
     let html = "";
     let sourceUrl = url;
     let status = 0;
     let finalUrl = url;
     let pageFetchFailed = false;
-    let fallbackCreator = null;
     let scopedCandidates = [];
 
     try {
@@ -805,29 +779,10 @@ async function downloadThreadsMedia(url, options = {}) {
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
     if (candidates.length === 0) {
-      try {
-        const browserResult =
-          await inspectThreadsWithBrowser(finalUrl);
-        candidates = browserResult.candidates;
-        finalUrl = browserResult.finalUrl || finalUrl;
-      } catch (browserError) {
-        const fallback = typeof options.getDiscordEmbedFallback === "function"
-          ? await options.getDiscordEmbedFallback()
-          : options.discordEmbedFallback;
-        const fallbackCandidates = Array.isArray(fallback?.candidates)
-          ? fallback.candidates.map(validCdnUrl).filter(Boolean)
-          : [];
-        if (fallbackCandidates.length) {
-          candidates = fallbackCandidates;
-          finalUrl = fallback.finalUrl || finalUrl;
-          fallbackCreator = fallback.creator || null;
-          console.log(
-            `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
-          );
-        } else {
-          throw browserError;
-        }
-      }
+      const browserResult =
+        await inspectThreadsWithBrowser(finalUrl);
+      candidates = browserResult.candidates;
+      finalUrl = browserResult.finalUrl || finalUrl;
     }
 
     if (
@@ -985,8 +940,6 @@ async function downloadThreadsMedia(url, options = {}) {
       rawDir: jobDir,
       platform: "threads",
       creator:
-        fallbackCreator ||
-        options.discordEmbedFallback?.creator ||
         extractThreadsCreator(finalUrl) ||
         extractThreadsCreator(url),
     };
@@ -1002,4 +955,7 @@ async function downloadThreadsMedia(url, options = {}) {
 module.exports = {
   downloadThreadsMedia,
   collectCandidateUrls,
+  collectPostScopedJsonMedia,
+  exactThreadsPostUrl,
+  resolveThreadsShareRedirect,
 };
