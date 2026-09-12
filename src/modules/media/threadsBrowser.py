@@ -133,7 +133,53 @@ def permalinks_from_text(text):
     return found
 
 
-def document_permalink(page):
+
+def find_post_records(value, expected_code, found):
+    if isinstance(value, dict):
+        if str(value.get("code") or "") == expected_code:
+            found.append(value)
+            return
+        for child in value.values():
+            find_post_records(child, expected_code, found)
+    elif isinstance(value, list):
+        for child in value:
+            find_post_records(child, expected_code, found)
+
+
+def best_media_url(media):
+    if not isinstance(media, dict):
+        return None
+    for version in media.get("video_versions") or []:
+        value = version.get("url") if isinstance(version, dict) else None
+        if allowed_media_url(value):
+            return value
+
+    images = (media.get("image_versions2") or {}).get("candidates") or []
+    images = sorted(
+        (item for item in images if isinstance(item, dict)),
+        key=lambda item: int(item.get("width") or 0) * int(item.get("height") or 0),
+        reverse=True,
+    )
+    for image in images:
+        if allowed_media_url(image.get("url")):
+            return image.get("url")
+    return None
+
+
+def post_record_media(post):
+    items = post.get("carousel_media") if isinstance(post, dict) else None
+    if not isinstance(items, list) or not items:
+        items = [post]
+    return [value for value in (best_media_url(item) for item in items) if value]
+
+
+def exact_post_media_from_json(value, expected_code):
+    records = []
+    find_post_records(value, expected_code, records)
+    candidates = [post_record_media(record) for record in records]
+    candidates = [items for items in candidates if items]
+    return max(candidates, key=len) if candidates else []
+\ndef document_permalink(page):
     """Resolve this page's post without scanning the whole feed.
 
     Allowed sources, in order:
@@ -216,6 +262,11 @@ def main():
     if clean_path.lower().endswith("/media"):
         clean_path = clean_path[:-len("/media")]
     target_url = parsed._replace(path=clean_path, query="", fragment="").geturl()
+    requested_post_url = canonical_post_url(target_url)
+    expected_code = (
+        urlparse(requested_post_url).path.rstrip("/").split("/")[-1]
+        if requested_post_url else None
+    )
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -262,6 +313,22 @@ def main():
             context.add_cookies(mirrored)
 
         page = context.new_page()
+        structured_media = []
+
+        def capture_exact_post(response):
+            if not expected_code:
+                return
+            try:
+                content_type = (response.headers.get("content-type") or "").lower()
+                if "json" not in content_type:
+                    return
+                candidates = exact_post_media_from_json(response.json(), expected_code)
+                if len(candidates) > len(structured_media):
+                    structured_media[:] = candidates
+            except Exception:
+                return
+
+        page.on("response", capture_exact_post)
 
         page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(4000)
@@ -288,8 +355,22 @@ def main():
         page.wait_for_timeout(2500)
 
         exact_path = urlparse(exact_post_url).path.rstrip("/")
+        exact_code = exact_path.split("/")[-1]
 
-        dom_result = page.evaluate(
+        # Network responses are tied to the resolved shortcode and preserve
+        # carousel order without relying on Threads' mixed recommendation DOM.
+        # Also inspect hydrated JSON scripts in case the response arrived
+        # before the Playwright listener was attached.
+        if not structured_media:
+            for script_text in page.locator('script[type="application/json"]').all_text_contents():
+                try:
+                    candidates = exact_post_media_from_json(json.loads(script_text), exact_code)
+                    if len(candidates) > len(structured_media):
+                        structured_media[:] = candidates
+                except Exception:
+                    continue
+
+        dom_result = {"media": structured_media, "postUrls": [exact_post_url]} if structured_media else page.evaluate(
             """(exactPath) => {
               const results = [];
               const normalizePath = (value) => {
