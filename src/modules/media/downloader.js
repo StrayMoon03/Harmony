@@ -364,7 +364,9 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
 
   const args = [
     "-o",
-    // Let gallery-dl use the DASH manifest so its downloader can fetch\n    // separate video and audio streams and merge them with ffmpeg.\n    "extractor.instagram.videos=true",
+    // Let gallery-dl use the DASH manifest so its downloader can fetch
+    // separate video and audio streams and merge them with ffmpeg.
+    "extractor.instagram.videos=true",
     "-d",
     jobDir,
   ];
