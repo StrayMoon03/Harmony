@@ -164,7 +164,9 @@ function startTypingIndicator(message) {
     clearInterval(timer);
   };
 }
-\n/**\n * Sends a long YouTube video as two messages so Discord can generate its
+
+/**
+ * Sends a long YouTube video as two messages so Discord can generate its
  * native player without competing with Harmony's custom red card embed.
  *
  * @param {import("discord.js").Message} message
