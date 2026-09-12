@@ -179,7 +179,8 @@ def exact_post_media_from_json(value, expected_code):
     candidates = [post_record_media(record) for record in records]
     candidates = [items for items in candidates if items]
     return max(candidates, key=len) if candidates else []
-\ndef document_permalink(page):
+
+def document_permalink(page):
     """Resolve this page's post without scanning the whole feed.
 
     Allowed sources, in order:
