@@ -382,6 +382,8 @@ async function handleMediaMessage(message) {
 
     const platform = "instagram";
     let info = null;
+    let stopInstagramTyping = null;
+    let instagramStatusMessage = null;
 
     try {
       const existing =
@@ -399,7 +401,17 @@ async function handleMediaMessage(message) {
         return;
       }
 
-      await message.channel.sendTyping();
+      stopInstagramTyping = startTypingIndicator(message);
+      instagramStatusMessage = await message.reply({
+        content: "-# 💜 Harmony is working on your post—just a moment…",
+        allowedMentions: { repliedUser: false },
+      }).catch((statusError) => {
+        console.warn(
+          "Could not send Instagram processing message:",
+          statusError instanceof Error ? statusError.message : statusError
+        );
+        return null;
+      });
 
       try {
         info = await getMediaInfo(originalUrl);
@@ -517,6 +529,16 @@ async function handleMediaMessage(message) {
         message,
         error
       );
+    } finally {
+      stopInstagramTyping?.();
+      if (instagramStatusMessage?.deletable) {
+        await instagramStatusMessage.delete().catch((statusError) => {
+          console.warn(
+            "Could not remove Instagram processing message:",
+            statusError instanceof Error ? statusError.message : statusError
+          );
+        });
+      }
     }
 
     return;
