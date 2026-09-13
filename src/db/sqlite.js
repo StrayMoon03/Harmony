@@ -212,6 +212,12 @@ function migrate(database) {
       updated_at              TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS error_monitor_settings (
+      id          INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled     INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS member_count_settings (
       guild_id           TEXT PRIMARY KEY,
       role_id            TEXT NOT NULL,
