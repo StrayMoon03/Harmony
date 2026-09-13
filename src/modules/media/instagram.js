@@ -33,7 +33,7 @@ function extractInstagramId(url) {
 function createInstagramEmbedUrl(url) {
   return url.replace(
     /https?:\/\/(?:www\.)?instagram\.com/i,
-    "https://ddinstagram.com"
+    "https://d.ddinstagram.com"
   );
 }
 
