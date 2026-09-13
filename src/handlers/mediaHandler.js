@@ -14,6 +14,7 @@ const { uploadMedia } = require("../modules/media/uploader");
 const {
   findInstagramLinks,
   extractInstagramId,
+  createInstagramEmbedUrl,
 } = require("../modules/media/instagram");
 const {
   findFacebookLinks,
@@ -172,6 +173,30 @@ function startTypingIndicator(message) {
  * @param {import("discord.js").Message} message
  * @param {{ originalUrl: string, cardText: string, durationMinutes: number|null }} options
  */
+async function sendInstagramStreamingPreview(message, { originalUrl, cardText }) {
+  const embedUrl = createInstagramEmbedUrl(originalUrl);
+  const linkMessage = await message.reply({
+    content: embedUrl,
+    allowedMentions: { repliedUser: false },
+  });
+  const cardMessage = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xfacc15)
+        .setDescription([
+          cardText,
+          "",
+          "This reel plays through Instagram so it keeps its original sound.",
+        ].join("\n")),
+    ],
+    allowedMentions: { parse: [] },
+  });
+
+  shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
+  shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
+  await suppressOriginalEmbeds(message);
+}
+
 async function sendYouTubeStreamingPreview(
   message,
   { originalUrl, cardText, durationMinutes }
@@ -356,7 +381,7 @@ async function handleMediaMessage(message) {
     }
 
     const platform = "instagram";
-
+    let info = null;
 
     try {
       const existing =
@@ -375,8 +400,6 @@ async function handleMediaMessage(message) {
       }
 
       await message.channel.sendTyping();
-
-      let info = null;
 
       try {
         info = await getMediaInfo(originalUrl);
@@ -446,6 +469,50 @@ async function handleMediaMessage(message) {
           `shared for ${message.author.username}`
       );
     } catch (error) {
+      const isAudioOnlyFailure = /INSTAGRAM_AUDIO_MISSING|did not expose a merged video with audio/i.test(
+        String(error?.message || error)
+      );
+
+      if (isAudioOnlyFailure) {
+        try {
+          const creator = resolveCreator(info, []);
+          const cardText = formatMediaCard({
+            platform: "Instagram",
+            mediaType: "Reel",
+            creator,
+            originalUrl,
+            heart: "💛",
+          });
+
+          await sendInstagramStreamingPreview(message, {
+            originalUrl,
+            cardText,
+          });
+
+          shareStore.insert({
+            platform,
+            mediaId,
+            creator,
+            sharedBy: message.member?.displayName ?? message.author.username,
+            sharedById: message.author.id,
+            messageId: message.id,
+            channelId: message.channel.id,
+            guildId: message.guild?.id ?? null,
+            url: originalUrl,
+          });
+
+          console.log(
+            `Instagram reel used sound-preserving embed fallback for ${message.author.username}`
+          );
+          return;
+        } catch (fallbackError) {
+          console.error(
+            "Instagram sound-preserving fallback failed:",
+            fallbackError
+          );
+        }
+      }
+
       await replyWithHarmonyError(
         message,
         error
