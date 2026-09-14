@@ -159,9 +159,12 @@ async function announceBirthdays(client, settings, parts) {
 
     try {
       await channel.send({
-        content: `🎉 <@${member.id}>`,
+        content: `🎉 @everyone, help us wish <@${member.id}> a very Happy Birthday!`,
         embeds: [buildBirthdayEmbed(profile, parts.year)],
-        allowedMentions: { users: [member.id] },
+        allowedMentions: {
+          parse: ["everyone"],
+          users: [member.id],
+        },
       });
     } catch (error) {
       if (roleAdded) {
