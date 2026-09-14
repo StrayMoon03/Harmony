@@ -136,7 +136,24 @@ def permalinks_from_text(text):
 
 def find_post_records(value, expected_code, found):
     if isinstance(value, dict):
-        if str(value.get("code") or "") == expected_code:
+        expected = str(expected_code or "").lower()
+        identities = [
+            value.get("code"),
+            value.get("shortcode"),
+        ]
+        permalink = canonical_post_url(
+            value.get("permalink")
+            or value.get("url")
+            or ""
+        )
+        if permalink:
+            identities.append(
+                urlparse(permalink).path.rstrip("/").split("/")[-1]
+            )
+        if expected and any(
+            str(identity or "").lower() == expected
+            for identity in identities
+        ):
             found.append(value)
             return
         for child in value.values():
@@ -321,7 +338,15 @@ def main():
                 return
             try:
                 content_type = (response.headers.get("content-type") or "").lower()
-                if "json" not in content_type:
+                response_url = (response.url or "").lower()
+                # Threads sometimes serves GraphQL JSON as text/javascript.
+                # Accept API/GraphQL responses regardless of that MIME label,
+                # while avoiding attempts to parse ordinary page assets.
+                if (
+                    "json" not in content_type
+                    and "graphql" not in response_url
+                    and "/api/" not in response_url
+                ):
                     return
                 candidates = exact_post_media_from_json(response.json(), expected_code)
                 if len(candidates) > len(structured_media):
@@ -422,19 +447,51 @@ def main():
               // requested post.
               if (!target) return { media: [], postUrls: [] };
 
-              const postUrls = [...target.querySelectorAll('a[href*="/post/"]')]
+              const postAnchors = [...target.querySelectorAll('a[href*="/post/"]')];
+              const postUrls = postAnchors
                 .map((anchor) => anchor.href)
                 .filter(Boolean);
 
+              // Quotes and replies may be nested inside the requested post.
+              // Exclude only the nested foreign post's media subtree instead
+              // of rejecting the requested post's entire container.
+              const foreignMediaRoots = postAnchors
+                .filter((anchor) => {
+                  const path = normalizePath(anchor.href);
+                  return path && path !== exactPath;
+                })
+                .map((anchor) => {
+                  const nestedArticle = anchor.closest("article");
+                  if (
+                    nestedArticle &&
+                    nestedArticle !== target &&
+                    target.contains(nestedArticle)
+                  ) {
+                    return nestedArticle;
+                  }
+                  let node = anchor.parentElement;
+                  while (node && node !== target) {
+                    if (mediaCount(node) > 0) return node;
+                    node = node.parentElement;
+                  }
+                  return null;
+                })
+                .filter(Boolean);
+              const belongsToForeignPost = (element) =>
+                foreignMediaRoots.some((root) => root.contains(element));
+
               for (const video of target.querySelectorAll("video")) {
+                if (belongsToForeignPost(video)) continue;
                 const value = video.currentSrc || video.src;
                 if (value) results.push(value);
               }
               for (const source of target.querySelectorAll("video source")) {
+                if (belongsToForeignPost(source)) continue;
                 if (source.src) results.push(source.src);
               }
               const seenImages = new Set();
               for (const image of target.querySelectorAll("img")) {
+                if (belongsToForeignPost(image)) continue;
                 if (image.naturalWidth < 300 || image.naturalHeight < 300) {
                   continue;
                 }
@@ -475,12 +532,13 @@ def main():
             if exact and urlparse(exact).path.rstrip("/") != exact_path:
                 foreign_post_paths.append(urlparse(exact).path.rstrip("/"))
 
-        # A container containing another post permalink is too broad. Its
-        # media may belong to a recommended/neighboring post, so never return
-        # any of it as though it belonged to the requested post.
-        if foreign_post_paths:
+        # A quote/reply link does not invalidate the requested post. The DOM
+        # extractor removes media inside each nested foreign-post subtree.
+        # If nothing remains, fail closed rather than borrowing the quote's
+        # media or scanning neighboring recommendations.
+        if foreign_post_paths and not dom_media:
             raise RuntimeError(
-                "Threads exact-post container also contained unrelated posts"
+                "Threads could not isolate requested-post media from nested posts"
             )
 
         final_url = exact_post_url
