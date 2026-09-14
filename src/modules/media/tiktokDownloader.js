@@ -202,6 +202,71 @@ async function clearJobMediaFiles(jobDir) {
 }
 
 /**
+ * Re-encodes TikTok photo-mode images as standard JPEG files.
+ *
+ * TikTok's CDN can serve image bytes that do not match the downloaded
+ * filename/extension closely enough for Discord to recognize them as
+ * inline images. Decoding and rewriting them gives Discord an ordinary
+ * JPEG attachment with a truthful .jpg filename.
+ *
+ * @param {string} jobDir
+ * @returns {Promise<Array<object>>}
+ */
+async function normalizeTikTokPhotoImages(jobDir) {
+  const downloaded = (await collectMediaFiles(jobDir))
+    .filter((file) => file.isImage);
+
+  if (downloaded.length === 0) {
+    throw new Error(
+      "TikTok photo post produced no downloadable images."
+    );
+  }
+
+  const outputDir = path.join(jobDir, "discord-jpeg");
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const ffmpegPath =
+    process.env.FFMPEG_PATH || "ffmpeg";
+  const normalized = [];
+
+  for (let index = 0; index < downloaded.length; index++) {
+    const source = downloaded[index].path;
+    const output = path.join(
+      outputDir,
+      `tiktok-photo-${String(index + 1).padStart(2, "0")}.jpg`
+    );
+
+    await execFileAsync(
+      ffmpegPath,
+      [
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        source,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        output,
+      ],
+      {
+        windowsHide: true,
+        maxBuffer: 20 * 1024 * 1024,
+      }
+    );
+
+    normalized.push(probeFile(output));
+  }
+
+  console.log(
+    `TikTok photo normalization complete (${normalized.length} JPEG file(s))`
+  );
+
+  return normalized;
+}
+
+/**
  * Downloads a TikTok photo-mode post with gallery-dl.
  * Also used as a VIDEO extraction fallback when yt-dlp fails.
  *
@@ -634,8 +699,9 @@ async function downloadTikTokMedia(url) {
       setTimeout(resolve, 300)
     );
 
-    const files =
-      await collectMediaFiles(jobDir);
+    const files = isTikTokPhotoPost(url)
+      ? await normalizeTikTokPhotoImages(jobDir)
+      : await collectMediaFiles(jobDir);
 
     if (files.length === 0) {
       throw new Error(
