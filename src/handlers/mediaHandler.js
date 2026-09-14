@@ -737,8 +737,12 @@ async function handleMediaMessage(message) {
       }
 
       const durationSeconds = Number(info?.duration || 0);
+      const isPhotoPost =
+        /\/photo\/\d+/i.test(normalizedUrl);
 
-      if (durationSeconds >= 90) {
+      // TikTok photo-mode posts can expose the soundtrack duration in
+      // metadata. That duration does not make the post a long video.
+      if (!isPhotoPost && durationSeconds >= 90) {
         const creator =
           info?.uploader ||
           info?.creator ||
@@ -782,7 +786,10 @@ async function handleMediaMessage(message) {
           normalizedUrl
         );
 
-      if (!downloadResult.hasAudio) {
+      // Photo-mode downloads intentionally have no video audio stream.
+      // Keep their downloaded images and send them through the carousel
+      // uploader instead of replacing them with a link-only video card.
+      if (!isPhotoPost && !downloadResult.hasAudio) {
         const creator =
           downloadResult.creator ||
           info?.uploader ||
