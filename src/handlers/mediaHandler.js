@@ -703,7 +703,15 @@ async function handleMediaMessage(message) {
     const platform = "tiktok";
 
     try {
-      await message.channel.sendTyping();
+      // Discord's typing endpoint can fail transiently (including HTTP 500).
+      // A cosmetic indicator must never prevent the TikTok itself from being
+      // normalized, downloaded, and posted.
+      await message.channel.sendTyping().catch((error) => {
+        console.warn(
+          "Could not start TikTok typing indicator:",
+          error instanceof Error ? error.message : error
+        );
+      });
 
       const normalizedUrl =
         await normalizeTikTokUrl(originalUrl);
