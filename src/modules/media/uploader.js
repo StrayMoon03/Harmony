@@ -590,12 +590,20 @@ async function ensureUnderSizeLimit(filePath, maxBytes) {
 
   const duration = await probeDurationSeconds(filePath);
   const targetBits = maxBytes * 8 * 0.9;
-  const audioBitrateKbps = 96;
+  const totalBitrateBudgetKbps = Math.floor(targetBits / duration / 1000);
+
+  // Long clips need a lower bitrate floor than short social videos. Keeping
+  // audio fixed at 96k and video at 200k makes clips around 7–8 minutes
+  // mathematically incapable of fitting under Discord's 9 MB bot limit.
+  const audioBitrateKbps = Math.max(
+    48,
+    Math.min(96, Math.floor(totalBitrateBudgetKbps * 0.35))
+  );
 
   let baseVideoBitrateKbps = Math.floor(
-    targetBits / duration / 1000 - audioBitrateKbps
+    totalBitrateBudgetKbps - audioBitrateKbps
   );
-  baseVideoBitrateKbps = Math.max(250, Math.min(baseVideoBitrateKbps, 4000));
+  baseVideoBitrateKbps = Math.max(64, Math.min(baseVideoBitrateKbps, 4000));
 
   const dir = path.dirname(filePath);
   const baseName = path.basename(filePath, ext);
@@ -608,7 +616,7 @@ async function ensureUnderSizeLimit(filePath, maxBytes) {
 
   for (const tier of SIZE_ATTEMPTS) {
     const videoBitrateKbps = Math.max(
-      200,
+      64,
       Math.floor(baseVideoBitrateKbps * tier.bitrateScale)
     );
     const outputPath = path.join(
