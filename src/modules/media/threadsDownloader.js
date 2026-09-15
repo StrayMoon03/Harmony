@@ -350,6 +350,7 @@ function exactThreadsPostUrl(raw, baseUrl) {
     ) {
       return null;
     }
+    parsed.search = "";
     parsed.hash = "";
     return parsed.toString();
   } catch {
