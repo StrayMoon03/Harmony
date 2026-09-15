@@ -71,11 +71,12 @@ async function resolveDestination(client, settings) {
 }
 
 async function logMediaError(message, error) {
-  await reportMediaErrorToGitHub(message, error).catch((reportError) => {
+  const githubReport = await reportMediaErrorToGitHub(message, error).catch((reportError) => {
     console.error(
       "Private GitHub error reporter failed:",
       reportError instanceof Error ? reportError.message : String(reportError)
     );
+    return null;
   });
 
   const settings = getErrorInboxSettings();
@@ -116,8 +117,13 @@ async function logMediaError(message, error) {
       ? `https://discord.com/channels/${message.guild.id}/${message.channelId}/${message.id}`
       : null);
 
+  const issueNumber = Number(githubReport?.number) || null;
   const embed = new EmbedBuilder()
-    .setTitle(`⚠️ ${platformFromLink(link)} link failed`)
+    .setTitle(
+      issueNumber
+        ? `⚠️ Harmony Error #${issueNumber} · ${platformFromLink(link)} link failed`
+        : `⚠️ ${platformFromLink(link)} link failed`
+    )
     .setColor(0xed4245)
     .addFields(
       { name: "Server", value: serverName, inline: true },
@@ -125,6 +131,9 @@ async function logMediaError(message, error) {
       { name: "Posted by", value: memberName, inline: true },
       { name: "Reason", value: safeReason(error) },
       { name: "Original link", value: link || "No link was captured." },
+      ...(issueNumber
+        ? [{ name: "Incident", value: `#${issueNumber}`, inline: true }]
+        : []),
       { name: "Error ID", value: errorId, inline: true }
     )
     .setFooter({ text: "Technical details remain private in Railway logs." })
