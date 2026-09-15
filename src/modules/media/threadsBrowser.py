@@ -187,7 +187,35 @@ def post_record_media(post):
     items = post.get("carousel_media") if isinstance(post, dict) else None
     if not isinstance(items, list) or not items:
         items = [post]
-    return [value for value in (best_media_url(item) for item in items) if value]
+    candidates = [
+        value for value in (best_media_url(item) for item in items) if value
+    ]
+
+    # Text-only Threads posts can quote or repost another post whose media is
+    # intentionally displayed as the requested post's attachment. Mirror the
+    # Node extractor: use that attached media only when the root post has no
+    # downloadable attachment of its own.
+    if not candidates and isinstance(post, dict):
+        share_info = (
+            (post.get("text_post_app_info") or {}).get("share_info") or {}
+        )
+        attached_post = (
+            share_info.get("quoted_attachment_post")
+            or share_info.get("quoted_post")
+            or share_info.get("reposted_post")
+            or post.get("reposted_post")
+        )
+        if isinstance(attached_post, dict):
+            attached_items = attached_post.get("carousel_media")
+            if not isinstance(attached_items, list) or not attached_items:
+                attached_items = [attached_post]
+            candidates = [
+                value
+                for value in (best_media_url(item) for item in attached_items)
+                if value
+            ]
+
+    return candidates
 
 
 def exact_post_media_from_json(value, expected_code):

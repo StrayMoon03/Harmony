@@ -65,6 +65,34 @@ test("extracts every carousel item in order from the exact post record", () => {
   );
 });
 
+test("uses quoted attachment media when the requested post has none", () => {
+  const payload = {
+    requested: {
+      code: "REAL123",
+      text_post_app_info: {
+        share_info: {
+          quoted_attachment_post: {
+            image_versions2: {
+              candidates: [
+                { url: "https://scontent-a.fbcdn.net/quote.jpg", width: 1200, height: 1200 },
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+  const html = `<script type="application/json">${JSON.stringify(payload)}</script>`;
+
+  assert.deepEqual(
+    collectPostScopedJsonMedia(
+      html,
+      "https://www.threads.com/@chosen.4000/post/REAL123"
+    ),
+    ["https://scontent-a.fbcdn.net/quote.jpg"]
+  );
+});
+
 test("resolves a share alias from Threads' redirect Location", async (t) => {
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; });
