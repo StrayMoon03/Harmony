@@ -131,7 +131,7 @@ async function reportMediaErrorToGitHub(message, error) {
   ].join("\n");
 
   try {
-    await githubRequest(
+    const issue = await githubRequest(
       `/repos/${repository.owner}/${repository.repo}/issues`,
       {
         method: "POST",
@@ -139,8 +139,14 @@ async function reportMediaErrorToGitHub(message, error) {
         body: JSON.stringify({ title, body }),
       }
     );
-    console.log(`Harmony created private GitHub error report ${reportKey}.`);
-    return true;
+    console.log(
+      `Harmony created private GitHub error report #${issue.number} (${reportKey}).`
+    );
+    return {
+      number: Number(issue.number),
+      url: safeUrl(issue.html_url),
+      fingerprint: reportKey,
+    };
   } catch (reportError) {
     recentReports.delete(reportKey);
     console.error(
