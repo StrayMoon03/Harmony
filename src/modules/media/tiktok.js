@@ -54,7 +54,28 @@ function extractTikTokId(url) {
   return null;
 }
 
+/**
+ * Returns true when a normalized TikTok URL points to a live broadcast.
+ * Live broadcasts are not stable saved media and must not enter the
+ * downloader or collection ownership flow.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isTikTokLiveUrl(url) {
+  if (!url) return false;
+
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)tiktok\.com$/i.test(parsed.hostname) &&
+      /^\/@[^/]+\/live\/?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   findTikTokLinks,
   extractTikTokId,
+  isTikTokLiveUrl,
 };

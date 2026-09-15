@@ -26,6 +26,7 @@ const {
 const {
   findTikTokLinks,
   extractTikTokId,
+  isTikTokLiveUrl,
 } = require("../modules/media/tiktok");
 const {
   normalizeTikTokUrl,
@@ -715,6 +716,22 @@ async function handleMediaMessage(message) {
 
       const normalizedUrl =
         await normalizeTikTokUrl(originalUrl);
+
+      if (isTikTokLiveUrl(normalizedUrl)) {
+        await message.reply({
+          content: [
+            "This TikTok link points to a live broadcast, so Harmony can’t archive it as a saved post.",
+            "You can still watch it through the original TikTok link above.",
+            "",
+            "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+          ].join("\n"),
+          allowedMentions: {
+            repliedUser: false,
+          },
+        });
+
+        return;
+      }
 
       const mediaId =
         extractTikTokId(normalizedUrl);
