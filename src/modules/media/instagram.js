@@ -25,20 +25,37 @@ function extractInstagramId(url) {
 }
 
 /**
- * Converts a normal Instagram URL into a ddInstagram embed URL.
+ * Selects the best still image exposed by yt-dlp for a link-only reel
+ * fallback. Discord proxies the image when the message is sent, so the
+ * temporary Instagram CDN URL is not exposed as Harmony's click target.
  *
- * @param {string} url
- * @returns {string}
+ * @param {object|null|undefined} info
+ * @returns {string|null}
  */
-function createInstagramEmbedUrl(url) {
-  return url.replace(
-    /https?:\/\/(?:www\.)?instagram\.com/i,
-    "https://d.ddinstagram.com"
-  );
+function findInstagramPreviewUrl(info) {
+  const raw = info?._raw;
+  const candidates = [
+    raw?.thumbnail,
+    ...(Array.isArray(raw?.thumbnails)
+      ? [...raw.thumbnails]
+          .reverse()
+          .map((thumbnail) => thumbnail?.url)
+      : []),
+  ];
+
+  return candidates.find((url) => {
+    if (typeof url !== "string") return false;
+
+    try {
+      return new URL(url).protocol === "https:";
+    } catch {
+      return false;
+    }
+  }) ?? null;
 }
 
 module.exports = {
   findInstagramLinks,
   extractInstagramId,
-  createInstagramEmbedUrl,
+  findInstagramPreviewUrl,
 };

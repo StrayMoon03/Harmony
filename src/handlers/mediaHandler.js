@@ -14,7 +14,7 @@ const { uploadMedia } = require("../modules/media/uploader");
 const {
   findInstagramLinks,
   extractInstagramId,
-  createInstagramEmbedUrl,
+  findInstagramPreviewUrl,
 } = require("../modules/media/instagram");
 const {
   findFacebookLinks,
@@ -173,22 +173,28 @@ function startTypingIndicator(message) {
  * @param {import("discord.js").Message} message
  * @param {{ originalUrl: string, cardText: string, durationMinutes: number|null }} options
  */
-async function sendInstagramStreamingPreview(message, { originalUrl, cardText }) {
-  const embedUrl = createInstagramEmbedUrl(originalUrl);
+async function sendInstagramStreamingPreview(
+  message,
+  { originalUrl, cardText, previewUrl }
+) {
   const linkMessage = await message.reply({
-    content: embedUrl,
+    content: originalUrl,
     allowedMentions: { repliedUser: false },
   });
+  const embed = new EmbedBuilder()
+    .setColor(0xfacc15)
+    .setDescription([
+      cardText,
+      "",
+      "This reel plays through Instagram so it keeps its original sound.",
+    ].join("\n"));
+
+  if (previewUrl) {
+    embed.setImage(previewUrl);
+  }
+
   const cardMessage = await message.channel.send({
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0xfacc15)
-        .setDescription([
-          cardText,
-          "",
-          "This reel plays through Instagram so it keeps its original sound.",
-        ].join("\n")),
-    ],
+    embeds: [embed],
     allowedMentions: { parse: [] },
   });
 
@@ -499,6 +505,7 @@ async function handleMediaMessage(message) {
           await sendInstagramStreamingPreview(message, {
             originalUrl,
             cardText,
+            previewUrl: findInstagramPreviewUrl(info),
           });
 
           shareStore.insert({
