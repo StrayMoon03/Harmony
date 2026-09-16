@@ -241,6 +241,7 @@ function collectThreadsPostRecordMedia(post) {
   if (candidates.length === 0) {
     const shareInfo = post?.text_post_app_info?.share_info || {};
     const attachedPost =
+      post?.text_post_app_info?.linked_inline_media ||
       shareInfo.quoted_attachment_post ||
       shareInfo.quoted_post ||
       shareInfo.reposted_post ||

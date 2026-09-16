@@ -200,7 +200,8 @@ def post_record_media(post):
             (post.get("text_post_app_info") or {}).get("share_info") or {}
         )
         attached_post = (
-            share_info.get("quoted_attachment_post")
+            (post.get("text_post_app_info") or {}).get("linked_inline_media")
+            or share_info.get("quoted_attachment_post")
             or share_info.get("quoted_post")
             or share_info.get("reposted_post")
             or post.get("reposted_post")
