@@ -976,6 +976,26 @@ async function handleMediaMessage(message) {
       const downloadResult =
         await downloadXMedia(originalUrl);
 
+      if (downloadResult.linkOnly) {
+        shareStore.insert({
+          platform,
+          mediaId,
+          creator: downloadResult.creator || "Unknown creator",
+          sharedBy:
+            message.member?.displayName ??
+            message.author.username,
+          sharedById: message.author.id,
+          messageId: message.id,
+          channelId: message.channel.id,
+          guildId: message.guild?.id ?? null,
+          url: originalUrl,
+        });
+        console.log(
+          "X text-only post preserved with its native preview."
+        );
+        return;
+      }
+
       const classification = classify(
         downloadResult.files,
         originalUrl
