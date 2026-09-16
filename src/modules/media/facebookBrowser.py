@@ -221,6 +221,11 @@ def collect_attachments(root):
         key = media_id or urlparse(url).path
         compound = f"{media_type}:{key}"
         if compound in seen:
+            if media_type == "video":
+                existing = next(item for item in ordered if item["type"] == media_type and (item["mediaId"] or urlparse(item["url"]).path) == key)
+                alternatives = existing.setdefault("fallbackUrls", [])
+                if url != existing["url"] and url not in alternatives:
+                    alternatives.append(url)
             return
         seen.add(compound)
         ordered.append({
@@ -262,9 +267,11 @@ def collect_attachments(root):
         elif "photo" in typename or "image" in typename:
             media_type = "photo"
 
-        video_url = first_direct_url(value, VIDEO_KEYS)
-        if in_attachment and video_url:
-            add(media_id, "video", video_url)
+        if in_attachment:
+            for key in VIDEO_KEYS:
+                video_url = valid_media_url(value.get(key))
+                if video_url:
+                    add(media_id, "video", video_url)
 
         # Facebook nests poster frames and preview thumbnails inside video
         # nodes. They are not separate post attachments, so never promote
