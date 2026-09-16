@@ -418,6 +418,34 @@ function validFacebookCdnUrl(value) {
   }
 }
 
+async function fetchVerifiedFacebookAttachment(attachment, referer, cookie = "") {
+  const urls = [...new Set([attachment.url, ...(Array.isArray(attachment.fallbackUrls) ? attachment.fallbackUrls : [])])]
+    .filter(validFacebookCdnUrl).slice(0, 4);
+  const failures = [];
+  for (const mediaUrl of urls) {
+    try {
+      const response = await fetch(mediaUrl, {
+        redirect: "follow",
+        headers: { "User-Agent": "Mozilla/5.0", Referer: referer, ...(cookie ? { Cookie: cookie } : {}) },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) { failures.push(`HTTP ${response.status}`); continue; }
+      const type = (response.headers.get("content-type") || "").toLowerCase();
+      const isVideo = attachment.type === "video" && (type.startsWith("video/") || type.startsWith("application/octet-stream"));
+      const isImage = attachment.type === "photo" && type.startsWith("image/");
+      if (!isVideo && !isImage) { failures.push("unexpected content type"); continue; }
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length < (isVideo ? 50 : 30) * 1024) { failures.push("file below size threshold"); continue; }
+      const ext = isVideo ? ".mp4" : type.includes("png") ? ".png" : type.includes("webp") ? ".webp" : ".jpg";
+      return { bytes, ext };
+    } catch {
+      failures.push("request failed or timed out");
+    }
+  }
+  // Never log signed attachment URLs, response bodies, or session cookies.
+  throw new Error(`Facebook verified attachment download failed: ${failures.join(", ") || "no allowed CDN URL"}`);
+}
+
 async function runFacebookBrowser(url, jobDir, cookiesPath) {
   const pythonPath = process.env.PYTHON_PATH || "python3";
   console.log("Facebook exact-post browser inspection starting.");
@@ -468,50 +496,26 @@ async function runFacebookBrowser(url, jobDir, cookiesPath) {
 
   const cookie = await buildCookieHeader(cookiesPath);
   let saved = 0;
+  const failures = [];
   for (const attachment of attachments) {
-    const response = await fetch(attachment.url, {
-      redirect: "follow",
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Referer:
-          typeof result.finalUrl === "string"
-            ? result.finalUrl
-            : url,
-        ...(cookie ? { Cookie: cookie } : {}),
-      },
-      signal: AbortSignal.timeout(25000),
-    });
-    if (!response.ok) continue;
-
-    const type = response.headers.get("content-type") || "";
-    const isVideo =
-      attachment.type === "video" ||
-      type.startsWith("video/");
-    const isImage =
-      attachment.type === "photo" &&
-      type.startsWith("image/");
-    if (!isVideo && !isImage) continue;
-
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length < (isVideo ? 50 : 30) * 1024) continue;
-    const ext = isVideo
-      ? ".mp4"
-      : type.includes("png")
-        ? ".png"
-        : type.includes("webp")
-          ? ".webp"
-          : ".jpg";
+    let media;
+    try {
+      media = await fetchVerifiedFacebookAttachment(attachment, typeof result.finalUrl === "string" ? result.finalUrl : url, cookie);
+    } catch (error) {
+      failures.push(error.message);
+      continue;
+    }
     const destination = path.join(
       jobDir,
-      `facebook-verified-${String(saved).padStart(3, "0")}${ext}`
+      `facebook-verified-${String(saved).padStart(3, "0")}${media.ext}`
     );
-    await fs.writeFile(destination, bytes);
+    await fs.writeFile(destination, media.bytes);
     saved += 1;
   }
 
   if (!saved) {
     throw new Error(
-      "Facebook verified the post attachments but their files could not be downloaded."
+      "Facebook verified the post attachments but their files could not be downloaded. " + failures.join("; ")
     );
   }
 
@@ -1197,4 +1201,5 @@ module.exports = {
   looksLikeFacebookPhotoPost,
   isExplicitSinglePhotoFbid,
   buildFacebookUrlCandidates,
+  fetchVerifiedFacebookAttachment,
 };
