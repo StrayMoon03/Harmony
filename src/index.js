@@ -1,3 +1,4 @@
+const { handleOriginalPreviewUpdate } = require("./modules/media/messageLifecycle");
 require("dotenv").config();
 
 const { prepareRuntimeSecrets } = require("./services/runtimeSecrets");
@@ -323,6 +324,7 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("messageUpdate", async (oldMessage, newMessage) => {
+  await handleOriginalPreviewUpdate(newMessage);
   await handleLoggedMessageUpdate(oldMessage, newMessage);
 });
 

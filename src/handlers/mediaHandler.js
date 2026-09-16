@@ -1,3 +1,4 @@
+const { withDelayedProgress, suppressOriginalEmbeds } = require("../modules/media/messageLifecycle");
 const fs = require("node:fs/promises");
 const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -117,25 +118,6 @@ async function replyWithHarmonyError(message, error) {
     })
     .catch(() => {});
 }
-
-/**
- * Suppress embeds on the user's original message.
- * Logs permission failures instead of failing silently.
- *
- * @param {import("discord.js").Message} message
- */
-async function suppressOriginalEmbeds(message) {
-  try {
-    await message.suppressEmbeds(true);
-    console.log("Original message embeds suppressed.");
-  } catch (err) {
-    console.warn(
-      "suppressEmbeds failed (bot needs Manage Messages in this channel?):",
-      err instanceof Error ? err.message : err
-    );
-  }
-}
-
 
 /**
  * Keeps Discord's typing indicator visible during longer media jobs.
@@ -340,7 +322,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
  *
  * @param {import("discord.js").Message} message
  */
-async function handleMediaMessage(message) {
+async function processMediaMessage(message) {
   if (message.author.bot) return;
 
   const instagramLinks =
@@ -390,7 +372,6 @@ async function handleMediaMessage(message) {
     const platform = "instagram";
     let info = null;
     let stopInstagramTyping = null;
-    let instagramStatusMessage = null;
 
     try {
       const existing =
@@ -409,16 +390,6 @@ async function handleMediaMessage(message) {
       }
 
       stopInstagramTyping = startTypingIndicator(message);
-      instagramStatusMessage = await message.reply({
-        content: "-# 💜 Harmony is working on your post—just a moment…",
-        allowedMentions: { repliedUser: false },
-      }).catch((statusError) => {
-        console.warn(
-          "Could not send Instagram processing message:",
-          statusError instanceof Error ? statusError.message : statusError
-        );
-        return null;
-      });
 
       try {
         info = await getMediaInfo(originalUrl);
@@ -539,14 +510,6 @@ async function handleMediaMessage(message) {
       );
     } finally {
       stopInstagramTyping?.();
-      if (instagramStatusMessage?.deletable) {
-        await instagramStatusMessage.delete().catch((statusError) => {
-          console.warn(
-            "Could not remove Instagram processing message:",
-            statusError instanceof Error ? statusError.message : statusError
-          );
-        });
-      }
     }
 
     return;
@@ -662,9 +625,6 @@ async function handleMediaMessage(message) {
       );
 
       await suppressOriginalEmbeds(message);
-      setTimeout(() => {
-        suppressOriginalEmbeds(message).catch(() => {});
-      }, 2500);
 
       shareStore.insert({
         platform,
@@ -903,11 +863,8 @@ async function handleMediaMessage(message) {
       );
 
       // Hide Discord's native TikTok preview only after a successful upload.
-      // TikTok embeds often load late, so suppress once now and once after a short delay.
+      // The shared helper verifies suppression after delayed preview updates.
       await suppressOriginalEmbeds(message);
-      setTimeout(() => {
-        suppressOriginalEmbeds(message).catch(() => {});
-      }, 2500);
 
       shareStore.insert({
         platform,
@@ -1253,9 +1210,6 @@ async function handleMediaMessage(message) {
       }
 
       await suppressOriginalEmbeds(message);
-      setTimeout(() => {
-        suppressOriginalEmbeds(message).catch(() => {});
-      }, 2500);
 
       shareStore.insert({
         platform,
@@ -1304,7 +1258,6 @@ async function handleMediaMessage(message) {
     }
 
     let stopThreadsTyping = null;
-    let threadsStatusMessage = null;
 
     try {
       const existing =
@@ -1324,18 +1277,6 @@ async function handleMediaMessage(message) {
       }
 
       stopThreadsTyping = startTypingIndicator(message);
-      threadsStatusMessage = await message.reply({
-        content: "-# 💜 Harmony is working on your post—just a moment…",
-        allowedMentions: {
-          repliedUser: false,
-        },
-      }).catch((error) => {
-        console.warn(
-          "Could not send Threads processing message:",
-          error instanceof Error ? error.message : error
-        );
-        return null;
-      });
       console.log(
         `Threads link accepted: ${mediaId}`
       );
@@ -1378,9 +1319,6 @@ async function handleMediaMessage(message) {
       );
 
       await suppressOriginalEmbeds(message);
-      setTimeout(() => {
-        suppressOriginalEmbeds(message).catch(() => {});
-      }, 2500);
 
       shareStore.insert({
         platform,
@@ -1408,18 +1346,17 @@ async function handleMediaMessage(message) {
       );
     } finally {
       stopThreadsTyping?.();
-      if (threadsStatusMessage?.deletable) {
-        await threadsStatusMessage.delete().catch((error) => {
-          console.warn(
-            "Could not remove Threads processing message:",
-            error instanceof Error ? error.message : error
-          );
-        });
-      }
     }
 
     return;
   }
+}
+
+async function handleMediaMessage(message) {
+  if (message.author.bot) return;
+  const finders = [findInstagramLinks, findFacebookLinks, findTikTokLinks, findXLinks, findYouTubeLinks, findThreadsLinks];
+  if (!finders.some((find) => find(message.content).length)) return;
+  return withDelayedProgress(message, () => processMediaMessage(message));
 }
 
 module.exports = {
