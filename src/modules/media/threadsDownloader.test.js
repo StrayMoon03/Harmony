@@ -93,6 +93,23 @@ test("uses quoted attachment media when the requested post has none", () => {
   );
 });
 
+test("extracts an inline Instagram reel only from the requested Threads post", () => {
+  const reel = { code: "INSTAGRAM123", video_versions: [{ url: "https://scontent-a.cdninstagram.com/inline.mp4" }] };
+  const payload = {
+    requested: { code: "REAL123", media_type: 19, video_versions: null,
+      text_post_app_info: { linked_inline_media: reel, share_info: { quoted_attachment_post: null } } },
+    reply: { code: "OTHER123", text_post_app_info: { linked_inline_media: {
+      video_versions: [{ url: "https://scontent-a.cdninstagram.com/wrong.mp4" }] } } },
+  };
+  const extract = () => collectPostScopedJsonMedia(`<script type="application/json">${JSON.stringify(payload)}</script>`, "https://www.threads.com/@chosen.4000/post/REAL123");
+  assert.deepEqual(extract(), ["https://scontent-a.cdninstagram.com/inline.mp4"]);
+  payload.requested.video_versions = [{ url: "https://scontent-a.cdninstagram.com/own.mp4" }];
+  assert.deepEqual(extract(), ["https://scontent-a.cdninstagram.com/own.mp4"]);
+  payload.requested.video_versions = null;
+  reel.video_versions[0].url = "https://evil.example/inline.mp4";
+  assert.deepEqual(extract(), []);
+});
+
 test("resolves a share alias from Threads' redirect Location", async (t) => {
   const originalFetch = global.fetch;
   t.after(() => { global.fetch = originalFetch; });
@@ -110,4 +127,3 @@ test("resolves a share alias from Threads' redirect Location", async (t) => {
     "https://www.threads.com/@chosen.4000/post/REAL123"
   );
 });
-
