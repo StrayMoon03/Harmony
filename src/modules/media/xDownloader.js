@@ -195,6 +195,7 @@ async function getGalleryDlMeta(url) {
 
     let creator = null;
     let isGif = false;
+    let hasMedia = false;
 
     function walk(value) {
       if (!value) return;
@@ -211,6 +212,9 @@ async function getGalleryDlMeta(url) {
       // Original X media type from gallery-dl / Twitter API.
       if (value.type === "animated_gif") {
         isGif = true;
+      }
+      if (["animated_gif", "video", "photo"].includes(value.type)) {
+        hasMedia = true;
       }
 
       if (
@@ -238,14 +242,14 @@ async function getGalleryDlMeta(url) {
 
     walk(data);
 
-    return { creator, isGif };
+    return { creator, isGif, hasMedia };
   } catch (error) {
     console.warn(
       "X gallery-dl metadata lookup failed:",
       error.message
     );
 
-    return { creator: null, isGif: false };
+    return { creator: null, isGif: false, hasMedia: null };
   }
 }
 
@@ -280,6 +284,21 @@ async function downloadXMedia(url) {
     const meta = await getGalleryDlMeta(url);
     const creator = meta.creator;
     const isGif = meta.isGif;
+
+    // A successfully inspected X status with no photo/video/GIF is a normal
+    // text-only post, not a failed media download. Preserve X's native embed
+    // and do not send it through the error-reporting path.
+    if (meta.hasMedia === false) {
+      await fs.rm(jobDir, { recursive: true, force: true });
+      return {
+        files: [],
+        rawDir: null,
+        platform: "x",
+        creator,
+        isGif: false,
+        linkOnly: true,
+      };
+    }
 
     if (creator) {
       console.log(
