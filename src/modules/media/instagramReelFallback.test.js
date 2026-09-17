@@ -62,5 +62,27 @@ async function routedDownload(url, expected) {
   try { assert.deepEqual(routes, [expected]); assert.equal(result.files.length, 1); }
   finally { await fs.rm(result.rawDir, { recursive: true, force: true }); }
 }
-test("exhausted reel methods reach reel recovery", () => routedDownload("https://www.instagram.com/reel/EXACT/", "reel"));
+test("exhausted incident reel methods reach reel recovery", () => routedDownload("https://www.instagram.com/reel/DdXwaqyN-RA/", "reel"));
 test("photo recovery routing remains unchanged", () => routedDownload("https://www.instagram.com/p/EXACT/", "photo"));
+
+test("silent large rendition is deleted before smaller muxed rendition is kept", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-candidates-"));
+  const urls = ["https://scontent-a.fbcdn.net/large.mp4", "https://scontent-a.fbcdn.net/small.mp4"];
+  const fetched = [];
+  try {
+    const files = await saveVerifiedReel({ code: "EXACT", videos: urls }, "EXACT", dir, {
+      fetch: async (url, config) => {
+        assert.deepEqual(await fs.readdir(dir), []);
+        assert.equal(config.redirect, "error");
+        fetched.push(url);
+        return { ok: true, headers: new Headers({ "content-type": "video/mp4" }), body: [Buffer.alloc(2048, fetched.length)] };
+      },
+      exec: async () => fetched.length === 1 ? { stdout: '{"streams":[{"codec_type":"video"}]}' } : audioVideo,
+    });
+    assert.deepEqual(fetched, urls);
+    assert.equal((await fs.readFile(files[0]))[0], 2);
+    assert.equal((await fs.readdir(dir)).length, 1);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test("all silent candidates are deleted and signed URLs are not leaked", () => runSave({ code: "EXACT", videos: [owned.video, "https://scontent-a.fbcdn.net/second.mp4"] }, { probe: { stdout: '{"streams":[{"codec_type":"video"}]}' }, reject: error => /could not verify/.test(error.message) && !error.message.includes("SIGNED") }));
