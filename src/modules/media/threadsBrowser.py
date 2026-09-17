@@ -14,13 +14,15 @@ DIAGNOSTIC_KEYS = (
     "pageSignalsAvailable", "loginPromptVisible", "loginRoute",
     "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
     "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
-    "attachedVideoDeclared",
+    "attachedVideoDeclared", "exactRecordHasImageVersions",
+    "exactNestedSameCodeRecordSeen",
 )
 
 
 def record_diagnostic_signals(value, expected_code, diagnostics):
     records = []
-    find_post_records(value, expected_code, records)
+    if find_post_records(value, expected_code, records):
+        diagnostics["exactNestedSameCodeRecordSeen"] = True
     if records:
         diagnostics["exactRecordSeen"] = True
 
@@ -35,9 +37,24 @@ def record_diagnostic_signals(value, expected_code, diagnostics):
             for item in media.get("carousel_media") or []
         )
 
+    def declares_images(media):
+        if not isinstance(media, dict):
+            return False
+        versions = media.get("image_versions2")
+        if isinstance(versions, dict) and bool(versions.get("candidates")):
+            return True
+        return any(
+            isinstance(item, dict)
+            and isinstance(item.get("image_versions2"), dict)
+            and bool(item["image_versions2"].get("candidates"))
+            for item in media.get("carousel_media") or []
+        )
+
     for record in records:
         if declares_video(record):
             diagnostics["rootVideoDeclared"] = True
+        if declares_images(record):
+            diagnostics["exactRecordHasImageVersions"] = True
         app_info = record.get("text_post_app_info") or {}
         share_info = app_info.get("share_info") or {}
         attached = (
@@ -80,7 +97,8 @@ def emit_page_diagnostics(page, record_signals):
         pass
     source = dict(signals) if isinstance(signals, dict) else {}
     source.update({key: value for key, value in record_signals.items()
-                   if key in ("exactRecordSeen", "rootVideoDeclared", "attachedVideoDeclared")})
+                   if key in ("exactRecordSeen", "rootVideoDeclared", "attachedVideoDeclared",
+                              "exactRecordHasImageVersions", "exactNestedSameCodeRecordSeen")})
     safe = {key: source.get(key) is True for key in DIAGNOSTIC_KEYS}
     print("HARMONY_THREADS_DIAGNOSTICS:" + json.dumps(safe, separators=(",", ":")))
 
@@ -209,7 +227,11 @@ def permalinks_from_text(text):
 
 
 
-def find_post_records(value, expected_code, found):
+def find_post_records(value, expected_code, found, exact_ancestor=False):
+    # Keep descending after a match: an exact-code wrapper can contain the
+    # fuller record for that same post. Every child must match independently.
+    # The return value is diagnostic only: nested same-code record observed.
+    nested_same_code = False
     if isinstance(value, dict):
         expected = str(expected_code or "").lower()
         identities = [
@@ -225,17 +247,22 @@ def find_post_records(value, expected_code, found):
             identities.append(
                 urlparse(permalink).path.rstrip("/").split("/")[-1]
             )
-        if expected and any(
+        matched = bool(expected) and any(
             str(identity or "").lower() == expected
             for identity in identities
-        ):
+        )
+        if matched:
             found.append(value)
-            return
+            nested_same_code = exact_ancestor
         for child in value.values():
-            find_post_records(child, expected_code, found)
+            child_nested = find_post_records(child, expected_code, found,
+                                             exact_ancestor or matched)
+            nested_same_code = nested_same_code or child_nested
     elif isinstance(value, list):
         for child in value:
-            find_post_records(child, expected_code, found)
+            child_nested = find_post_records(child, expected_code, found, exact_ancestor)
+            nested_same_code = nested_same_code or child_nested
+    return nested_same_code
 
 
 def best_media_url(media):
