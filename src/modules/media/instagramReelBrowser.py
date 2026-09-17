@@ -25,6 +25,14 @@ def allowed_video(url):
             and (parsed.hostname or "").endswith((".cdninstagram.com", ".fbcdn.net")))
 
 
+def allowed_response(url):
+    parsed = urlparse(url)
+    return (parsed.scheme == "https" and not parsed.username and not parsed.password
+            and parsed.port in (None, 443)
+            and parsed.hostname in ("instagram.com", "www.instagram.com", "i.instagram.com")
+            and (parsed.path.startswith("/api/") or parsed.path.startswith("/graphql")))
+
+
 def extract_reel(payload, code):
     records = []
 
@@ -39,9 +47,14 @@ def extract_reel(payload, code):
                 walk(child)
 
     walk(payload)
+    urls = []
+    creator = None
     for record in records:
         # Deliberately exclude carousels, quotes and records without video proof.
-        if record.get("carousel_media") or record.get("edge_sidecar_to_children"):
+        carousel = record.get("carousel_media")
+        sidecar = record.get("edge_sidecar_to_children")
+        edges = sidecar.get("edges") if isinstance(sidecar, dict) else None
+        if (isinstance(carousel, list) and carousel) or (isinstance(edges, list) and edges):
             continue
         if record.get("media_type") != 2 and record.get("is_video") is not True:
             continue
@@ -49,13 +62,16 @@ def extract_reel(payload, code):
         versions = versions if isinstance(versions, list) else []
         candidates = [v for v in versions if isinstance(v, dict) and allowed_video(v.get("url"))]
         candidates.sort(key=lambda v: (v.get("width") or 0) * (v.get("height") or 0), reverse=True)
-        url = candidates[0]["url"] if candidates else record.get("video_url")
-        if allowed_video(url):
+        for url in [record.get("video_url")] + [v["url"] for v in candidates]:
+            if allowed_video(url) and url not in urls:
+                urls.append(url)
+        if urls and creator is None:
             owner = record.get("user") or record.get("owner") or {}
             creator = owner.get("username") if isinstance(owner, dict) else None
             if not isinstance(creator, str) or not re.fullmatch(r"[A-Za-z0-9._]{1,30}", creator):
                 creator = None
-            return {"code": code, "video": url, "creator": creator}
+    if urls:
+        return {"code": code, "videos": urls, "creator": creator}
     raise ValueError("No verified exact-record Instagram reel video")
 
 
@@ -87,15 +103,16 @@ def main():
 
             def inspect_response(response):
                 nonlocal result
-                parsed = urlparse(response.url)
-                if parsed.hostname not in ("instagram.com", "www.instagram.com"):
-                    return
-                if "/graphql" not in parsed.path and "/api/" not in parsed.path:
+                if not allowed_response(response.url):
                     return
                 try:
                     candidate = extract_reel(response.json(), code)
                     if result is None:
                         result = candidate
+                    else:
+                        for url in candidate["videos"]:
+                            if url not in result["videos"]:
+                                result["videos"].append(url)
                 except Exception:
                     pass
 
