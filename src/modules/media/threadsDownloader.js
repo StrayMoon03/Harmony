@@ -23,7 +23,8 @@ function logThreadsBrowserDiagnostics(stdout) {
     "pageSignalsAvailable", "loginPromptVisible", "loginRoute",
     "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
     "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
-    "attachedVideoDeclared",
+    "attachedVideoDeclared", "exactRecordHasImageVersions",
+    "exactNestedSameCodeRecordSeen",
   ];
   const line = String(stdout || "").split(/\r?\n/).find((value) =>
     value.startsWith("HARMONY_THREADS_DIAGNOSTICS:")
