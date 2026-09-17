@@ -18,6 +18,28 @@ const THREADS_PLACEHOLDER_HASHES = [
   0x187e7effff7e3e18n,
 ];
 
+function logThreadsBrowserDiagnostics(stdout) {
+  const keys = [
+    "pageSignalsAvailable", "loginPromptVisible", "loginRoute",
+    "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
+    "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
+    "attachedVideoDeclared",
+  ];
+  const line = String(stdout || "").split(/\r?\n/).find((value) =>
+    value.startsWith("HARMONY_THREADS_DIAGNOSTICS:")
+  );
+  let data = null;
+  try {
+    data = line ? JSON.parse(line.slice("HARMONY_THREADS_DIAGNOSTICS:".length)) : null;
+  } catch {
+    // Diagnostics must never interrupt media processing.
+  }
+  const safe = Object.fromEntries(keys.map((key) => [key, data?.[key] === true]));
+  safe.authenticationEvidence = safe.accountMenuVisible ? "authenticated_ui" : "not_confirmed";
+  console.log("Threads browser diagnostics:", safe);
+  return safe;
+}
+
 async function readThreadsCookieHeader(hostname) {
   const cookiesPath = process.env.THREADS_COOKIES;
   if (!cookiesPath) return "";
@@ -443,6 +465,7 @@ async function inspectThreadsWithBrowser(url) {
       );
     }
 
+    logThreadsBrowserDiagnostics(stdout);
     const result = JSON.parse(
       line.slice("HARMONY_THREADS_BROWSER:".length)
     );
@@ -475,6 +498,7 @@ async function inspectThreadsWithBrowser(url) {
           : url,
     };
   } catch (error) {
+    logThreadsBrowserDiagnostics(error?.stdout);
     if (
       error &&
       (error.killed || error.signal === "SIGKILL")
@@ -1026,4 +1050,5 @@ module.exports = {
   collectPostScopedJsonMedia,
   exactThreadsPostUrl,
   resolveThreadsShareRedirect,
+  logThreadsBrowserDiagnostics,
 };
