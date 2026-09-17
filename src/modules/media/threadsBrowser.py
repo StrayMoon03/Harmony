@@ -10,6 +10,81 @@ from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 
+DIAGNOSTIC_KEYS = (
+    "pageSignalsAvailable", "loginPromptVisible", "loginRoute",
+    "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
+    "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
+    "attachedVideoDeclared",
+)
+
+
+def record_diagnostic_signals(value, expected_code, diagnostics):
+    records = []
+    find_post_records(value, expected_code, records)
+    if records:
+        diagnostics["exactRecordSeen"] = True
+
+    def declares_video(media):
+        if not isinstance(media, dict):
+            return False
+        if media.get("media_type") == 2 or bool(media.get("video_versions")):
+            return True
+        return any(
+            isinstance(item, dict)
+            and (item.get("media_type") == 2 or bool(item.get("video_versions")))
+            for item in media.get("carousel_media") or []
+        )
+
+    for record in records:
+        if declares_video(record):
+            diagnostics["rootVideoDeclared"] = True
+        app_info = record.get("text_post_app_info") or {}
+        share_info = app_info.get("share_info") or {}
+        attached = (
+            app_info.get("linked_inline_media")
+            or share_info.get("quoted_attachment_post")
+            or share_info.get("quoted_post")
+            or share_info.get("reposted_post")
+            or record.get("reposted_post")
+        )
+        if declares_video(attached):
+            diagnostics["attachedVideoDeclared"] = True
+
+
+def emit_page_diagnostics(page, record_signals):
+    # This is observation only. Never return page text, cookies, identities,
+    # titles, or URLs; positive UI evidence is not a complete session test.
+    signals = {}
+    try:
+        signals = page.evaluate(
+            r"""() => {
+              const visible = (element) => Boolean(element && element.getClientRects().length);
+              const bodyText = document.body ? document.body.innerText : '';
+              const controls = [...document.querySelectorAll('button, a, [role="button"], [role="menuitem"]')]
+                .filter(visible);
+              const labeled = (pattern) => controls.some((element) =>
+                pattern.test((element.getAttribute('aria-label') || element.innerText || '').trim()));
+              return {
+                pageSignalsAvailable: true,
+                loginPromptVisible: [...document.querySelectorAll('input[type="password"]')].some(visible)
+                  || labeled(/^(log in|login|continue with instagram)$/i),
+                loginRoute: /\/(login|accounts\/login)(\/|$)/i.test(location.pathname),
+                checkpointRoute: /\/(checkpoint|challenge)(\/|$)/i.test(location.pathname),
+                restrictionNoticeVisible: /this content isn['’]t available to everyone|it can['’]t be seen by certain audiences/i.test(bodyText),
+                unavailableNoticeVisible: /this (post|content) (isn['’]t|is not) available|content unavailable/i.test(bodyText),
+                accountMenuVisible: labeled(/^(log out|logout|switch accounts)$/i),
+              };
+            }"""
+        )
+    except Exception:
+        pass
+    source = dict(signals) if isinstance(signals, dict) else {}
+    source.update({key: value for key, value in record_signals.items()
+                   if key in ("exactRecordSeen", "rootVideoDeclared", "attachedVideoDeclared")})
+    safe = {key: source.get(key) is True for key in DIAGNOSTIC_KEYS}
+    print("HARMONY_THREADS_DIAGNOSTICS:" + json.dumps(safe, separators=(",", ":")))
+
+
 def load_netscape_cookies(cookie_path):
     cookies = []
     if not cookie_path or not os.path.isfile(cookie_path):
@@ -361,6 +436,7 @@ def main():
 
         page = context.new_page()
         structured_media = []
+        record_signals = {}
 
         def capture_exact_post(response):
             if not expected_code:
@@ -377,7 +453,12 @@ def main():
                     and "/api/" not in response_url
                 ):
                     return
-                candidates = exact_post_media_from_json(response.json(), expected_code)
+                payload = response.json()
+                candidates = exact_post_media_from_json(payload, expected_code)
+                try:
+                    record_diagnostic_signals(payload, expected_code, record_signals)
+                except Exception:
+                    pass
                 if len(candidates) > len(structured_media):
                     structured_media[:] = candidates
             except Exception:
@@ -397,6 +478,7 @@ def main():
         # this document's own /@user/post/ID, fail closed instead of
         # scraping neighboring feed media.
         if exact_post_url is None:
+            emit_page_diagnostics(page, record_signals)
             raise RuntimeError(
                 "Threads page did not resolve to one verifiable post"
             )
@@ -419,7 +501,12 @@ def main():
         if not structured_media:
             for script_text in page.locator('script[type="application/json"]').all_text_contents():
                 try:
-                    candidates = exact_post_media_from_json(json.loads(script_text), exact_code)
+                    payload = json.loads(script_text)
+                    candidates = exact_post_media_from_json(payload, exact_code)
+                    try:
+                        record_diagnostic_signals(payload, exact_code, record_signals)
+                    except Exception:
+                        pass
                     if len(candidates) > len(structured_media):
                         structured_media[:] = candidates
                 except Exception:
@@ -566,12 +653,14 @@ def main():
         # If nothing remains, fail closed rather than borrowing the quote's
         # media or scanning neighboring recommendations.
         if foreign_post_paths and not dom_media:
+            emit_page_diagnostics(page, record_signals)
             raise RuntimeError(
                 "Threads could not isolate requested-post media from nested posts"
             )
 
         final_url = exact_post_url
         title = page.title()
+        emit_page_diagnostics(page, record_signals)
         browser.close()
 
     ordered = []
