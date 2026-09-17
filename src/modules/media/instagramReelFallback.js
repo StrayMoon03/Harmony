@@ -15,7 +15,7 @@ function exactReelCode(value) {
   return match[1];
 }
 
-async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
+async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}) {
   if (!result || result.code !== expectedCode || typeof result.video !== "string") throw new Error("Instagram reel identity mismatch");
   const url = new URL(result.video);
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram reel URL rejected");
@@ -45,6 +45,23 @@ async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
     // Network/probe exceptions may contain signed URLs; never propagate them.
     throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
   }
+}
+
+async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
+  if (!result || result.code !== expectedCode) throw new Error("Instagram reel identity mismatch");
+  const videos = Array.isArray(result.videos) ? result.videos : [result.video];
+  if (!videos.length || videos.length > 32) throw new Error("Instagram reel URL rejected");
+  // Validate every candidate before fetching; malformed metadata must fail closed.
+  for (const value of videos) {
+    let url;
+    try { url = new URL(value); } catch { throw new Error("Instagram reel URL rejected"); }
+    if (typeof value !== "string" || url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram reel URL rejected");
+  }
+  for (const video of new Set(videos)) {
+    try { return await saveOneVerifiedReel({ ...result, video }, expectedCode, jobDir, deps); }
+    catch { /* Failed candidates are removed before trying the next owned URL. */ }
+  }
+  throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
 }
 
 async function downloadInstagramReel(url, jobDir) {
