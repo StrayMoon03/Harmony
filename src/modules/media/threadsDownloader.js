@@ -826,9 +826,14 @@ async function downloadThreadsMedia(url, options = {}) {
           await inspectThreadsWithBrowser(finalUrl);
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
+        if (candidates.length === 0) {
+          throw new Error(
+            "Threads browser returned no media; checking the original message preview."
+          );
+        }
       } catch (browserError) {
         const fallback = typeof options.getDiscordEmbedFallback === "function"
-          ? await options.getDiscordEmbedFallback()
+          ? await options.getDiscordEmbedFallback(finalUrl)
           : options.discordEmbedFallback;
         const fallbackCandidates = Array.isArray(fallback?.candidates)
           ? fallback.candidates.map(validCdnUrl).filter(Boolean)
