@@ -50,8 +50,25 @@ function extractThreadsCreator(url) {
   }
 }
 
+function matchesThreadsPreview(previewUrl, originalUrl, resolvedUrl) {
+  try {
+    const preview = new URL(previewUrl);
+    if (!/^(?:www\.)?threads\.(?:com|net)$/.test(preview.hostname)) return false;
+    const id = extractThreadsId(preview.href);
+    return Boolean(id && [originalUrl, resolvedUrl].some((value) => {
+      if (!value) return false;
+      const expected = new URL(value);
+      return /^(?:www\.)?threads\.(?:com|net)$/.test(expected.hostname) &&
+        extractThreadsId(expected.href) === id;
+    }));
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   findThreadsLinks,
   extractThreadsId,
   extractThreadsCreator,
+  matchesThreadsPreview,
 };

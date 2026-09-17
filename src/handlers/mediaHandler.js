@@ -50,6 +50,7 @@ const {
 const {
   findThreadsLinks,
   extractThreadsId,
+  matchesThreadsPreview,
 } = require("../modules/media/threads");
 const {
   downloadThreadsMedia,
@@ -259,8 +260,7 @@ async function sendTikTokStreamingPreview(
   await suppressOriginalEmbeds(message);
 }
 
-async function getThreadsDiscordEmbedFallback(message, originalUrl) {
-  const expectedId = extractThreadsId(originalUrl);
+async function getThreadsDiscordEmbedFallback(message, originalUrl, resolvedUrl) {
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let current = message;
@@ -280,9 +280,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl) {
     const embed = current.embeds.find((item) => {
       const provider = String(item.provider?.name || "").toLowerCase();
       const url = String(item.url || "").toLowerCase();
-      const belongsToPost = Boolean(
-        expectedId && url.includes(expectedId.toLowerCase())
-      );
+      const belongsToPost = matchesThreadsPreview(item.url, originalUrl, resolvedUrl);
       return belongsToPost && (
         provider.includes("threads") ||
         url.includes("threads.com") ||
@@ -1289,8 +1287,8 @@ async function processMediaMessage(message) {
 
       const downloadResult =
         await downloadThreadsMedia(originalUrl, {
-          getDiscordEmbedFallback: () =>
-            getThreadsDiscordEmbedFallback(message, originalUrl),
+          getDiscordEmbedFallback: (resolvedUrl) =>
+            getThreadsDiscordEmbedFallback(message, originalUrl, resolvedUrl),
         });
 
       const classification = classify(
