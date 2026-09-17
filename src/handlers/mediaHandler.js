@@ -555,7 +555,13 @@ async function processMediaMessage(message) {
         return;
       }
 
-      await message.channel.sendTyping();
+      try {
+        await message.channel.sendTyping();
+      } catch {
+        console.warn(
+          "Facebook typing indicator unavailable. Continuing with media processing."
+        );
+      }
 
       let info = null;
 
