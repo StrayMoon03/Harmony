@@ -413,7 +413,7 @@ async function processMediaMessage(message) {
         );
       }
 
-      const creator = resolveCreator(
+      const creator = downloadResult.creator || resolveCreator(
         info,
         classification.files
       );
