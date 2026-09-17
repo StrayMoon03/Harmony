@@ -9,14 +9,27 @@ test("diagnostic logging permits only exact boolean signals, never private paylo
     pageSignalsAvailable: true, loginPromptVisible: true, accountMenuVisible: 'true',
     cookies: 'SECRET', title: 'SECRET', url: 'https://signed.invalid/?token=SECRET',
     exactRecordSeen: true, rootVideoDeclared: true,
+    exactRecordHasImageVersions: true, exactNestedSameCodeRecordSeen: true,
   }));
   assert.equal(safe.loginPromptVisible, true);
   assert.equal(safe.exactRecordSeen, true);
   assert.equal(safe.rootVideoDeclared, true);
+  assert.equal(safe.exactRecordHasImageVersions, true);
+  assert.equal(safe.exactNestedSameCodeRecordSeen, true);
   assert.equal(safe.authenticationEvidence, 'not_confirmed');
   assert.equal(JSON.stringify(safe).includes('SECRET'), false);
   assert.equal(JSON.stringify(safe).includes('https:'), false);
-  assert.equal(Object.keys(safe).length, 11);
+  assert.equal(Object.keys(safe).length, 13);
+});
+
+test("new record diagnostics accept booleans only, never payload values", () => {
+  const safe = logThreadsBrowserDiagnostics('HARMONY_THREADS_DIAGNOSTICS:' + JSON.stringify({
+    exactRecordHasImageVersions: 'https://signed.invalid/?token=SECRET',
+    exactNestedSameCodeRecordSeen: { cookie: 'SECRET' },
+  }));
+  assert.equal(safe.exactRecordHasImageVersions, false);
+  assert.equal(safe.exactNestedSameCodeRecordSeen, false);
+  assert.equal(JSON.stringify(safe).includes('SECRET'), false);
 });
 
 test("missing or malformed diagnostic output is harmless and unconfirmed", () => {
