@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const { getErrorMonitorSettings } = require("../stores/errorMonitorStore");
 
 const recentReports = new Map();
+const pendingReports = new Map();
 const REPORT_DEDUPE_MS = 6 * 60 * 60 * 1000;
 
 function repositoryParts() {
@@ -61,8 +62,8 @@ function fingerprint(platform, errorText) {
 }
 
 function pruneRecent(now) {
-  for (const [key, timestamp] of recentReports) {
-    if (now - timestamp >= REPORT_DEDUPE_MS) recentReports.delete(key);
+  for (const [key, entry] of recentReports) {
+    if (now - entry.timestamp >= REPORT_DEDUPE_MS) recentReports.delete(key);
   }
 }
 
@@ -102,14 +103,15 @@ async function reportMediaErrorToGitHub(message, error) {
   const platform = platformFromUrl(originalUrl);
   const details = sanitizedErrorText(error) || "No technical error details were available.";
   const reportKey = fingerprint(platform, details);
+  const dedupeKey = `${reportKey}:${safeUrl(originalUrl) || "no-link"}`;
   const now = Date.now();
   pruneRecent(now);
 
-  if (recentReports.has(reportKey)) {
+  if (recentReports.has(dedupeKey)) {
     console.log(`Duplicate GitHub error report suppressed: ${reportKey}`);
-    return false;
+    return recentReports.get(dedupeKey).report;
   }
-  recentReports.set(reportKey, now);
+  if (pendingReports.has(dedupeKey)) return pendingReports.get(dedupeKey);
 
   const title = `[${platform}] Harmony media failure (${reportKey})`;
   const body = [
@@ -130,30 +132,39 @@ async function reportMediaErrorToGitHub(message, error) {
     "_Created automatically by Harmony. Credentials, cookies, user identity, Discord server/channel details, and signed URL parameters are intentionally excluded._",
   ].join("\n");
 
+  const pending = (async () => {
+    try {
+      const issue = await githubRequest(
+        `/repos/${repository.owner}/${repository.repo}/issues`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, body }),
+        }
+      );
+      console.log(
+        `Harmony created private GitHub error report #${issue.number} (${reportKey}).`
+      );
+      const report = {
+        number: Number(issue.number),
+        url: safeUrl(issue.html_url),
+        fingerprint: reportKey,
+      };
+      recentReports.set(dedupeKey, { timestamp: Date.now(), report });
+      return report;
+    } catch (reportError) {
+      console.error(
+        "Harmony could not create the private GitHub error report:",
+        reportError instanceof Error ? reportError.message : String(reportError)
+      );
+      return false;
+    }
+  })();
+  pendingReports.set(dedupeKey, pending);
   try {
-    const issue = await githubRequest(
-      `/repos/${repository.owner}/${repository.repo}/issues`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, body }),
-      }
-    );
-    console.log(
-      `Harmony created private GitHub error report #${issue.number} (${reportKey}).`
-    );
-    return {
-      number: Number(issue.number),
-      url: safeUrl(issue.html_url),
-      fingerprint: reportKey,
-    };
-  } catch (reportError) {
-    recentReports.delete(reportKey);
-    console.error(
-      "Harmony could not create the private GitHub error report:",
-      reportError instanceof Error ? reportError.message : String(reportError)
-    );
-    return false;
+    return await pending;
+  } finally {
+    pendingReports.delete(dedupeKey);
   }
 }
 
