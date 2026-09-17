@@ -19,7 +19,7 @@ class ExactReelTests(unittest.TestCase):
             reel.extract_reel({"code": "EXACT", "neighbor": self.video("OTHER")}, "EXACT")
 
     def test_nested_exact_record(self):
-        self.assertIn("owned.mp4", reel.extract_reel({"code": "EXACT", "post": self.video()}, "EXACT")["video"])
+        self.assertIn("owned.mp4", reel.extract_reel({"code": "EXACT", "post": self.video()}, "EXACT")["videos"][0])
 
     def test_foreign_quote_ignored(self):
         with self.assertRaises(ValueError):
@@ -34,7 +34,26 @@ class ExactReelTests(unittest.TestCase):
 
     def test_best_owned_version(self):
         record = self.video(video_versions=[{"url": "https://scontent-a.fbcdn.net/small.mp4", "width": 1, "height": 1}, {"url": "https://scontent-a.fbcdn.net/large.mp4", "width": 20, "height": 20}])
-        self.assertIn("large.mp4", reel.extract_reel(record, "EXACT")["video"])
+        self.assertEqual(reel.extract_reel(record, "EXACT")["videos"], ["https://scontent-a.fbcdn.net/large.mp4", "https://scontent-a.fbcdn.net/small.mp4"])
+
+    def test_progressive_first_and_duplicate_removed(self):
+        record = self.video(video_url="https://scontent-a.fbcdn.net/muxed.mp4", video_versions=[
+            {"url": "https://scontent-a.fbcdn.net/large.mp4", "width": 20, "height": 20},
+            {"url": "https://scontent-a.fbcdn.net/muxed.mp4", "width": 1, "height": 1}])
+        self.assertEqual(reel.extract_reel(record, "EXACT")["videos"], ["https://scontent-a.fbcdn.net/muxed.mp4", "https://scontent-a.fbcdn.net/large.mp4"])
+
+    def test_empty_sidecar_is_not_carousel(self):
+        self.assertTrue(reel.extract_reel(self.video(edge_sidecar_to_children={"edges": []}, video_url="https://scontent-a.fbcdn.net/muxed.mp4"), "EXACT")["videos"])
+
+    def test_nonempty_sidecar_is_rejected(self):
+        with self.assertRaises(ValueError):
+            reel.extract_reel(self.video(edge_sidecar_to_children={"edges": [{"node": self.video("OTHER")}] }), "EXACT")
+
+    def test_listener_host_and_path_allowlist(self):
+        self.assertTrue(reel.allowed_response("https://i.instagram.com/api/v1/media/123/info/"))
+        self.assertTrue(reel.allowed_response("https://www.instagram.com/graphql/query"))
+        for url in ["https://evil.instagram.com.attacker.test/api/v1/media/", "https://i.instagram.com/reel/EXACT/", "http://i.instagram.com/api/v1/", "https://user:pass@i.instagram.com/api/v1/"]:
+            self.assertFalse(reel.allowed_response(url))
 
     def test_untrusted_cdn_rejected(self):
         for url in ["https://fbcdn.net.evil.test/file.mp4", "http://scontent-a.fbcdn.net/file.mp4", "https://user:secret@scontent-a.fbcdn.net/file.mp4", "https://scontent-a.fbcdn.net:8080/file.mp4"]:
