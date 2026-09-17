@@ -129,8 +129,8 @@ async function createJobDirectory() {
  * Downloads media from a supported URL.
  *
  * yt-dlp is attempted first.
- * Instagram photo posts and carousels fall back to gallery-dl,
- * then to exact-post browser photo extraction.
+ * Instagram falls back to gallery-dl, then exact-record browser recovery.
+ * Photo recovery is unchanged; reels require verified video and audio.
  *
  * Every download uses its own temporary folder.
  *
@@ -167,8 +167,11 @@ async function downloadMedia(url) {
     await fs.rm(jobDir, { recursive: true, force: true });
     await fs.mkdir(jobDir, { recursive: true });
     try {
-      const { downloadInstagramPhotos } = require("./instagramPhotoFallback");
-      const result = await downloadInstagramPhotos(url, jobDir);
+      const reelPath = new URL(url).pathname;
+      const isReel = /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(reelPath);
+      const result = isReel
+        ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir)
+        : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir);
       return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
     } catch (browserError) {
       errors.push(browserError);
