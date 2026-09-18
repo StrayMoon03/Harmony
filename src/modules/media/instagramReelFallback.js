@@ -5,6 +5,31 @@ const { promisify } = require("node:util");
 const { withBrowserLock } = require("./browserLock");
 const exec = promisify(execFile);
 const MAX_BYTES = 100 * 1024 * 1024;
+const DIAGNOSTIC_KEYS = new Set([
+  "helperStarted", "playwrightImported", "browserLaunched", "pageCreated",
+  "cookiesLoaded", "cookieLoadFailed", "navigationCompleted",
+  "requestedPageConfirmed", "loginRoute", "checkpointRoute",
+  "inspectResponseSeen", "responseJsonParsed", "responseJsonFailed",
+  "exactRecordSeen", "exactVideoDeclared", "allowedVideoCandidateSeen",
+  "scriptJsonParsed", "scriptJsonFailed", "helperCompleted",
+]);
+
+function sanitizedBrowserDiagnostics(stderr) {
+  if (typeof stderr !== "string") return null;
+  const prefix = "HARMONY_INSTAGRAM_DIAGNOSTICS:";
+  const line = stderr.split(/\r?\n/).find(value => value.startsWith(prefix));
+  if (!line) return null;
+  try {
+    const value = JSON.parse(line.slice(prefix.length));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return Object.fromEntries(Object.entries(value).filter(([key, flag]) => DIAGNOSTIC_KEYS.has(key) && typeof flag === "boolean"));
+  } catch { return null; }
+}
+
+function logBrowserDiagnostics(stderr) {
+  const safe = sanitizedBrowserDiagnostics(stderr);
+  if (safe && Object.keys(safe).length) console.warn("HARMONY_INSTAGRAM_DIAGNOSTICS:" + JSON.stringify(safe));
+}
 
 function exactReelCode(value) {
   const url = new URL(value);
@@ -68,8 +93,11 @@ async function downloadInstagramReel(url, jobDir) {
   const code = exactReelCode(url);
   let stdout;
   try {
-    ({ stdout } = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 })));
-  } catch {
+    const output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+    stdout = output.stdout;
+    logBrowserDiagnostics(output.stderr);
+  } catch (error) {
+    logBrowserDiagnostics(error.stderr);
     throw new Error("Instagram browser could not verify the requested reel");
   }
   const line = stdout.split(/\r?\n/).find(x => x.startsWith("HARMONY_INSTAGRAM_REEL:"));
@@ -81,4 +109,4 @@ async function downloadInstagramReel(url, jobDir) {
   return { files, creator: result.creator };
 }
 
-module.exports = { downloadInstagramReel, saveVerifiedReel, exactReelCode };
+module.exports = { downloadInstagramReel, saveVerifiedReel, exactReelCode, sanitizedBrowserDiagnostics };
