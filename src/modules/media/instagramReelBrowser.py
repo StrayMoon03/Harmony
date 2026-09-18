@@ -6,6 +6,33 @@ import re
 import sys
 from urllib.parse import urlparse
 
+DIAGNOSTIC_KEYS = (
+    "helperStarted", "playwrightImported", "browserLaunched", "pageCreated",
+    "cookiesLoaded", "cookieLoadFailed", "navigationCompleted",
+    "requestedPageConfirmed", "loginRoute", "checkpointRoute",
+    "inspectResponseSeen", "responseJsonParsed", "responseJsonFailed",
+    "exactRecordSeen", "exactVideoDeclared", "allowedVideoCandidateSeen",
+    "scriptJsonParsed", "scriptJsonFailed", "helperCompleted",
+)
+
+
+def emit_diagnostics(signals):
+    safe = {key: signals.get(key) is True for key in DIAGNOSTIC_KEYS}
+    print("HARMONY_INSTAGRAM_DIAGNOSTICS:" + json.dumps(safe), file=sys.stderr)
+
+
+def record_signals(payload, code, signals):
+    if isinstance(payload, dict):
+        if payload.get("code") == code or payload.get("shortcode") == code:
+            signals["exactRecordSeen"] = True
+            if payload.get("media_type") == 2 or payload.get("is_video") is True:
+                signals["exactVideoDeclared"] = True
+        for child in payload.values():
+            record_signals(child, code, signals)
+    elif isinstance(payload, list):
+        for child in payload:
+            record_signals(child, code, signals)
+
 
 def reel_code(url):
     parsed = urlparse(url)
@@ -85,28 +112,42 @@ def load_cookies(filename):
             or c.domain.endswith(".instagram.com")]
 
 
-def main():
+def main(signals):
     from playwright.sync_api import sync_playwright
+    signals["playwrightImported"] = True
     code = reel_code(sys.argv[1])
     result = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"), args=["--no-sandbox", "--disable-dev-shm-usage"])
+        signals["browserLaunched"] = True
         try:
             context = browser.new_context()
             filename = os.environ.get("INSTAGRAM_COOKIES")
             if filename:
                 try:
-                    context.add_cookies(load_cookies(filename))
+                    cookies = load_cookies(filename)
+                    context.add_cookies(cookies)
+                    signals["cookiesLoaded"] = bool(cookies)
                 except (OSError, ValueError, http.cookiejar.LoadError):
-                    pass  # Public recovery remains possible; never log credentials.
+                    signals["cookieLoadFailed"] = True
             page = context.new_page()
+            signals["pageCreated"] = True
 
             def inspect_response(response):
                 nonlocal result
                 if not allowed_response(response.url):
                     return
+                signals["inspectResponseSeen"] = True
                 try:
-                    candidate = extract_reel(response.json(), code)
+                    payload = response.json()
+                    signals["responseJsonParsed"] = True
+                except Exception:
+                    signals["responseJsonFailed"] = True
+                    return
+                record_signals(payload, code, signals)
+                try:
+                    candidate = extract_reel(payload, code)
+                    signals["allowedVideoCandidateSeen"] = True
                     if result is None:
                         result = candidate
                     else:
@@ -118,25 +159,42 @@ def main():
 
             page.on("response", inspect_response)
             page.goto(f"https://www.instagram.com/reel/{code}/", wait_until="domcontentloaded", timeout=30000)
+            signals["navigationCompleted"] = True
             page.wait_for_timeout(5000)
+            signals["loginRoute"] = "/accounts/login" in urlparse(page.url).path
+            signals["checkpointRoute"] = any(part in urlparse(page.url).path for part in ("/checkpoint", "/challenge"))
             if reel_code(page.url) != code:
                 raise ValueError("Instagram redirected away from requested reel")
+            signals["requestedPageConfirmed"] = True
             if result is None:
                 payloads = []
                 for text in page.locator('script[type="application/json"]').all_text_contents():
                     try:
-                        payloads.append(json.loads(text))
+                        payload = json.loads(text)
+                        payloads.append(payload)
+                        signals["scriptJsonParsed"] = True
+                        record_signals(payload, code, signals)
                     except ValueError:
-                        pass
+                        signals["scriptJsonFailed"] = True
                 result = extract_reel(payloads, code)
+            signals["allowedVideoCandidateSeen"] = True
             print("HARMONY_INSTAGRAM_REEL:" + json.dumps(result))
+            signals["helperCompleted"] = True
         finally:
             browser.close()
 
 
-if __name__ == "__main__":
+def run(main_fn=main):
+    signals = {"helperStarted": True}
     try:
-        main()
+        main_fn(signals)
+        return 0
     except Exception:
         print("Instagram browser could not verify the requested reel", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    finally:
+        emit_diagnostics(signals)
+
+
+if __name__ == "__main__":
+    sys.exit(run())
