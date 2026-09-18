@@ -938,13 +938,44 @@ async function processMediaMessage(message) {
         await downloadXMedia(originalUrl);
 
       if (downloadResult.linkOnly) {
+        const sharedBy =
+          message.member?.displayName ??
+          message.author.username;
+        let cardMessage = null;
+
+        if (downloadResult.postText) {
+          const description = [
+            `**${downloadResult.creator || "Unknown creator"}**`,
+            "",
+            downloadResult.postText.slice(0, 3600),
+            "",
+            `[Original Post](${originalUrl})`,
+            "",
+            `🖤 Shared by ${sharedBy}`,
+          ].join("\n");
+
+          cardMessage = await message.channel.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0x000000)
+                .setTitle("🖤 X — Text Post")
+                .setDescription(description),
+            ],
+            allowedMentions: { parse: [] },
+          });
+          shareStore.addOutputMessage(
+            message.id,
+            cardMessage.id,
+            cardMessage.channelId
+          );
+          await suppressOriginalEmbeds(message);
+        }
+
         shareStore.insert({
           platform,
           mediaId,
           creator: downloadResult.creator || "Unknown creator",
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
+          sharedBy,
           sharedById: message.author.id,
           messageId: message.id,
           channelId: message.channel.id,
@@ -952,7 +983,9 @@ async function processMediaMessage(message) {
           url: originalUrl,
         });
         console.log(
-          "X text-only post preserved with its native preview."
+          cardMessage
+            ? "X text-only post displayed in Harmony's full-text card."
+            : "X text-only post preserved with its native preview."
         );
         return;
       }

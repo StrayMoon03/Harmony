@@ -10,6 +10,55 @@ const execFileAsync = promisify(execFile);
 
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
 
+function decodeXEmbedText(value) {
+  return String(value || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&#x27;/gi, "'")
+    .trim();
+}
+
+async function getXTextEmbed(url) {
+  try {
+    const endpoint = new URL("https://publish.twitter.com/oembed");
+    endpoint.searchParams.set("url", url);
+    endpoint.searchParams.set("omit_script", "true");
+    endpoint.searchParams.set("dnt", "true");
+    const response = await fetch(endpoint, {
+      headers: { "User-Agent": "Harmony/1.0" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const paragraph = String(data.html || "").match(
+      /<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/i
+    )?.[1];
+    const text = decodeXEmbedText(paragraph);
+    if (!text) return null;
+
+    const authorName = String(data.author_name || "").trim();
+    const handle = String(data.author_url || "").match(
+      /(?:x|twitter)\.com\/([^/?#]+)/i
+    )?.[1];
+    const creator = authorName && handle
+      ? `${authorName} (@${handle})`
+      : authorName || (handle ? `@${handle}` : null);
+    return { text, creator };
+  } catch (error) {
+    console.warn(
+      "X text embed lookup failed:",
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+}
+
+
 /**
  * Creates a private temporary folder for one X download.
  *
@@ -192,10 +241,13 @@ async function getGalleryDlMeta(url) {
     );
 
     const data = JSON.parse(stdout);
+    const expectedStatusId = String(url).match(/\/status\/(\d+)/i)?.[1] || null;
 
     let creator = null;
     let isGif = false;
     let hasMedia = false;
+    let postText = null;
+    let exactCreator = null;
 
     function walk(value) {
       if (!value) return;
@@ -208,6 +260,35 @@ async function getGalleryDlMeta(url) {
       }
 
       if (typeof value !== "object") return;
+
+      const identities = [
+        value.tweet_id,
+        value.id_str,
+        value.rest_id,
+        value.id,
+      ].map((item) => String(item || ""));
+      const isRequestedStatus =
+        expectedStatusId && identities.includes(expectedStatusId);
+
+      if (isRequestedStatus) {
+        const textCandidates = [
+          value.full_text,
+          value.content,
+          value.text,
+          value.description,
+        ];
+        postText = textCandidates.find(
+          (item) => typeof item === "string" && item.trim()
+        )?.trim() || postText;
+
+        if (value.author && typeof value.author === "object") {
+          const nick = String(value.author.nick || "").trim();
+          const name = String(value.author.name || "").trim();
+          exactCreator = name && nick
+            ? `${name} (@${nick.replace(/^@/, "")})`
+            : nick || name || exactCreator;
+        }
+      }
 
       // Original X media type from gallery-dl / Twitter API.
       if (value.type === "animated_gif") {
@@ -242,14 +323,24 @@ async function getGalleryDlMeta(url) {
 
     walk(data);
 
-    return { creator, isGif, hasMedia };
+    return {
+      creator: exactCreator || creator,
+      isGif,
+      hasMedia,
+      postText,
+    };
   } catch (error) {
     console.warn(
       "X gallery-dl metadata lookup failed:",
       error.message
     );
 
-    return { creator: null, isGif: false, hasMedia: null };
+    return {
+      creator: null,
+      isGif: false,
+      hasMedia: null,
+      postText: null,
+    };
   }
 }
 
@@ -289,14 +380,16 @@ async function downloadXMedia(url) {
     // text-only post, not a failed media download. Preserve X's native embed
     // and do not send it through the error-reporting path.
     if (meta.hasMedia === false) {
+      const textEmbed = await getXTextEmbed(url);
       await fs.rm(jobDir, { recursive: true, force: true });
       return {
         files: [],
         rawDir: null,
         platform: "x",
-        creator,
+        creator: textEmbed?.creator || creator,
         isGif: false,
         linkOnly: true,
+        postText: textEmbed?.text || meta.postText,
       };
     }
 
