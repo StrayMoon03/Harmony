@@ -1,5 +1,10 @@
 import importlib.util
 import unittest
+import io
+import json
+from contextlib import redirect_stderr
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("reel", Path(__file__).with_name("instagramReelBrowser.py"))
@@ -8,6 +13,78 @@ spec.loader.exec_module(reel)
 
 
 class ExactReelTests(unittest.TestCase):
+    def test_actual_main_navigation_failure_and_listener_parse_signals(self):
+        sync = MagicMock()
+        browser = sync.return_value.__enter__.return_value.chromium.launch.return_value
+        page = browser.new_context.return_value.new_page.return_value
+        page.goto.side_effect = RuntimeError("PRIVATE SIGNED URL")
+        signals = {}
+        with patch.dict("sys.modules", {"playwright.sync_api": SimpleNamespace(sync_playwright=sync)}), patch.dict(reel.os.environ, {"INSTAGRAM_COOKIES": ""}), patch.object(reel.sys, "argv", ["helper", "https://www.instagram.com/reel/EXACT/"]):
+            with self.assertRaises(RuntimeError):
+                reel.main(signals)
+        self.assertTrue(signals["playwrightImported"])
+        self.assertTrue(signals["browserLaunched"])
+        self.assertTrue(signals["pageCreated"])
+        self.assertFalse(signals.get("navigationCompleted", False))
+        browser.close.assert_called_once()
+        self.assertEqual(page.on.call_args.args[0], "response")
+        listener = page.on.call_args.args[1]
+        response = MagicMock(url="https://i.instagram.com/api/v1/media/123/info/")
+        response.json.side_effect = ValueError("PRIVATE PAYLOAD")
+        listener(response)
+        self.assertTrue(signals["inspectResponseSeen"])
+        self.assertTrue(signals["responseJsonFailed"])
+        response.json.side_effect = None
+        response.json.return_value = self.video("OTHER")
+        listener(response)
+        self.assertTrue(signals["responseJsonParsed"])
+        self.assertFalse(signals.get("exactRecordSeen", False))
+        response.json.return_value = self.video()
+        listener(response)
+        self.assertTrue(signals["exactRecordSeen"])
+        self.assertTrue(signals["allowedVideoCandidateSeen"])
+
+    def test_diagnostics_only_keep_allowlisted_booleans(self):
+        output = io.StringIO()
+        with redirect_stderr(output):
+            reel.emit_diagnostics({"exactRecordSeen": True, "cookiesLoaded": "SECRET", "url": "SIGNED", "cookie": "SECRET"})
+        report = json.loads(output.getvalue().split(":", 1)[1])
+        self.assertEqual(set(report), set(reel.DIAGNOSTIC_KEYS))
+        self.assertTrue(report["exactRecordSeen"])
+        self.assertFalse(report["cookiesLoaded"])
+        self.assertTrue(all(type(value) is bool for value in report.values()))
+        self.assertNotIn("SECRET", output.getvalue())
+        self.assertNotIn("SIGNED", output.getvalue())
+
+    def test_failed_start_emits_stage_not_exception(self):
+        def fail(signals):
+            raise RuntimeError("PRIVATE COOKIE SIGNED URL")
+        output = io.StringIO()
+        with redirect_stderr(output):
+            self.assertEqual(reel.run(fail), 1)
+        self.assertNotIn("PRIVATE", output.getvalue())
+        report = json.loads(output.getvalue().split("HARMONY_INSTAGRAM_DIAGNOSTICS:")[1])
+        self.assertTrue(report["helperStarted"])
+        self.assertFalse(report["playwrightImported"])
+
+    def test_failed_navigation_preserves_previous_stages(self):
+        def fail(signals):
+            signals.update(playwrightImported=True, browserLaunched=True, pageCreated=True)
+            raise RuntimeError("SIGNED")
+        output = io.StringIO()
+        with redirect_stderr(output):
+            self.assertEqual(reel.run(fail), 1)
+        report = json.loads(output.getvalue().split("HARMONY_INSTAGRAM_DIAGNOSTICS:")[1])
+        self.assertTrue(report["pageCreated"])
+        self.assertFalse(report["navigationCompleted"])
+
+    def test_record_diagnostics_do_not_promote_foreign_video(self):
+        signals = {}
+        reel.record_signals({"code": "EXACT", "quote": self.video("OTHER")}, "EXACT", signals)
+        self.assertEqual(signals, {"exactRecordSeen": True})
+        reel.record_signals({"code": "EXACT", "post": self.video()}, "EXACT", signals)
+        self.assertTrue(signals["exactVideoDeclared"])
+
     def video(self, code="EXACT", **extra):
         return {"code": code, "media_type": 2, "video_versions": [{"url": "https://scontent-a.cdninstagram.com/owned.mp4"}], **extra}
 
