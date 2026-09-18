@@ -8,6 +8,33 @@ const { saveVerifiedReel, exactReelCode } = require("./instagramReelFallback");
 const owned = { code: "EXACT", video: "https://scontent-a.cdninstagram.com/owned.mp4?secret=SIGNED" };
 const audioVideo = { stdout: JSON.stringify({ streams: [{ codec_type: "video" }, { codec_type: "audio" }] }) };
 
+test("browser diagnostics strip private and nonboolean fields", () => {
+  const { sanitizedBrowserDiagnostics } = require("./instagramReelFallback");
+  const report = sanitizedBrowserDiagnostics('PRIVATE STDERR\nHARMONY_INSTAGRAM_DIAGNOSTICS:' + JSON.stringify({ helperStarted: true, responseJsonFailed: false, cookiesLoaded: "SECRET", url: "SIGNED", cookie: "SECRET", exactRecordSeen: 1 }));
+  assert.deepEqual(report, { helperStarted: true, responseJsonFailed: false });
+});
+
+test("malformed diagnostics never expose raw stderr", () => {
+  const { sanitizedBrowserDiagnostics } = require("./instagramReelFallback");
+  for (const value of [undefined, "SECRET", "HARMONY_INSTAGRAM_DIAGNOSTICS:SIGNED", "HARMONY_INSTAGRAM_DIAGNOSTICS:null", "HARMONY_INSTAGRAM_DIAGNOSTICS:[]"]) assert.equal(sanitizedBrowserDiagnostics(value), null);
+});
+
+test("failed browser execution logs only sanitized stage booleans", async () => {
+  const source = await fs.readFile(path.join(__dirname, "instagramReelFallback.js"), "utf8");
+  const warnings = [];
+  const module = { exports: {} };
+  const error = new Error("PRIVATE SIGNED URL");
+  error.stderr = 'PRIVATE COOKIE\nHARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"browserLaunched":false,"url":"SIGNED"}';
+  const sandboxRequire = name => {
+    if (name === "node:util") return { promisify: () => async () => { throw error; } };
+    if (name === "./browserLock") return { withBrowserLock: work => work() };
+    return require(name);
+  };
+  vm.runInNewContext(source, { require: sandboxRequire, module, __dirname, process, console: { warn: value => warnings.push(value) }, URL });
+  await assert.rejects(module.exports.downloadInstagramReel("https://www.instagram.com/reel/EXACT/", "/unused"), error => error.message === "Instagram browser could not verify the requested reel");
+  assert.deepEqual(warnings, ['HARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"browserLaunched":false}']);
+});
+
 async function runSave(result = owned, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-test-"));
   const calls = [];
