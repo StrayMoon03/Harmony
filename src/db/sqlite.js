@@ -284,6 +284,8 @@ function migrate(database) {
       ON birthday_announcement_history (guild_id, announced_at);
   `);
 
+  migrateSharesToGuildScope(database);
+
   const settingColumns = new Set(
     database.prepare("PRAGMA table_info(welcome_pass_settings)").all()
       .map((column) => column.name)
@@ -315,6 +317,68 @@ function migrate(database) {
   }
 }
 
+/**
+ * Early Harmony versions treated a post saved in any Discord server as a
+ * duplicate everywhere. Rebuild the small shares table once so duplicate
+ * identity includes the guild that owns the collection.
+ *
+ * @param {import("node:sqlite").DatabaseSync} database
+ */
+function migrateSharesToGuildScope(database) {
+  const table = database.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'shares'"
+  ).get();
+  const sql = String(table?.sql || "");
+
+  if (/UNIQUE\s*\(\s*guild_id\s*,\s*platform\s*,\s*media_id\s*\)/i.test(sql)) {
+    return;
+  }
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(`
+      ALTER TABLE shares RENAME TO shares_legacy_global_dedupe;
+
+      CREATE TABLE shares (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform      TEXT    NOT NULL,
+        media_id      TEXT    NOT NULL,
+        creator       TEXT,
+        shared_by     TEXT    NOT NULL,
+        shared_by_id  TEXT,
+        shared_at     TEXT    NOT NULL,
+        message_id    TEXT,
+        channel_id    TEXT,
+        guild_id      TEXT,
+        url           TEXT,
+        UNIQUE (guild_id, platform, media_id)
+      );
+
+      INSERT INTO shares (
+        id, platform, media_id, creator, shared_by, shared_by_id,
+        shared_at, message_id, channel_id, guild_id, url
+      )
+      SELECT
+        id, platform, media_id, creator, shared_by, shared_by_id,
+        shared_at, message_id, channel_id, guild_id, url
+      FROM shares_legacy_global_dedupe;
+
+      DROP TABLE shares_legacy_global_dedupe;
+
+      CREATE INDEX IF NOT EXISTS idx_shares_platform_media
+        ON shares (platform, media_id);
+      CREATE INDEX IF NOT EXISTS idx_shares_guild_time
+        ON shares (guild_id, shared_at);
+      CREATE INDEX IF NOT EXISTS idx_shares_guild_user_time
+        ON shares (guild_id, shared_by_id, shared_at);
+    `);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function closeDb() {
   if (db) {
     db.close();
@@ -326,4 +390,5 @@ module.exports = {
   getDb,
   closeDb,
   DB_PATH,
+  migrate,
 };

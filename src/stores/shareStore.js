@@ -33,14 +33,17 @@ function notifyInserted(record) {
 /**
  * @param {string} platform
  * @param {string} mediaId
+ * @param {string|null} guildId
  * @returns {ShareRecord|null}
  */
-function find(platform, mediaId) {
+function find(platform, mediaId, guildId) {
   const row = getDb()
     .prepare(
-      `SELECT * FROM shares WHERE platform = ? AND media_id = ? LIMIT 1`
+      `SELECT * FROM shares
+       WHERE platform = ? AND media_id = ? AND guild_id IS ?
+       LIMIT 1`
     )
-    .get(platform, mediaId);
+    .get(platform, mediaId, guildId ?? null);
 
   return row ?? null;
 }
@@ -116,14 +119,16 @@ function insert(data) {
  *
  * @param {string} platform
  * @param {string} mediaId
+ * @param {string|null} guildId
  * @returns {boolean}
  */
-function remove(platform, mediaId) {
+function remove(platform, mediaId, guildId) {
   const result = getDb()
     .prepare(
-      `DELETE FROM shares WHERE platform = ? AND media_id = ?`
+      `DELETE FROM shares
+       WHERE platform = ? AND media_id = ? AND guild_id IS ?`
     )
-    .run(platform, mediaId);
+    .run(platform, mediaId, guildId ?? null);
 
   return Number(result.changes) > 0;
 }

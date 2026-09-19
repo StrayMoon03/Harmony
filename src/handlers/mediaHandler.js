@@ -363,7 +363,7 @@ async function processMediaMessage(message) {
 
     try {
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
@@ -529,7 +529,7 @@ async function processMediaMessage(message) {
 
     try {
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
@@ -697,7 +697,7 @@ async function processMediaMessage(message) {
       }
 
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
@@ -908,7 +908,7 @@ async function processMediaMessage(message) {
 
     try {
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
@@ -1064,7 +1064,7 @@ async function processMediaMessage(message) {
 
     try {
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
@@ -1255,7 +1255,7 @@ async function processMediaMessage(message) {
 
     try {
       const existing =
-        shareStore.find(platform, mediaId);
+        shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
         await message.reply({
