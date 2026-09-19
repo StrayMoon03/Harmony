@@ -124,7 +124,8 @@ async function execute(interaction) {
 
     const removed = shareStore.remove(
       key.platform,
-      key.mediaId
+      key.mediaId,
+      interaction.guildId
     );
 
     await interaction.editReply({
