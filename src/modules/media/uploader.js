@@ -28,6 +28,31 @@ const SIZE_ATTEMPTS = [
   { maxWidth: 360, bitrateScale: 0.18 },
 ];
 
+function isUnknownMessageReferenceError(error) {
+  if (Number(error && error.code) !== 50035) return false;
+  const reference =
+    error && error.rawError && error.rawError.errors &&
+    error.rawError.errors.message_reference;
+  return Array.isArray(reference && reference._errors) &&
+    reference._errors.some((item) =>
+      item && item.code === "MESSAGE_REFERENCE_UNKNOWN_MESSAGE"
+    );
+}
+
+async function sendUploadBatch(message, payload, isFirst) {
+  if (!isFirst) return message.channel.send(payload);
+  try {
+    return await message.reply(payload);
+  } catch (error) {
+    if (!isUnknownMessageReferenceError(error)) throw error;
+    // The source message may be deleted while media is downloading. Discord
+    // rejects the reply reference but the verified upload itself is still
+    // safe to send to the same channel.
+    console.warn("Upload source message disappeared; sending without a reply reference.");
+    return message.channel.send(payload);
+  }
+}
+
 /**
  * @param {string} filePath
  * @returns {Promise<void>}
@@ -789,9 +814,7 @@ async function uploadMedia(
         ];
       }
 
-      const sentMessage = isFirst
-        ? await message.reply(payload)
-        : await message.channel.send(payload);
+      const sentMessage = await sendUploadBatch(message, payload, isFirst);
 
       sentMessageIds.push(sentMessage.id);
       shareStore.addOutputMessage(
@@ -823,6 +846,8 @@ module.exports = {
   hasAudioStream,
   isAppleCompatibleVideo,
   ensureAppleCompatibleVideo,
+  isUnknownMessageReferenceError,
+  sendUploadBatch,
   SIZE_ATTEMPTS,
   DEFAULT_MAX_UPLOAD_BYTES,
   DEFAULT_EMBED_COLOR,
