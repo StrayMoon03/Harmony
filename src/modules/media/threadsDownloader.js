@@ -203,24 +203,23 @@ function inspectThreadsPage(html) {
   };
 }
 
-function findThreadsPostRecord(value, expectedCode) {
-  if (!value || typeof value !== "object") return null;
+function findThreadsPostRecords(value, expectedCode, found = []) {
+  if (!value || typeof value !== "object") return found;
 
   if (
     !Array.isArray(value) &&
     String(value.code || "") === expectedCode
   ) {
-    return value;
+    found.push(value);
   }
 
   const children = Array.isArray(value)
     ? value
     : Object.values(value);
   for (const child of children) {
-    const found = findThreadsPostRecord(child, expectedCode);
-    if (found) return found;
+    findThreadsPostRecords(child, expectedCode, found);
   }
-  return null;
+  return found;
 }
 
 function bestThreadsMediaCandidate(media) {
@@ -249,7 +248,7 @@ function bestThreadsMediaCandidate(media) {
 
 function collectThreadsPostRecordMedia(post) {
   const candidates = [];
-  const items = Array.isArray(post?.carousel_media)
+  const items = Array.isArray(post?.carousel_media) && post.carousel_media.length > 0
     ? post.carousel_media
     : [post];
 
@@ -271,7 +270,7 @@ function collectThreadsPostRecordMedia(post) {
       post?.reposted_post ||
       null;
     if (attachedPost) {
-      const attachedItems = Array.isArray(attachedPost.carousel_media)
+      const attachedItems = Array.isArray(attachedPost.carousel_media) && attachedPost.carousel_media.length > 0
         ? attachedPost.carousel_media
         : [attachedPost];
       for (const item of attachedItems) {
@@ -298,16 +297,19 @@ function collectPostScopedJsonMedia(html, exactPostUrl) {
   const scripts = String(html || "").matchAll(
     /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi
   );
+  let best = [];
   for (const match of scripts) {
     try {
       const data = JSON.parse(match[1]);
-      const post = findThreadsPostRecord(data, expectedCode);
-      if (post) return collectThreadsPostRecordMedia(post);
+      for (const post of findThreadsPostRecords(data, expectedCode)) {
+        const candidates = collectThreadsPostRecordMedia(post);
+        if (candidates.length > best.length) best = candidates;
+      }
     } catch {
       // Ignore unrelated or incomplete script payloads.
     }
   }
-  return [];
+  return best;
 }
 
 function collectCandidateUrls(html) {
