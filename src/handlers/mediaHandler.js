@@ -57,6 +57,7 @@ const {
 } = require("../modules/media/threadsDownloader");
 const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
+const { formatDiscordTimestamp } = require("../utils/discordTimestamp");
 const { logMediaError } = require("../services/errorInboxService");
 
 /**
@@ -66,18 +67,7 @@ const { logMediaError } = require("../services/errorInboxService");
  * @returns {string}
  */
 function formatAlreadySharedReply(record) {
-  let dateLine = record.shared_at;
-
-  try {
-    const d = new Date(record.shared_at);
-
-    dateLine = d.toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  } catch {
-    // Keep the raw value if parsing fails.
-  }
+  const dateLine = formatDiscordTimestamp(record.shared_at);
 
   return [
     "Thank you for helping keep our collection growing!",
