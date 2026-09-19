@@ -418,6 +418,31 @@ function validFacebookCdnUrl(value) {
   }
 }
 
+function hasMp4ContainerSignature(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 1024) return false;
+  const boxes = new Set();
+  let offset = 0;
+  while (offset + 8 <= bytes.length) {
+    let size = bytes.readUInt32BE(offset);
+    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    let header = 8;
+    if (size === 1) {
+      if (offset + 16 > bytes.length) return false;
+      const extended = bytes.readBigUInt64BE(offset + 8);
+      if (extended > BigInt(Number.MAX_SAFE_INTEGER)) return false;
+      size = Number(extended);
+      header = 16;
+    } else if (size === 0) {
+      size = bytes.length - offset;
+    }
+    if (size < header || offset + size > bytes.length) return false;
+    boxes.add(type);
+    offset += size;
+  }
+  return offset === bytes.length && boxes.has("ftyp") && boxes.has("mdat") &&
+    (boxes.has("moov") || boxes.has("moof"));
+}
+
 async function fetchVerifiedFacebookAttachment(attachment, referer, cookie = "") {
   const urls = [...new Set([attachment.url, ...(Array.isArray(attachment.fallbackUrls) ? attachment.fallbackUrls : [])])]
     .filter(validFacebookCdnUrl).slice(0, 4);
@@ -435,7 +460,15 @@ async function fetchVerifiedFacebookAttachment(attachment, referer, cookie = "")
       const isImage = attachment.type === "photo" && type.startsWith("image/");
       if (!isVideo && !isImage) { failures.push("unexpected content type"); continue; }
       const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length < (isVideo ? 50 : 30) * 1024) { failures.push("file below size threshold"); continue; }
+      // Short Facebook clips can legitimately be smaller than 50 KiB. Keep
+      // the existing size guard for ordinary responses, but allow a small
+      // video only when it is a complete MP4 container. This avoids accepting
+      // tiny error bodies merely because the CDN sent a video content type.
+      if (isVideo && bytes.length < 50 * 1024 && !hasMp4ContainerSignature(bytes)) {
+        failures.push("invalid or incomplete video file");
+        continue;
+      }
+      if (isImage && bytes.length < 30 * 1024) { failures.push("file below size threshold"); continue; }
       const ext = isVideo ? ".mp4" : type.includes("png") ? ".png" : type.includes("webp") ? ".webp" : ".jpg";
       return { bytes, ext };
     } catch {
