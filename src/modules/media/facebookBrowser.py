@@ -22,7 +22,14 @@ URL_KEYS = {
 }
 VIDEO_KEYS = (
     "playable_url_quality_hd", "browser_native_hd_url",
-    "playable_url", "browser_native_sd_url",
+    "playable_url", "browser_native_sd_url", "playable_url_dash",
+    # Facebook's current videoDeliveryResponse payload stores direct MP4
+    # renditions under progressive_urls[].progressive_url.
+    "progressive_url",
+)
+VIDEO_CONTAINER_KEYS = (
+    "videoDeliveryLegacyFields",
+    "videoDeliveryResponseFragment",
 )
 ATTACHMENT_WORDS = (
     "attachment", "subattachment", "media", "photo", "video", "image",
@@ -259,7 +266,9 @@ def collect_attachments(root):
         typename = str(value.get("__typename", "")).lower()
         media_type = inherited_type
         is_video_node = (
-            "video" in typename or any(key in value for key in VIDEO_KEYS)
+            "video" in typename
+            or any(key in value for key in VIDEO_KEYS)
+            or any(key in value for key in VIDEO_CONTAINER_KEYS)
         )
         current_inside_video = inside_video or is_video_node
         if current_inside_video:
