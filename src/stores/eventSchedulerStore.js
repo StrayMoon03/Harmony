@@ -28,6 +28,43 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
+function getEvent(guildId, eventId) {
+  return getDb().prepare(`
+    SELECT e.*, COUNT(a.id) AS announcement_count,
+      SUM(CASE WHEN a.status = 'pending' THEN 1 ELSE 0 END) AS pending_count
+    FROM scheduled_events e
+    LEFT JOIN scheduled_announcements a ON a.event_id = e.id
+    WHERE e.guild_id = ? AND e.id = ? AND e.cancelled_at IS NULL
+    GROUP BY e.id
+  `).get(guildId, eventId);
+}
+
+function listAnnouncements(eventId) {
+  return getDb().prepare(`
+    SELECT * FROM scheduled_announcements
+    WHERE event_id = ? AND status = 'pending'
+    ORDER BY scheduled_for, id
+  `).all(eventId);
+}
+
+function addAnnouncement(guildId, eventId, scheduledFor, message) {
+  const db = getDb();
+  const event = getEvent(guildId, eventId);
+  if (!event) return { ok: false, reason: "missing" };
+  if (Number(event.pending_count || 0) >= 12) return { ok: false, reason: "limit" };
+  const duplicate = db.prepare(`
+    SELECT id FROM scheduled_announcements
+    WHERE event_id = ? AND scheduled_for = ? AND message = ? AND status = 'pending'
+  `).get(eventId, scheduledFor, message);
+  if (duplicate) return { ok: false, reason: "duplicate" };
+  const result = db.prepare(`
+    INSERT INTO scheduled_announcements (
+      event_id, scheduled_for, message, status, created_at
+    ) VALUES (?, ?, ?, 'pending', ?)
+  `).run(eventId, scheduledFor, message, new Date().toISOString());
+  return { ok: true, id: Number(result.lastInsertRowid) };
+}
+
 function listEvents(guildId, limit = 20) {
   return getDb().prepare(`
     SELECT e.*, COUNT(a.id) AS announcement_count,
@@ -106,6 +143,9 @@ function markFailed(id, error) {
 
 module.exports = {
   createEvent,
+  getEvent,
+  listAnnouncements,
+  addAnnouncement,
   listEvents,
   cancelEvent,
   dueAnnouncements,
