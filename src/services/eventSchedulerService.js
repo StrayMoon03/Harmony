@@ -46,7 +46,19 @@ function localToUtc(dateText, timeText, timezone) {
     const wanted = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
     value += wanted - shown;
   }
-  return new Date(value);
+  const result = new Date(value);
+  const verified = Object.fromEntries(
+    formatter.formatToParts(result)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)])
+  );
+  if (verified.hour === 24) verified.hour = 0;
+  if (
+    verified.year !== target.year || verified.month !== target.month ||
+    verified.day !== target.day || verified.hour !== target.hour ||
+    verified.minute !== target.minute
+  ) return null;
+  return result;
 }
 
 function field(lines, name) {
@@ -196,4 +208,10 @@ function startEventScheduler(client) {
   timer.unref?.();
 }
 
-module.exports = { parseEvent, handleEventSchedulerMessage, processScheduledAnnouncements, startEventScheduler };
+module.exports = {
+  parseEvent,
+  localToUtc,
+  handleEventSchedulerMessage,
+  processScheduledAnnouncements,
+  startEventScheduler,
+};
