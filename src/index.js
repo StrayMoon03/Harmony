@@ -59,6 +59,10 @@ const {
   scheduleMemberCountRefresh,
   startMemberCountScheduler,
 } = require("./services/memberCountService");
+const {
+  handleEventSchedulerMessage,
+  startEventScheduler,
+} = require("./services/eventSchedulerService");
 
 const commands = [
   forgetShareCommand,
@@ -147,6 +151,7 @@ client.once("clientReady", async () => {
   startMessageLogCleanup(client);
   startBirthdayScheduler(client);
   startMemberCountScheduler(client);
+  startEventScheduler(client);
 });
 
 client.on("guildCreate", async (guild) => {
@@ -311,6 +316,12 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
 
 client.on("messageCreate", async (message) => {
   console.log("MESSAGE RECEIVED:", message.content);
+
+  try {
+    if (await handleEventSchedulerMessage(message)) return;
+  } catch (error) {
+    console.error("Event scheduler message check failed:", error);
+  }
 
   try {
     const heldOrRemoved = await handleGuardedMessage(message);
