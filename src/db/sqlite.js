@@ -282,6 +282,40 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_birthday_history_guild_time
       ON birthday_announcement_history (guild_id, announced_at);
+
+    CREATE TABLE IF NOT EXISTS scheduled_events (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id                TEXT NOT NULL,
+      source_channel_id       TEXT NOT NULL,
+      destination_channel_id  TEXT NOT NULL,
+      title                   TEXT NOT NULL,
+      link                    TEXT NOT NULL,
+      timezone                TEXT NOT NULL DEFAULT 'America/New_York',
+      created_by              TEXT NOT NULL,
+      created_at              TEXT NOT NULL,
+      cancelled_at            TEXT,
+      cancelled_by            TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS scheduled_announcements (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id            INTEGER NOT NULL REFERENCES scheduled_events(id) ON DELETE CASCADE,
+      scheduled_for       TEXT NOT NULL,
+      message             TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending', 'sending', 'sent', 'cancelled')),
+      attempted_at        TEXT,
+      sent_at             TEXT,
+      discord_message_id  TEXT,
+      last_error          TEXT,
+      created_at          TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scheduled_announcements_due
+      ON scheduled_announcements (status, scheduled_for);
+
+    CREATE INDEX IF NOT EXISTS idx_scheduled_events_guild
+      ON scheduled_events (guild_id, cancelled_at);
   `);
 
   migrateSharesToGuildScope(database);
