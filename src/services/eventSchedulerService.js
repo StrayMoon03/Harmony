@@ -1,4 +1,12 @@
-const { PermissionFlagsBits } = require("discord.js");
+const {
+  PermissionFlagsBits,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+} = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
@@ -19,6 +27,96 @@ function validTimezone(value) {
   } catch {
     return false;
   }
+}
+
+function renderEventControls(guildId, eventId) {
+  const event = store.getEvent(guildId, eventId);
+  if (!event) return { content: "That scheduled event is no longer active.", components: [] };
+  const announcements = store.listAnnouncements(eventId);
+  const lines = announcements.map((item) =>
+    `• <t:${Math.floor(new Date(item.scheduled_for).getTime() / 1000)}:F> — ${item.message}`
+  );
+  return {
+    content: [
+      `✅ Event #${event.id}: **${event.title}**`,
+      `Posting in: <#${event.destination_channel_id}>`,
+      `Link: ${event.link}`,
+      "",
+      ...lines,
+      "",
+      "Use **Add another announcement** for the same event link, or choose **Finished** when you are done.",
+    ].join("\n"),
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-schedule:add:${event.id}`).setLabel("Add another announcement").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`harmony-schedule:done:${event.id}`).setLabel("Finished").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`harmony-schedule:cancel:${event.id}`).setLabel("Cancel event").setStyle(ButtonStyle.Danger)
+    )],
+    allowedMentions: { parse: [] },
+  };
+}
+
+async function handleEventSchedulerInteraction(interaction) {
+  const customId = interaction.customId || "";
+  if (!customId.startsWith("harmony-schedule:")) return false;
+  const admin = Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
+  );
+  if (!admin) {
+    await interaction.reply({ content: "Only server admins can change scheduled events.", flags: 64 });
+    return true;
+  }
+  const [, action, rawEventId] = customId.split(":");
+  const eventId = Number(rawEventId);
+  const event = store.getEvent(interaction.guildId, eventId);
+  if (!event) {
+    await interaction.reply({ content: "That scheduled event is no longer active.", flags: 64 });
+    return true;
+  }
+  if (action === "add" && interaction.isButton()) {
+    const modal = new ModalBuilder().setCustomId(`harmony-schedule:save:${eventId}`).setTitle("Add an event announcement");
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("date").setLabel("Date (YYYY-MM-DD)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("time").setLabel("Time (24-hour HH:MM)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(5)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("message").setLabel("Announcement message").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1800))
+    );
+    await interaction.showModal(modal);
+    return true;
+  }
+  if (action === "save" && interaction.isModalSubmit()) {
+    const date = interaction.fields.getTextInputValue("date").trim();
+    const time = interaction.fields.getTextInputValue("time").trim();
+    const message = interaction.fields.getTextInputValue("message").trim();
+    const scheduledFor = localToUtc(date, time, event.timezone);
+    if (!scheduledFor || scheduledFor.getTime() <= Date.now()) {
+      await interaction.reply({ content: "That date or time is invalid or has already passed. Use `YYYY-MM-DD` and 24-hour `HH:MM`.", flags: 64 });
+      return true;
+    }
+    const result = store.addAnnouncement(interaction.guildId, eventId, scheduledFor.toISOString(), message);
+    if (!result.ok) {
+      const reason = result.reason === "limit" ? "This event already has the maximum of 12 announcements."
+        : result.reason === "duplicate" ? "That exact announcement is already scheduled."
+          : "That event is no longer active.";
+      await interaction.reply({ content: reason, flags: 64 });
+      return true;
+    }
+    await interaction.reply({ ...renderEventControls(interaction.guildId, eventId), flags: 64 });
+    return true;
+  }
+  if (action === "done" && interaction.isButton()) {
+    await interaction.update({
+      content: `✅ Event #${eventId} is scheduled with ${event.pending_count} announcement${Number(event.pending_count) === 1 ? "" : "s"}. Use \`/harmony-schedule list\` anytime to review it.`,
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  }
+  if (action === "cancel" && interaction.isButton()) {
+    store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
+    await interaction.update({ content: `Cancelled event #${eventId}.`, components: [] });
+    return true;
+  }
+  return false;
 }
 
 function localToUtc(dateText, timeText, timezone) {
@@ -211,7 +309,10 @@ function startEventScheduler(client) {
 module.exports = {
   parseEvent,
   localToUtc,
+  validTimezone,
+  renderEventControls,
   handleEventSchedulerMessage,
+  handleEventSchedulerInteraction,
   processScheduledAnnouncements,
   startEventScheduler,
 };
