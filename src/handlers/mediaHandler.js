@@ -1,4 +1,10 @@
-const { withDelayedProgress, suppressOriginalEmbeds } = require("../modules/media/messageLifecycle");
+const {
+  FAILURE_TEXT,
+  MediaRetrievalTimeoutError,
+  withMediaLifecycle,
+  sendStandaloneNotice,
+  deleteOriginalAfterSuccess,
+} = require("../modules/media/messageLifecycle");
 const fs = require("node:fs/promises");
 const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -10,7 +16,7 @@ const {
   downloadTikTokMedia,
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
-const { formatMediaCard } = require("../modules/media/formatter");
+const { formatMediaCard, extractOriginalDate } = require("../modules/media/formatter");
 const { uploadMedia } = require("../modules/media/uploader");
 const {
   findInstagramLinks,
@@ -66,19 +72,43 @@ const { logMediaError } = require("../services/errorInboxService");
  * @param {{ shared_by: string, shared_at: string }} record
  * @returns {string}
  */
-function formatAlreadySharedReply(record) {
-  const dateLine = formatDiscordTimestamp(record.shared_at);
+function platformHeart(platform) {
+  return ({ instagram: "💛", facebook: "💙", threads: "🤍", x: "🖤", tiktok: "🩷", youtube: "❤️" })[platform] || "🤍";
+}
 
+function formatAlreadySharedReply(record, platform) {
+  const dateLine = formatDiscordTimestamp(record.shared_at).replace(/:f>$/, ":D>");
+  const member = record.shared_by_id
+    ? `<@${record.shared_by_id}>`
+    : `@${String(record.shared_by || "member").replace(/^@/, "")}`;
   return [
-    "Thank you for helping keep our collection growing!",
-    "",
-    "It looks like this post has already been added.",
-    "",
-    `Originally shared on ${dateLine}`,
-    `by ${record.shared_by}`,
-    "",
-    "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
+    "Already shared!",
+    `By ${member} • ${dateLine}`,
+    `Thank you, ${platformHeart(platform)} Harmony`,
   ].join("\n");
+}
+
+async function sendAlreadyShared(message, record, platform) {
+  return sendStandaloneNotice(
+    message,
+    formatAlreadySharedReply(record, platform),
+    "thanks"
+  );
+}
+
+async function markRetrievedOrCleanup(lifecycle, downloadResult) {
+  try {
+    await lifecycle.markRetrieved();
+  } catch (error) {
+    if (downloadResult?.rawDir) {
+      await fs.rm(downloadResult.rawDir, { recursive: true, force: true }).catch(() => {});
+    } else {
+      await Promise.all((downloadResult?.files || []).map((file) =>
+        fs.unlink(file.path).catch(() => {})
+      ));
+    }
+    throw error;
+  }
 }
 
 /**
@@ -95,19 +125,8 @@ async function replyWithHarmonyError(message, error) {
     console.error("Could not send media failure to Harmony’s error inbox:", reportError);
   });
 
-  await message
-    .reply({
-      content: [
-        "I’m sorry, I couldn’t retrieve that post right now.",
-        "The original link is still available above.",
-        "",
-        "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
-      ].join("\n"),
-      allowedMentions: {
-        repliedUser: false,
-      },
-    })
-    .catch(() => {});
+  if (error instanceof MediaRetrievalTimeoutError) return;
+  await sendStandaloneNotice(message, FAILURE_TEXT, "failure").catch(() => {});
 }
 
 /**
@@ -310,7 +329,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl, resolvedUrl)
  *
  * @param {import("discord.js").Message} message
  */
-async function processMediaMessage(message) {
+async function processMediaMessage(message, lifecycle) {
   if (message.author.bot) return;
 
   const instagramLinks =
@@ -359,25 +378,17 @@ async function processMediaMessage(message) {
 
     const platform = "instagram";
     let info = null;
-    let stopInstagramTyping = null;
 
     try {
       const existing =
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
 
         return;
       }
-
-      stopInstagramTyping = startTypingIndicator(message);
 
       try {
         info = await getMediaInfo(originalUrl);
@@ -411,10 +422,11 @@ async function processMediaMessage(message) {
         mediaType: classification.label,
         creator,
         originalUrl,
-        heart: "💛",
+        originalDate: extractOriginalDate(info),
       });
 
-      await uploadMedia(
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
+      const sentMessageIds = await uploadMedia(
         message,
         classification.files,
         cardText,
@@ -424,8 +436,7 @@ async function processMediaMessage(message) {
           ensureAppleCompatibleVideo: true,
         }
       );
-
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -435,7 +446,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: originalUrl,
@@ -447,57 +458,10 @@ async function processMediaMessage(message) {
           `shared for ${message.author.username}`
       );
     } catch (error) {
-      const isAudioOnlyFailure = /INSTAGRAM_AUDIO_MISSING|did not expose a merged video with audio/i.test(
-        String(error?.message || error)
-      );
-
-      if (isAudioOnlyFailure) {
-        try {
-          const creator = resolveCreator(info, []);
-          const cardText = formatMediaCard({
-            platform: "Instagram",
-            mediaType: "Reel",
-            creator,
-            originalUrl,
-            heart: "💛",
-          });
-
-          await sendInstagramStreamingPreview(message, {
-            originalUrl,
-            cardText,
-            previewUrl: findInstagramPreviewUrl(info),
-          });
-
-          shareStore.insert({
-            platform,
-            mediaId,
-            creator,
-            sharedBy: message.member?.displayName ?? message.author.username,
-            sharedById: message.author.id,
-            messageId: message.id,
-            channelId: message.channel.id,
-            guildId: message.guild?.id ?? null,
-            url: originalUrl,
-          });
-
-          console.log(
-            `Instagram reel used sound-preserving embed fallback for ${message.author.username}`
-          );
-          return;
-        } catch (fallbackError) {
-          console.error(
-            "Instagram sound-preserving fallback failed:",
-            fallbackError
-          );
-        }
-      }
-
       await replyWithHarmonyError(
         message,
         error
       );
-    } finally {
-      stopInstagramTyping?.();
     }
 
     return;
@@ -532,23 +496,9 @@ async function processMediaMessage(message) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
-        await suppressOriginalEmbeds(message);
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
         return;
-      }
-
-      try {
-        await message.channel.sendTyping();
-      } catch {
-        console.warn(
-          "Facebook typing indicator unavailable. Continuing with media processing."
-        );
       }
 
       let info = null;
@@ -569,21 +519,7 @@ async function processMediaMessage(message) {
         );
 
       if (downloadResult.linkOnly) {
-        await logMediaError(
-          message,
-          new Error(
-            downloadResult.failureReason ||
-            "FACEBOOK_UNVERIFIED_MEDIA"
-          )
-        ).catch((reportError) => {
-          console.error("Could not send Facebook failure to Harmony’s error inbox:", reportError);
-        });
-        await message.reply({
-          content:
-            "Facebook did not expose media that Harmony could verify belongs to this exact post, so I left the original link above instead of showing the wrong preview.\n\n💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
-          allowedMentions: { repliedUser: false },
-        });
-        return;
+        throw new Error(downloadResult.failureReason || "FACEBOOK_UNVERIFIED_MEDIA");
       }
 
       const classification = classify(
@@ -608,17 +544,18 @@ async function processMediaMessage(message) {
         mediaType: classification.label,
         creator,
         originalUrl: normalizedUrl,
-        heart: "💙",
+        originalDate: extractOriginalDate(info),
       });
 
-      await uploadMedia(
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
+      const sentMessageIds = await uploadMedia(
         message,
         classification.files,
         cardText,
         downloadResult.rawDir
       );
 
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -628,7 +565,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: normalizedUrl,
@@ -658,33 +595,11 @@ async function processMediaMessage(message) {
     const platform = "tiktok";
 
     try {
-      // Discord's typing endpoint can fail transiently (including HTTP 500).
-      // A cosmetic indicator must never prevent the TikTok itself from being
-      // normalized, downloaded, and posted.
-      await message.channel.sendTyping().catch((error) => {
-        console.warn(
-          "Could not start TikTok typing indicator:",
-          error instanceof Error ? error.message : error
-        );
-      });
-
       const normalizedUrl =
         await normalizeTikTokUrl(originalUrl);
 
       if (isTikTokLiveUrl(normalizedUrl)) {
-        await message.reply({
-          content: [
-            "This TikTok link points to a live broadcast, so Harmony can’t archive it as a saved post.",
-            "You can still watch it through the original TikTok link above.",
-            "",
-            "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
-          ].join("\n"),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
-
-        return;
+        throw new Error("TikTok live broadcasts cannot be archived as standalone media.");
       }
 
       const mediaId =
@@ -700,13 +615,8 @@ async function processMediaMessage(message) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
 
         return;
       }
@@ -729,42 +639,7 @@ async function processMediaMessage(message) {
       // TikTok photo-mode posts can expose the soundtrack duration in
       // metadata. That duration does not make the post a long video.
       if (!isPhotoPost && durationSeconds >= 90) {
-        const creator =
-          info?.uploader ||
-          info?.creator ||
-          "Unknown creator";
-        const cardText = formatMediaCard({
-          platform: "TikTok",
-          mediaType: "Video",
-          creator,
-          originalUrl: normalizedUrl,
-          heart: "🩷",
-        });
-
-        await sendTikTokStreamingPreview(message, {
-          originalUrl: normalizedUrl,
-          cardText,
-          durationMinutes: Math.ceil(durationSeconds / 60),
-        });
-
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator,
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: normalizedUrl,
-        });
-
-        console.log(
-          `TikTok long-video streaming card shared for ${message.author.username}`
-        );
-        return;
+        throw new Error("TikTok video requires its original platform link and cannot be replaced safely.");
       }
 
       const downloadResult =
@@ -776,51 +651,11 @@ async function processMediaMessage(message) {
       // Keep their downloaded images and send them through the carousel
       // uploader instead of replacing them with a link-only video card.
       if (!isPhotoPost && !downloadResult.hasAudio) {
-        const creator =
-          downloadResult.creator ||
-          info?.uploader ||
-          info?.creator ||
-          "Unknown creator";
-        const cardText = formatMediaCard({
-          platform: "TikTok",
-          mediaType: "Video",
-          creator,
-          originalUrl: normalizedUrl,
-          heart: "🩷",
-        });
-
         await fs.rm(downloadResult.rawDir, {
           recursive: true,
           force: true,
         }).catch(() => {});
-
-        await sendTikTokStreamingPreview(message, {
-          originalUrl: normalizedUrl,
-          cardText,
-          durationMinutes: Math.max(
-            1,
-            Math.ceil(Number(info?.duration || 0) / 60)
-          ),
-        });
-
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator,
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: normalizedUrl,
-        });
-
-        console.log(
-          `TikTok no-audio streaming fallback shared for ${message.author.username}`
-        );
-        return;
+        throw new Error("TikTok media did not contain a safe standalone video with audio.");
       }
 
       const classification = classify(
@@ -845,20 +680,18 @@ async function processMediaMessage(message) {
         mediaType: classification.label,
         creator,
         originalUrl: normalizedUrl,
-        heart: "🩷",
+        originalDate: extractOriginalDate(info),
       });
 
-      await uploadMedia(
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
+      const sentMessageIds = await uploadMedia(
         message,
         classification.files,
         cardText,
         downloadResult.rawDir,
         { embedColor: 0xff4fa3 }
       );
-
-      // Hide Discord's native TikTok preview only after a successful upload.
-      // The shared helper verifies suppression after delayed preview updates.
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -868,7 +701,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: normalizedUrl,
@@ -911,21 +744,17 @@ async function processMediaMessage(message) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
 
         return;
       }
 
-      await message.channel.sendTyping();
-
-      const downloadResult =
-        await downloadXMedia(originalUrl);
+      const [downloadResult, infoResult] = await Promise.all([
+        downloadXMedia(originalUrl),
+        getMediaInfo(originalUrl).catch(() => null),
+      ]);
+      const info = infoResult;
 
       if (downloadResult.linkOnly) {
         shareStore.insert({
@@ -976,11 +805,12 @@ async function processMediaMessage(message) {
         mediaType,
         creator,
         originalUrl,
-        heart: "🖤",
+        originalDate: extractOriginalDate(info),
       });
 
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
       try {
-        await uploadMedia(
+        var sentMessageIds = await uploadMedia(
           message,
           classification.files,
           cardText,
@@ -992,29 +822,10 @@ async function processMediaMessage(message) {
           String(uploadError?.message || uploadError)
         );
         if (!sizeFailure) throw uploadError;
-
-        console.warn(
-          "X attachment could not fit; preserving the original playable link."
-        );
-        const linkMessage = await message.reply({
-          content: originalUrl,
-          allowedMentions: { repliedUser: false },
-        });
-        const cardMessage = await message.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x000000)
-              .setDescription(
-                `${cardText}\n\nThis post plays through X so it can keep its original quality.`
-              ),
-          ],
-          allowedMentions: { parse: [] },
-        });
-        shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
-        shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
+        throw new Error("X media could not fit safely in a standalone Discord replacement.");
       }
 
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -1024,7 +835,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: originalUrl,
@@ -1067,65 +878,22 @@ async function processMediaMessage(message) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
-
-        await suppressOriginalEmbeds(message);
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
         return;
       }
-
-      await message.channel.sendTyping();
 
       console.log(
         `YouTube link accepted: ${mediaId}`
       );
 
-      const downloadResult =
-        await downloadYouTubeMedia(originalUrl);
+      const [downloadResult, info] = await Promise.all([
+        downloadYouTubeMedia(originalUrl),
+        getMediaInfo(originalUrl).catch(() => null),
+      ]);
 
       if (downloadResult.linkOnly) {
-        const creator =
-          downloadResult.creator ||
-          "Unknown creator";
-        const durationMinutes = Math.ceil(
-          downloadResult.durationSeconds / 60
-        );
-        const cardText = formatMediaCard({
-          platform: "YouTube",
-          mediaType: "Video",
-          creator,
-          originalUrl,
-          heart: "❤️",
-        });
-
-        await sendYouTubeStreamingPreview(message, {
-          originalUrl,
-          cardText,
-          durationMinutes,
-        });
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator,
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: originalUrl,
-        });
-
-        console.log(
-          `YouTube long video card shared for ${message.author.username}`
-        );
-        return;
+        throw new Error("YouTube media requires its original platform link and cannot be replaced safely.");
       }
 
       const classification = classify(
@@ -1153,11 +921,12 @@ async function processMediaMessage(message) {
         mediaType,
         creator,
         originalUrl,
-        heart: "❤️",
+        originalDate: extractOriginalDate(info),
       });
 
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
       try {
-        await uploadMedia(
+        var sentMessageIds = await uploadMedia(
           message,
           classification.files,
           cardText,
@@ -1172,38 +941,10 @@ async function processMediaMessage(message) {
             : uploadError
         );
 
-        const durationMinutes = Number.isFinite(
-          downloadResult.durationSeconds
-        )
-          ? Math.ceil(downloadResult.durationSeconds / 60)
-          : null;
-
-        await sendYouTubeStreamingPreview(message, {
-          originalUrl,
-          cardText,
-          durationMinutes,
-        });
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator,
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: originalUrl,
-        });
-
-        console.log(
-          `YouTube streaming fallback shared for ${message.author.username}`
-        );
-        return;
+        throw new Error("YouTube media could not fit safely in a standalone Discord replacement.");
       }
 
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -1213,7 +954,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: originalUrl,
@@ -1251,35 +992,27 @@ async function processMediaMessage(message) {
       return;
     }
 
-    let stopThreadsTyping = null;
-
     try {
       const existing =
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        await message.reply({
-          content:
-            formatAlreadySharedReply(existing),
-          allowedMentions: {
-            repliedUser: false,
-          },
-        });
-
-        await suppressOriginalEmbeds(message);
+        await lifecycle.markRetrieved();
+        await sendAlreadyShared(message, existing, platform);
         return;
       }
 
-      stopThreadsTyping = startTypingIndicator(message);
       console.log(
         `Threads link accepted: ${mediaId}`
       );
 
-      const downloadResult =
-        await downloadThreadsMedia(originalUrl, {
+      const [downloadResult, info] = await Promise.all([
+        downloadThreadsMedia(originalUrl, {
           getDiscordEmbedFallback: (resolvedUrl) =>
             getThreadsDiscordEmbedFallback(message, originalUrl, resolvedUrl),
-        });
+        }),
+        getMediaInfo(originalUrl).catch(() => null),
+      ]);
 
       const classification = classify(
         downloadResult.files,
@@ -1301,10 +1034,11 @@ async function processMediaMessage(message) {
         mediaType: classification.label,
         creator,
         originalUrl,
-        heart: "🤍",
+        originalDate: extractOriginalDate(info),
       });
 
-      await uploadMedia(
+      await markRetrievedOrCleanup(lifecycle, downloadResult);
+      const sentMessageIds = await uploadMedia(
         message,
         classification.files,
         cardText,
@@ -1312,7 +1046,7 @@ async function processMediaMessage(message) {
         { embedColor: 0xffffff }
       );
 
-      await suppressOriginalEmbeds(message);
+      await deleteOriginalAfterSuccess(message, sentMessageIds);
 
       shareStore.insert({
         platform,
@@ -1322,7 +1056,7 @@ async function processMediaMessage(message) {
           message.member?.displayName ??
           message.author.username,
         sharedById: message.author.id,
-        messageId: message.id,
+        messageId: null,
         channelId: message.channel.id,
         guildId: message.guild?.id ?? null,
         url: originalUrl,
@@ -1338,8 +1072,6 @@ async function processMediaMessage(message) {
         message,
         error
       );
-    } finally {
-      stopThreadsTyping?.();
     }
 
     return;
@@ -1350,7 +1082,11 @@ async function handleMediaMessage(message) {
   if (message.author.bot) return;
   const finders = [findInstagramLinks, findFacebookLinks, findTikTokLinks, findXLinks, findYouTubeLinks, findThreadsLinks];
   if (!finders.some((find) => find(message.content).length)) return;
-  return withDelayedProgress(message, () => processMediaMessage(message));
+  return withMediaLifecycle(
+    message,
+    (lifecycle) => processMediaMessage(message, lifecycle),
+    { onTimeout: (error) => logMediaError(message, error) }
+  );
 }
 
 module.exports = {

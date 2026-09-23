@@ -3,7 +3,6 @@ const path = require("node:path");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { EmbedBuilder } = require("discord.js");
-const shareStore = require("../../stores/shareStore");
 
 const execFileAsync = promisify(execFile);
 
@@ -39,18 +38,8 @@ function isUnknownMessageReferenceError(error) {
     );
 }
 
-async function sendUploadBatch(message, payload, isFirst) {
-  if (!isFirst) return message.channel.send(payload);
-  try {
-    return await message.reply(payload);
-  } catch (error) {
-    if (!isUnknownMessageReferenceError(error)) throw error;
-    // The source message may be deleted while media is downloading. Discord
-    // rejects the reply reference but the verified upload itself is still
-    // safe to send to the same channel.
-    console.warn("Upload source message disappeared; sending without a reply reference.");
-    return message.channel.send(payload);
-  }
+async function sendUploadBatch(message, payload) {
+  return message.channel.send(payload);
 }
 
 /**
@@ -817,12 +806,13 @@ async function uploadMedia(
       const sentMessage = await sendUploadBatch(message, payload, isFirst);
 
       sentMessageIds.push(sentMessage.id);
-      shareStore.addOutputMessage(
-        message.id,
-        sentMessage.id,
-        sentMessage.channelId
-      );
     }
+  } catch (error) {
+    for (const id of sentMessageIds) {
+      const sent = await message.channel.messages?.fetch(id).catch(() => null);
+      if (sent) await sent.delete().catch(() => null);
+    }
+    throw error;
   } finally {
     await Promise.all(paths.map((p) => safeUnlink(p)));
 

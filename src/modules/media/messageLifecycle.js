@@ -1,27 +1,119 @@
-const managedPreviews = new Map();
-const suppressing = new Set();
+const fs = require("node:fs");
+const path = require("node:path");
 
-async function withDelayedProgress(message, work, delayMs = 3000) {
-  let finished = false;
-  let pending;
-  const timer = setTimeout(() => {
-    if (finished) return;
-    pending = Promise.resolve().then(() => message.reply({
-      content: "-# Harmony is working on your post—just a moment…",
-      allowedMentions: { repliedUser: false, parse: [] },
-    })).catch(() => null);
-  }, delayMs);
-  try {
-    return await work();
-  } finally {
-    finished = true;
-    clearTimeout(timer);
-    const status = await pending;
-    if (status) await status.delete().catch(() => {
-      console.warn("Could not remove Harmony processing message.");
-    });
+const WORKING_TEXT = "Hey! This one’s taking me a little longer than I’d like, but don’t worry. I’ve got it!";
+const FAILURE_TEXT = "Well, that one didn’t quite cooperate! I’ve let my admin know so we can take a closer look.";
+const STICKERS = {
+  working: path.join(__dirname, "../../../assets/harmony/working.png"),
+  failure: path.join(__dirname, "../../../assets/harmony/uh-oh.png"),
+  thanks: path.join(__dirname, "../../../assets/harmony/thank-you.png"),
+};
+
+class MediaRetrievalTimeoutError extends Error {
+  constructor() {
+    super("Harmony stopped media retrieval after 15 seconds.");
+    this.name = "MediaRetrievalTimeoutError";
+    this.code = "HARMONY_RETRIEVAL_TIMEOUT";
   }
 }
+
+function stickerFiles(kind) {
+  const file = STICKERS[kind];
+  if (!file || !fs.existsSync(file)) return [];
+  return [{ attachment: file, name: path.basename(file) }];
+}
+
+async function sendStandaloneNotice(message, content, stickerKind) {
+  return message.channel.send({
+    content,
+    files: stickerFiles(stickerKind),
+    allowedMentions: { parse: [] },
+  });
+}
+
+async function withMediaLifecycle(message, work, options = {}) {
+  const workingDelayMs = options.workingDelayMs ?? 5000;
+  const cutoffMs = options.cutoffMs ?? 15000;
+  let retrievalFinished = false;
+  let timedOut = false;
+  let workingMessagePromise = null;
+  let workingMessage = null;
+  let timeoutNoticePromise = null;
+
+  await message.channel.sendTyping().catch((error) => {
+    console.warn("Could not start Harmony typing indicator:", error?.message || error);
+  });
+
+  const removeWorking = async () => {
+    const pending = workingMessage || (workingMessagePromise && await workingMessagePromise);
+    if (pending) await pending.delete().catch(() => null);
+    workingMessage = null;
+  };
+
+  const workingTimer = setTimeout(() => {
+    if (retrievalFinished || timedOut) return;
+    workingMessagePromise = sendStandaloneNotice(message, WORKING_TEXT, "working")
+      .then((sent) => (workingMessage = sent))
+      .catch(() => null);
+  }, workingDelayMs);
+  workingTimer.unref?.();
+
+  const cutoffTimer = setTimeout(() => {
+    if (retrievalFinished || timedOut) return;
+    timedOut = true;
+    const timeoutError = new MediaRetrievalTimeoutError();
+    timeoutNoticePromise = (async () => {
+      await removeWorking();
+      const sent = await sendStandaloneNotice(message, FAILURE_TEXT, "failure").catch(() => null);
+      Promise.resolve(options.onTimeout?.(timeoutError)).catch(() => null);
+      return sent;
+    })();
+  }, cutoffMs);
+  cutoffTimer.unref?.();
+
+  const lifecycle = {
+    async markRetrieved() {
+      if (timedOut) throw new MediaRetrievalTimeoutError();
+      retrievalFinished = true;
+      clearTimeout(workingTimer);
+      clearTimeout(cutoffTimer);
+      await removeWorking();
+    },
+    assertCanPublish() {
+      if (timedOut) throw new MediaRetrievalTimeoutError();
+    },
+    get timedOut() { return timedOut; },
+  };
+
+  try {
+    const result = await work(lifecycle);
+    if (timedOut) return undefined;
+    lifecycle.assertCanPublish();
+    return result;
+  } finally {
+    retrievalFinished = true;
+    clearTimeout(workingTimer);
+    clearTimeout(cutoffTimer);
+    await timeoutNoticePromise;
+    await removeWorking();
+  }
+}
+
+async function deleteOriginalAfterSuccess(message, replacementMessageIds = []) {
+  try {
+    await message.delete();
+    return true;
+  } catch (error) {
+    for (const id of replacementMessageIds) {
+      const replacement = await message.channel.messages?.fetch(id).catch(() => null);
+      if (replacement) await replacement.delete().catch(() => null);
+    }
+    throw error;
+  }
+}
+
+const managedPreviews = new Map();
+const suppressing = new Set();
 
 async function hidePreview(message) {
   if (suppressing.has(message.id)) return;
@@ -64,4 +156,14 @@ async function handleOriginalPreviewUpdate(message) {
   if (message.embeds?.length && !message.flags?.has(4)) await hidePreview(message);
 }
 
-module.exports = { withDelayedProgress, suppressOriginalEmbeds, handleOriginalPreviewUpdate };
+module.exports = {
+  WORKING_TEXT,
+  FAILURE_TEXT,
+  STICKERS,
+  MediaRetrievalTimeoutError,
+  withMediaLifecycle,
+  sendStandaloneNotice,
+  deleteOriginalAfterSuccess,
+  suppressOriginalEmbeds,
+  handleOriginalPreviewUpdate,
+};
