@@ -72,11 +72,12 @@ async function withMediaLifecycle(message, work, options = {}) {
   cutoffTimer.unref?.();
 
   const lifecycle = {
-    markRetrieved() {
+    async markRetrieved() {
       if (timedOut) throw new MediaRetrievalTimeoutError();
       retrievalFinished = true;
       clearTimeout(workingTimer);
       clearTimeout(cutoffTimer);
+      await removeWorking();
     },
     assertCanPublish() {
       if (timedOut) throw new MediaRetrievalTimeoutError();

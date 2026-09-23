@@ -42,7 +42,7 @@ test("five-second notice is standalone and removed after retrieval", async () =>
   const message = fakeMessage();
   await withMediaLifecycle(message, async (lifecycle) => {
     await wait(15);
-    lifecycle.markRetrieved();
+    await lifecycle.markRetrieved();
   }, { workingDelayMs: 5, cutoffMs: 40 });
   assert.equal(message.sent[0].payload.content, WORKING_TEXT);
   assert.equal(message.sent[0].deleted, true);
@@ -54,7 +54,7 @@ test("cutoff removes Working, reports timeout, and leaves original untouched", a
   await assert.rejects(
     withMediaLifecycle(message, async (lifecycle) => {
       await wait(25);
-      lifecycle.markRetrieved();
+      await lifecycle.markRetrieved();
     }, {
       workingDelayMs: 5,
       cutoffMs: 15,

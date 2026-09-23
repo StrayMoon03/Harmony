@@ -98,7 +98,7 @@ async function sendAlreadyShared(message, record, platform) {
 
 async function markRetrievedOrCleanup(lifecycle, downloadResult) {
   try {
-    lifecycle.markRetrieved();
+    await lifecycle.markRetrieved();
   } catch (error) {
     if (downloadResult?.rawDir) {
       await fs.rm(downloadResult.rawDir, { recursive: true, force: true }).catch(() => {});
@@ -384,7 +384,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
 
         return;
@@ -496,7 +496,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
         return;
       }
@@ -615,7 +615,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
 
         return;
@@ -744,7 +744,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
 
         return;
@@ -878,7 +878,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
         return;
       }
@@ -997,7 +997,7 @@ async function processMediaMessage(message, lifecycle) {
         shareStore.find(platform, mediaId, message.guild?.id ?? null);
 
       if (existing) {
-        lifecycle.markRetrieved();
+        await lifecycle.markRetrieved();
         await sendAlreadyShared(message, existing, platform);
         return;
       }
