@@ -38,7 +38,7 @@ test("typing starts immediately and quick retrieval shows no notice", async () =
   assert.equal(message.sent.length, 0);
 });
 
-test("five-second notice is standalone and removed after retrieval", async () => {
+test("Working notice is standalone and removed after retrieval", async () => {
   const message = fakeMessage();
   await withMediaLifecycle(message, async (lifecycle) => {
     await wait(15);
@@ -58,6 +58,7 @@ test("cutoff removes Working, reports timeout, and leaves original untouched", a
     }, {
       workingDelayMs: 5,
       cutoffMs: 15,
+      failureDeleteMs: 5,
       onTimeout: (error) => { timeout = error; },
     }),
     MediaRetrievalTimeoutError
@@ -66,6 +67,31 @@ test("cutoff removes Working, reports timeout, and leaves original untouched", a
   assert.equal(message.sent[0].payload.content, WORKING_TEXT);
   assert.equal(message.sent[0].deleted, true);
   assert.equal(message.sent[1].payload.content, FAILURE_TEXT);
+  await wait(10);
+  assert.equal(message.sent[1].deleted, true);
+});
+
+test("configured custom status emoji replaces the fallback attachment", async () => {
+  process.env.HARMONY_WORKING_EMOJI_ID = "123456789012345678";
+  const message = fakeMessage();
+  await withMediaLifecycle(message, async (lifecycle) => {
+    await wait(12);
+    await lifecycle.markRetrieved();
+  }, { workingDelayMs: 5, cutoffMs: 30 });
+  delete process.env.HARMONY_WORKING_EMOJI_ID;
+  assert.match(message.sent[0].payload.content, /<:harmony_working:123456789012345678>/);
+  assert.deepEqual(message.sent[0].payload.files, []);
+});
+
+test("a normal failure removes Working and cannot later emit a timeout failure", async () => {
+  const message = fakeMessage();
+  await withMediaLifecycle(message, async (lifecycle) => {
+    await wait(12);
+    assert.equal(await lifecycle.finishFailure(), true);
+  }, { workingDelayMs: 5, cutoffMs: 18 });
+  await wait(20);
+  assert.equal(message.sent.length, 1);
+  assert.equal(message.sent[0].deleted, true);
 });
 
 test("original is deleted only after replacement and rolls replacement back on failure", async () => {

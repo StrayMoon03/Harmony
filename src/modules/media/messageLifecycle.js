@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { statusEmoji } = require("./emojiConfig");
 
 const WORKING_TEXT = "Hey! This one’s taking me a little longer than I’d like, but don’t worry. I’ve got it!";
 const FAILURE_TEXT = "Well, that one didn’t quite cooperate! I’ve let my admin know so we can take a closer look.";
@@ -11,7 +12,7 @@ const STICKERS = {
 
 class MediaRetrievalTimeoutError extends Error {
   constructor() {
-    super("Harmony stopped media retrieval after 15 seconds.");
+    super("Harmony stopped media retrieval after 20 seconds.");
     this.name = "MediaRetrievalTimeoutError";
     this.code = "HARMONY_RETRIEVAL_TIMEOUT";
   }
@@ -23,17 +24,23 @@ function stickerFiles(kind) {
   return [{ attachment: file, name: path.basename(file) }];
 }
 
-async function sendStandaloneNotice(message, content, stickerKind) {
-  return message.channel.send({
-    content,
-    files: stickerFiles(stickerKind),
+async function sendStandaloneNotice(message, content, stickerKind, options = {}) {
+  const emoji = statusEmoji(stickerKind);
+  const sent = await message.channel.send({
+    content: [content, emoji].filter(Boolean).join("\n"),
+    files: emoji ? [] : stickerFiles(stickerKind),
     allowedMentions: { parse: [] },
   });
+  if (options.autoDeleteMs) {
+    const timer = setTimeout(() => sent.delete().catch(() => null), options.autoDeleteMs);
+    timer.unref?.();
+  }
+  return sent;
 }
 
 async function withMediaLifecycle(message, work, options = {}) {
-  const workingDelayMs = options.workingDelayMs ?? 5000;
-  const cutoffMs = options.cutoffMs ?? 15000;
+  const workingDelayMs = options.workingDelayMs ?? 10000;
+  const cutoffMs = options.cutoffMs ?? 20000;
   let retrievalFinished = false;
   let timedOut = false;
   let workingMessagePromise = null;
@@ -64,7 +71,9 @@ async function withMediaLifecycle(message, work, options = {}) {
     const timeoutError = new MediaRetrievalTimeoutError();
     timeoutNoticePromise = (async () => {
       await removeWorking();
-      const sent = await sendStandaloneNotice(message, FAILURE_TEXT, "failure").catch(() => null);
+      const sent = await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
+        autoDeleteMs: options.failureDeleteMs ?? 5000,
+      }).catch(() => null);
       Promise.resolve(options.onTimeout?.(timeoutError)).catch(() => null);
       return sent;
     })();
@@ -78,6 +87,14 @@ async function withMediaLifecycle(message, work, options = {}) {
       clearTimeout(workingTimer);
       clearTimeout(cutoffTimer);
       await removeWorking();
+    },
+    async finishFailure() {
+      if (timedOut) return false;
+      retrievalFinished = true;
+      clearTimeout(workingTimer);
+      clearTimeout(cutoffTimer);
+      await removeWorking();
+      return true;
     },
     assertCanPublish() {
       if (timedOut) throw new MediaRetrievalTimeoutError();

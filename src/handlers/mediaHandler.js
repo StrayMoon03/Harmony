@@ -16,7 +16,8 @@ const {
   downloadTikTokMedia,
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
-const { formatMediaCard, extractOriginalDate } = require("../modules/media/formatter");
+const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("../modules/media/formatter");
+const { platformHeart } = require("../modules/media/emojiConfig");
 const { uploadMedia } = require("../modules/media/uploader");
 const {
   findInstagramLinks,
@@ -72,10 +73,6 @@ const { logMediaError } = require("../services/errorInboxService");
  * @param {{ shared_by: string, shared_at: string }} record
  * @returns {string}
  */
-function platformHeart(platform) {
-  return ({ instagram: "💛", facebook: "💙", threads: "🤍", x: "🖤", tiktok: "🩷", youtube: "❤️" })[platform] || "🤍";
-}
-
 function formatAlreadySharedReply(record, platform) {
   const dateLine = formatDiscordTimestamp(record.shared_at).replace(/:f>$/, ":D>");
   const member = record.shared_by_id
@@ -92,7 +89,8 @@ async function sendAlreadyShared(message, record, platform) {
   return sendStandaloneNotice(
     message,
     formatAlreadySharedReply(record, platform),
-    "thanks"
+    "thanks",
+    { autoDeleteMs: 5000 }
   );
 }
 
@@ -118,15 +116,18 @@ async function markRetrievedOrCleanup(lifecycle, downloadResult) {
  * @param {import("discord.js").Message} message
  * @param {unknown} error
  */
-async function replyWithHarmonyError(message, error) {
+async function replyWithHarmonyError(message, error, lifecycle) {
   console.error("Harmony Error:", error);
 
   await logMediaError(message, error).catch((reportError) => {
     console.error("Could not send media failure to Harmony’s error inbox:", reportError);
   });
 
-  if (error instanceof MediaRetrievalTimeoutError) return;
-  await sendStandaloneNotice(message, FAILURE_TEXT, "failure").catch(() => {});
+  if (error instanceof MediaRetrievalTimeoutError || lifecycle?.timedOut) return;
+  if (lifecycle && !(await lifecycle.finishFailure())) return;
+  await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
+    autoDeleteMs: 5000,
+  }).catch(() => {});
 }
 
 /**
@@ -460,7 +461,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 
@@ -579,7 +581,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 
@@ -715,7 +718,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 
@@ -757,6 +761,23 @@ async function processMediaMessage(message, lifecycle) {
       const info = infoResult;
 
       if (downloadResult.linkOnly) {
+        let replacementMessageId = null;
+        if (downloadResult.text) {
+          const textCard = formatXTextPost({
+            displayName: downloadResult.displayName,
+            handle: downloadResult.creator,
+            originalDate: downloadResult.originalDate || extractOriginalDate(info),
+            text: downloadResult.text,
+            originalUrl,
+          });
+          await lifecycle.markRetrieved();
+          const sent = await message.channel.send({
+            content: textCard,
+            allowedMentions: { parse: [] },
+          });
+          replacementMessageId = sent.id;
+          await deleteOriginalAfterSuccess(message, [sent.id]);
+        }
         shareStore.insert({
           platform,
           mediaId,
@@ -765,13 +786,15 @@ async function processMediaMessage(message, lifecycle) {
             message.member?.displayName ??
             message.author.username,
           sharedById: message.author.id,
-          messageId: message.id,
+          messageId: replacementMessageId || message.id,
           channelId: message.channel.id,
           guildId: message.guild?.id ?? null,
           url: originalUrl,
         });
         console.log(
-          "X text-only post preserved with its native preview."
+          downloadResult.text
+            ? "X text-only post replaced with Harmony's compact standalone post."
+            : "X text-only post preserved because exact post text was unavailable."
         );
         return;
       }
@@ -805,7 +828,7 @@ async function processMediaMessage(message, lifecycle) {
         mediaType,
         creator,
         originalUrl,
-        originalDate: extractOriginalDate(info),
+        originalDate: downloadResult.originalDate || extractOriginalDate(info),
       });
 
       await markRetrievedOrCleanup(lifecycle, downloadResult);
@@ -849,7 +872,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 
@@ -968,7 +992,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 
@@ -1070,7 +1095,8 @@ async function processMediaMessage(message, lifecycle) {
     } catch (error) {
       await replyWithHarmonyError(
         message,
-        error
+        error,
+        lifecycle
       );
     }
 

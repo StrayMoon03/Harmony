@@ -172,7 +172,7 @@ async function runGalleryDl(url, jobDir) {
  * - "photo" → Photo
  *
  * @param {string} url
- * @returns {Promise<{ creator: string|null, isGif: boolean }>}
+ * @returns {Promise<{ creator: string|null, displayName: string|null, text: string|null, originalDate: string|null, isGif: boolean, hasMedia: boolean|null }>}
  */
 async function getGalleryDlMeta(url) {
   const galleryDlPath =
@@ -194,8 +194,21 @@ async function getGalleryDlMeta(url) {
     const data = JSON.parse(stdout);
 
     let creator = null;
+    let displayName = null;
+    let text = null;
+    let originalDate = null;
     let isGif = false;
     let hasMedia = false;
+
+    function parseMetadataDate(value) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        const milliseconds = value > 1e12 ? value : value * 1000;
+        const parsed = new Date(milliseconds);
+        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+      }
+      const parsed = new Date(String(value || ""));
+      return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    }
 
     function walk(value) {
       if (!value) return;
@@ -233,6 +246,19 @@ async function getGalleryDlMeta(url) {
         ) {
           creator = name.trim();
         }
+        if (typeof name === "string" && name.trim()) displayName = name.trim();
+      }
+
+      if (!text) {
+        const candidateText = value.content || value.full_text || value.text;
+        if (typeof candidateText === "string" && candidateText.trim()) {
+          text = candidateText.trim();
+        }
+      }
+
+      if (!originalDate) {
+        const candidateDate = value.date || value.created_at || value.createdAt;
+        if (candidateDate) originalDate = parseMetadataDate(candidateDate);
       }
 
       for (const child of Object.values(value)) {
@@ -242,14 +268,21 @@ async function getGalleryDlMeta(url) {
 
     walk(data);
 
-    return { creator, isGif, hasMedia };
+    return { creator, displayName, text, originalDate, isGif, hasMedia };
   } catch (error) {
     console.warn(
       "X gallery-dl metadata lookup failed:",
       error.message
     );
 
-    return { creator: null, isGif: false, hasMedia: null };
+    return {
+      creator: null,
+      displayName: null,
+      text: null,
+      originalDate: null,
+      isGif: false,
+      hasMedia: null,
+    };
   }
 }
 
@@ -295,6 +328,9 @@ async function downloadXMedia(url) {
         rawDir: null,
         platform: "x",
         creator,
+        displayName: meta.displayName,
+        text: meta.text,
+        originalDate: meta.originalDate,
         isGif: false,
         linkOnly: true,
       };
@@ -340,6 +376,9 @@ async function downloadXMedia(url) {
           rawDir: jobDir,
           platform: "x",
           creator,
+          displayName: meta.displayName,
+          text: meta.text,
+          originalDate: meta.originalDate,
           isGif,
         };
       }
@@ -397,6 +436,9 @@ async function downloadXMedia(url) {
           rawDir: jobDir,
           platform: "x",
           creator,
+          displayName: meta.displayName,
+          text: meta.text,
+          originalDate: meta.originalDate,
           isGif,
         };
       }
