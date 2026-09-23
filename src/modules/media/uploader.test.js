@@ -15,11 +15,10 @@ function missingReferenceError() {
   };
 }
 
-test("falls back to a channel send when the source message disappeared", async () => {
+test("first upload batch is a standalone channel send", async () => {
   const payload = { files: ["video.mp4"] };
   let channelPayload;
   const message = {
-    reply: async () => { throw missingReferenceError(); },
     channel: {
       send: async (value) => {
         channelPayload = value;
@@ -33,22 +32,9 @@ test("falls back to a channel send when the source message disappeared", async (
   assert.equal(channelPayload, payload);
 });
 
-test("does not retry unrelated Discord errors", async () => {
-  let channelSends = 0;
-  const expected = { code: 50035, rawError: { errors: {} } };
-  const message = {
-    reply: async () => { throw expected; },
-    channel: { send: async () => { channelSends += 1; } },
-  };
-
-  await assert.rejects(sendUploadBatch(message, {}, true), (error) => error === expected);
-  assert.equal(channelSends, 0);
-});
-
 test("follow-up batches continue to use ordinary channel sends", async () => {
   let replies = 0;
   const message = {
-    reply: async () => { replies += 1; },
     channel: { send: async () => ({ id: "follow-up" }) },
   };
 
