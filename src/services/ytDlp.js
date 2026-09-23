@@ -27,6 +27,8 @@ async function getMediaInfo(url) {
       ],
       {
         windowsHide: true,
+        timeout: 18000,
+        killSignal: "SIGKILL",
         maxBuffer: 10 * 1024 * 1024,
       }
     ));
@@ -59,6 +61,13 @@ async function getMediaInfo(url) {
     title: info.title || null,
     description: info.description || null,
     webpage_url: info.webpage_url || url,
+    timestamp: info.timestamp || null,
+    release_timestamp: info.release_timestamp || null,
+    upload_date: info.upload_date || null,
+    release_date: info.release_date || null,
+    created_at: info.created_at || null,
+    date: info.date || null,
+    epoch: info.epoch || null,
 
     // Keep the raw object available for future needs.
     _raw: info,
