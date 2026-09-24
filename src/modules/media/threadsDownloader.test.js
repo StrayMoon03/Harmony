@@ -5,7 +5,13 @@ const {
   collectPostScopedJsonMedia,
   exactThreadsPostUrl,
   resolveThreadsShareRedirect,
+  shouldUseScopedBrowserDirectly,
 } = require("./threadsDownloader");
+
+test("sends resolved share aliases directly to scoped browser inspection", () => {
+  assert.equal(shouldUseScopedBrowserDirectly(true), true);
+  assert.equal(shouldUseScopedBrowserDirectly(false), false);
+});
 
 test("accepts only exact Threads post permalinks", () => {
   assert.equal(
