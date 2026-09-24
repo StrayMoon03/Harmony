@@ -1,3 +1,5 @@
+const { platformIcon } = require("./emojiConfig");
+
 /**
  * Builds Harmony's media card.
  *
@@ -23,11 +25,12 @@ function formatMediaCard({
     ? parsedDate.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })
     : "Date unavailable";
   const sharedBy = sharedById ? `<@${sharedById}>` : "Unknown member";
+  const icon = platformIcon(platform);
   return {
-    header: platform,
+    header: icon ? `${icon} ${platform}` : platform,
     footer: [
       `Shared by ${sharedBy} • ${dateText}`,
-      memberComment ? `${sharedBy}: ${memberComment}` : null,
+      memberComment ? `💬 ${sharedBy}: ${memberComment}` : null,
     ].filter((line) => line !== null).join("\n"),
     buttonLabel: `View on ${platform}`,
     buttonUrl: originalUrl || null,
