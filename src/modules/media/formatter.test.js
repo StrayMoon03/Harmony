@@ -3,7 +3,18 @@ const assert = require("node:assert/strict");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("./formatter");
 
 test("all successful media cards use only the platform above media", () => {
+  const emojiEnvironment = {
+    Facebook: ["HARMONY_PLATFORM_FACEBOOK_ID", "facebook"],
+    Instagram: ["HARMONY_PLATFORM_INSTAGRAM_ID", "instagram"],
+    TikTok: ["HARMONY_PLATFORM_TIKTOK_ID", "tiktok"],
+    Threads: ["HARMONY_PLATFORM_THREADS_ID", "threads"],
+    X: ["HARMONY_PLATFORM_X_ID", "xlogo"],
+    YouTube: ["HARMONY_PLATFORM_YOUTUBE_ID", "youtube"],
+  };
+
   for (const platform of ["Facebook", "Instagram", "TikTok", "Threads", "X", "YouTube"]) {
+    const [env, emojiName] = emojiEnvironment[platform];
+    process.env[env] = "123456789012345678";
     const originalUrl = `https://example.com/${platform}`;
     const card = formatMediaCard({
       platform,
@@ -13,12 +24,19 @@ test("all successful media cards use only the platform above media", () => {
       originalDate: new Date("2026-09-20T12:00:00Z"),
       sharedById: "123456789012345678",
     });
-    assert.equal(card.header, platform);
+    assert.equal(card.header, `<:${emojiName}:123456789012345678> ${platform}`);
     assert.doesNotMatch(card.header, /Video|Reel|Photo|Post|straykids/);
     assert.equal(card.footer, "Shared by <@123456789012345678> • Sep 20, 2026");
     assert.equal(card.buttonLabel, `View on ${platform}`);
     assert.equal(card.buttonUrl, originalUrl);
+    delete process.env[env];
   }
+});
+
+test("missing platform emoji falls back to the plain platform name", () => {
+  delete process.env.HARMONY_PLATFORM_FACEBOOK_ID;
+  const card = formatMediaCard({ platform: "Facebook", sharedById: "123" });
+  assert.equal(card.header, "Facebook");
 });
 
 test("member comment is attributed once at the bottom", () => {
@@ -34,9 +52,9 @@ test("member comment is attributed once at the bottom", () => {
   assert.equal(card.header, "TikTok");
   assert.equal(
     card.footer,
-    "Shared by <@123456789012345678> • Sep 23, 2026\n<@123456789012345678>: OMG HIS HAIR 😂"
+    "Shared by <@123456789012345678> • Sep 23, 2026\n💬 <@123456789012345678>: OMG HIS HAIR 😂"
   );
-  assert.doesNotMatch(card.footer, /💬|View on/);
+  assert.doesNotMatch(card.footer, /View on/);
   assert.equal(card.buttonLabel, "View on TikTok");
 });
 
