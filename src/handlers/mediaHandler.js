@@ -54,6 +54,7 @@ const {
 } = require("../modules/media/youtube");
 const {
   downloadYouTubeMedia,
+  shouldKeepOriginalYouTubePreview,
 } = require("../modules/media/youtubeDownloader");
 const {
   findThreadsLinks,
@@ -937,6 +938,13 @@ async function processMediaMessage(message, lifecycle) {
       ]);
 
       if (downloadResult.linkOnly) {
+        if (shouldKeepOriginalYouTubePreview(downloadResult)) {
+          await lifecycle.markRetrieved();
+          console.log(
+            "YouTube long video left as its original streaming preview."
+          );
+          return;
+        }
         throw new Error("YouTube media requires its original platform link and cannot be replaced safely.");
       }
 

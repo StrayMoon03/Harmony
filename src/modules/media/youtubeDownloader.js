@@ -172,6 +172,7 @@ async function downloadYouTubeMedia(url) {
         platform: "youtube",
         creator: inspectCreator,
         linkOnly: true,
+        linkOnlyReason: "long-video",
         durationSeconds,
       };
     }
@@ -263,12 +264,21 @@ async function downloadYouTubeMedia(url) {
       platform: "youtube",
       creator: null,
       linkOnly: true,
+      linkOnlyReason: "download-unavailable",
       durationSeconds: null,
     };
   }
 }
 
+function shouldKeepOriginalYouTubePreview(downloadResult) {
+  return Boolean(
+    downloadResult?.linkOnly &&
+    downloadResult.linkOnlyReason === "long-video"
+  );
+}
+
 module.exports = {
   downloadYouTubeMedia,
   MAX_YOUTUBE_UPLOAD_SECONDS,
+  shouldKeepOriginalYouTubePreview,
 };
