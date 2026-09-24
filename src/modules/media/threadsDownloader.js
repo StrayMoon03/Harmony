@@ -793,19 +793,30 @@ async function downloadThreadsMedia(url, options = {}) {
     let fallbackCreator = null;
     let scopedCandidates = [];
 
-    try {
-      const pageResult = await fetchThreadsPage(url);
-      html = pageResult.html;
-      sourceUrl = pageResult.sourceUrl;
-      status = pageResult.status;
-      finalUrl = pageResult.finalUrl;
-      scopedCandidates = pageResult.scopedCandidates || [];
-    } catch (error) {
+    if (shouldUseScopedBrowserDirectly(shareUrl)) {
+      // Share aliases have already been resolved to one exact post. Railway's
+      // static Threads requests routinely consume most of the public timeout
+      // before failing, while the browser is still required to verify the
+      // root post. Go directly to that scoped browser inspection.
       pageFetchFailed = true;
-      console.warn(
-        "Threads static page fetch failed; continuing with browser:",
-        error instanceof Error ? error.message : error
+      console.log(
+        "Threads share resolved; using scoped browser inspection directly."
       );
+    } else {
+      try {
+        const pageResult = await fetchThreadsPage(url);
+        html = pageResult.html;
+        sourceUrl = pageResult.sourceUrl;
+        status = pageResult.status;
+        finalUrl = pageResult.finalUrl;
+        scopedCandidates = pageResult.scopedCandidates || [];
+      } catch (error) {
+        pageFetchFailed = true;
+        console.warn(
+          "Threads static page fetch failed; continuing with browser:",
+          error instanceof Error ? error.message : error
+        );
+      }
     }
 
     const decodedHtml = decodePageText(html);
@@ -1051,5 +1062,6 @@ module.exports = {
   collectPostScopedJsonMedia,
   exactThreadsPostUrl,
   resolveThreadsShareRedirect,
+  shouldUseScopedBrowserDirectly,
   logThreadsBrowserDiagnostics,
 };
