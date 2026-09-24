@@ -346,6 +346,10 @@ function isThreadsShareUrl(url) {
   }
 }
 
+function shouldUseScopedBrowserDirectly(wasShareUrl) {
+  return wasShareUrl === true;
+}
+
 function isExactThreadsPostUrl(url) {
   try {
     return /^\/@[^/]+\/post\/[A-Za-z0-9_-]+\/?$/i.test(
