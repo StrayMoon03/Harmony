@@ -706,8 +706,8 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * Temp files and job directories are cleaned up afterward.
  *
  * Structured successful-post text is split around the media so the platform
- * heading and creator appear above it while submitter/date/link/comment appear
- * below it. Legacy string cards remain supported.
+ * heading appears above it while submitter/date/link/comment appear below it.
+ * Legacy string cards remain supported.
  *
  * When more than 10 files are present, Harmony sends the media in batches
  * of 10 between the structured header and footer (Discord attachment limit).
@@ -791,11 +791,7 @@ async function uploadMedia(
 
     if (structuredCard) {
       const headerMessage = await sendUploadBatch(message, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(embedColor)
-            .setDescription(structuredCard.header || "\u200b"),
-        ],
+        content: structuredCard.header || "\u200b",
         allowedMentions: { parse: [] },
       });
       sentMessageIds.push(headerMessage.id);
@@ -826,11 +822,7 @@ async function uploadMedia(
 
     if (structuredCard) {
       const footerMessage = await sendUploadBatch(message, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(embedColor)
-            .setDescription(structuredCard.footer || "\u200b"),
-        ],
+        content: structuredCard.footer || "\u200b",
         allowedMentions: { parse: [] },
       });
       sentMessageIds.push(footerMessage.id);
