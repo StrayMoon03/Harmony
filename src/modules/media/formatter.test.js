@@ -2,20 +2,23 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("./formatter");
 
-test("successful card separates clean header from shared-by/date/link footer", () => {
-  const card = formatMediaCard({
-    platform: "Instagram",
-    mediaType: "Reel",
-    creator: "straykids",
-    originalUrl: "https://www.instagram.com/reel/ABC/",
-    originalDate: new Date("2026-09-20T12:00:00Z"),
-    sharedById: "123456789012345678",
-  });
-  assert.equal(card.header, "📸 **Instagram Reel**\n@straykids");
-  assert.match(card.footer, /Shared by <@123456789012345678> • Sep 20, 2026/);
-  assert.match(card.footer, /View on Instagram/);
-  assert.doesNotMatch(card.header, /🎬|📷|🖼️|🎥|🎞️/);
-  assert.doesNotMatch(card.footer, /💬/);
+test("all successful media cards use only the platform above media", () => {
+  for (const platform of ["Facebook", "Instagram", "TikTok", "Threads", "X", "YouTube"]) {
+    const originalUrl = `https://example.com/${platform}`;
+    const card = formatMediaCard({
+      platform,
+      mediaType: "Video",
+      creator: "straykids",
+      originalUrl,
+      originalDate: new Date("2026-09-20T12:00:00Z"),
+      sharedById: "123456789012345678",
+    });
+    assert.equal(card.header, platform);
+    assert.doesNotMatch(card.header, /Video|Reel|Photo|Post|straykids/);
+    assert.equal(card.footer, "Shared by <@123456789012345678> • Sep 20, 2026");
+    assert.equal(card.buttonLabel, `View on ${platform}`);
+    assert.equal(card.buttonUrl, originalUrl);
+  }
 });
 
 test("member comment is attributed once at the bottom", () => {
@@ -28,10 +31,13 @@ test("member comment is attributed once at the bottom", () => {
     sharedById: "123456789012345678",
     memberComment: "OMG HIS HAIR 😂",
   });
-  assert.equal(card.header, "🎵 **TikTok Video**\n@originalcreator");
-  assert.match(card.footer, /^Shared by <@123456789012345678> • Sep 23, 2026/);
-  assert.match(card.footer, /\n\n💬 <@123456789012345678>: OMG HIS HAIR 😂$/);
-  assert.equal((card.header.match(/@originalcreator/g) || []).length, 1);
+  assert.equal(card.header, "TikTok");
+  assert.equal(
+    card.footer,
+    "Shared by <@123456789012345678> • Sep 23, 2026\n<@123456789012345678>: OMG HIS HAIR 😂"
+  );
+  assert.doesNotMatch(card.footer, /💬|View on/);
+  assert.equal(card.buttonLabel, "View on TikTok");
 });
 
 test("yt-dlp dates are normalized", () => {

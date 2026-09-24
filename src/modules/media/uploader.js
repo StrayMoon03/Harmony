@@ -2,7 +2,12 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
-const { EmbedBuilder } = require("discord.js");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+} = require("discord.js");
 
 const execFileAsync = promisify(execFile);
 
@@ -706,15 +711,15 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * Temp files and job directories are cleaned up afterward.
  *
  * Structured successful-post text is split around the media so the platform
- * heading and creator appear above it while submitter/date/link/comment appear
- * below it. Legacy string cards remain supported.
+ * heading appears above it while submitter/date/comment and the source button
+ * appear below it. Legacy string cards remain supported.
  *
  * When more than 10 files are present, Harmony sends the media in batches
  * of 10 between the structured header and footer (Discord attachment limit).
  *
  * @param {import("discord.js").Message} message
  * @param {Array<{ path: string }>} files
- * @param {string|{ header: string, footer: string }} cardText
+ * @param {string|{ header: string, footer: string, buttonLabel?: string, buttonUrl?: string }} cardText
  * @param {string|number} [rawDirOrColor]
  * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean }} [options]
  * @returns {Promise<string[]>} Discord message IDs created by Harmony
@@ -791,11 +796,7 @@ async function uploadMedia(
 
     if (structuredCard) {
       const headerMessage = await sendUploadBatch(message, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(embedColor)
-            .setDescription(structuredCard.header || "\u200b"),
-        ],
+        content: structuredCard.header || "\u200b",
         allowedMentions: { parse: [] },
       });
       sentMessageIds.push(headerMessage.id);
@@ -825,12 +826,21 @@ async function uploadMedia(
     }
 
     if (structuredCard) {
+      const components = structuredCard.buttonUrl
+        ? [new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel(structuredCard.buttonLabel || "View original")
+            .setStyle(ButtonStyle.Link)
+            .setURL(structuredCard.buttonUrl)
+        )]
+        : [];
       const footerMessage = await sendUploadBatch(message, {
         embeds: [
           new EmbedBuilder()
             .setColor(embedColor)
             .setDescription(structuredCard.footer || "\u200b"),
         ],
+        components,
         allowedMentions: { parse: [] },
       });
       sentMessageIds.push(footerMessage.id);

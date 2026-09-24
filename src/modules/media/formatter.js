@@ -9,45 +9,28 @@
  * @param {string|number|Date|null} [options.originalDate]
  * @param {string} options.sharedById
  * @param {string|null} [options.memberComment]
- * @returns {{ header: string, footer: string }}
+ * @returns {{ header: string, footer: string, buttonLabel: string, buttonUrl: string|null }}
  */
 function formatMediaCard({
   platform,
-  mediaType,
-  creator,
   originalUrl,
   originalDate,
   sharedById,
   memberComment,
 }) {
-  const safeCreator = creator || "Unknown creator";
-  const platformIcons = {
-    Instagram: "📸",
-    Facebook: "🔵",
-    Threads: "⚪",
-    X: "⚫",
-    TikTok: "🎵",
-    YouTube: "🔴",
-  };
   const parsedDate = originalDate ? new Date(originalDate) : null;
   const dateText = parsedDate && !Number.isNaN(parsedDate.getTime())
     ? parsedDate.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })
     : "Date unavailable";
-  const creatorText = String(safeCreator).startsWith("@")
-    ? safeCreator
-    : `@${safeCreator}`;
   const sharedBy = sharedById ? `<@${sharedById}>` : "Unknown member";
   return {
-    header: [
-      `${platformIcons[platform] || "🔗"} **${platform} ${mediaType}**`,
-      creatorText,
-    ].join("\n"),
+    header: platform,
     footer: [
       `Shared by ${sharedBy} • ${dateText}`,
-      originalUrl ? `[View on ${platform}](${originalUrl})` : null,
-      memberComment ? "" : null,
-      memberComment ? `💬 ${sharedBy}: ${memberComment}` : null,
+      memberComment ? `${sharedBy}: ${memberComment}` : null,
     ].filter((line) => line !== null).join("\n"),
+    buttonLabel: `View on ${platform}`,
+    buttonUrl: originalUrl || null,
   };
 }
 

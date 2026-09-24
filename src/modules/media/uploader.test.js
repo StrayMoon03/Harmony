@@ -60,16 +60,22 @@ test("successful structured post sends header, media, then footer/comment", asyn
     },
   };
   const card = {
-    header: "🎵 **TikTok Video**\n@originalcreator",
-    footer: "Shared by <@123> • Sep 23, 2026\n[View on TikTok](https://example.com)\n\n💬 <@123>: OMG HIS HAIR 😂",
+    header: "TikTok",
+    footer: "Shared by <@123> • Sep 23, 2026\n<@123>: OMG HIS HAIR 😂",
+    buttonLabel: "View on TikTok",
+    buttonUrl: "https://example.com",
   };
 
   const ids = await uploadMedia(message, [{ path: mediaPath }], card);
 
   assert.deepEqual(ids, ["sent-1", "sent-2", "sent-3"]);
-  assert.equal(sent[0].embeds[0].data.description, card.header);
+  assert.equal(sent[0].content, card.header);
+  assert.equal(sent[0].embeds, undefined);
   assert.deepEqual(sent[1].files, [mediaPath]);
   assert.equal(sent[2].embeds[0].data.description, card.footer);
+  assert.equal(sent[2].components[0].components[0].data.label, card.buttonLabel);
+  assert.equal(sent[2].components[0].components[0].data.url, card.buttonUrl);
+  assert.equal(sent[2].components[0].components[0].data.style, 5);
   assert.deepEqual(sent[0].allowedMentions, { parse: [] });
   assert.deepEqual(sent[2].allowedMentions, { parse: [] });
   await fs.rm(tempDir, { recursive: true, force: true });
