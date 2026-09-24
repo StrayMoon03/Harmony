@@ -116,7 +116,12 @@ async function withMediaLifecycle(message, work, options = {}) {
   }
 }
 
-async function deleteOriginalAfterSuccess(message, replacementMessageIds = []) {
+async function deleteOriginalAfterSuccess(
+  message,
+  replacementMessageIds = [],
+  safeToDelete = true
+) {
+  if (!safeToDelete) return false;
   try {
     await message.delete();
     return true;

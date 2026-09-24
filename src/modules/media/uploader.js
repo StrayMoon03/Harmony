@@ -705,16 +705,16 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * Oversized videos are compressed first (AAC-tolerant recovery ladder).
  * Temp files and job directories are cleaned up afterward.
  *
- * Card text is placed in a colored embed so Discord shows one integrated
- * left accent bar (not a detached empty embed under plain content).
+ * Structured successful-post text is split around the media so the platform
+ * heading and creator appear above it while submitter/date/link/comment appear
+ * below it. Legacy string cards remain supported.
  *
- * When more than 10 files are present, Harmony sends the card + first 10
- * in the initial reply, then follow-up messages with the remaining files
- * in batches of 10 (Discord attachment limit).
+ * When more than 10 files are present, Harmony sends the media in batches
+ * of 10 between the structured header and footer (Discord attachment limit).
  *
  * @param {import("discord.js").Message} message
  * @param {Array<{ path: string }>} files
- * @param {string} cardText
+ * @param {string|{ header: string, footer: string }} cardText
  * @param {string|number} [rawDirOrColor]
  * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean }} [options]
  * @returns {Promise<string[]>} Discord message IDs created by Harmony
@@ -785,6 +785,22 @@ async function uploadMedia(
       `Upload: ${paths.length} file(s) in ${batches.length} message(s)`
     );
 
+    const structuredCard = cardText && typeof cardText === "object"
+      ? cardText
+      : null;
+
+    if (structuredCard) {
+      const headerMessage = await sendUploadBatch(message, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor(embedColor)
+            .setDescription(structuredCard.header || "\u200b"),
+        ],
+        allowedMentions: { parse: [] },
+      });
+      sentMessageIds.push(headerMessage.id);
+    }
+
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
       const isFirst = i === 0;
@@ -795,7 +811,7 @@ async function uploadMedia(
         allowedMentions: { repliedUser: false },
       };
 
-      if (isFirst) {
+      if (isFirst && !structuredCard) {
         payload.embeds = [
           new EmbedBuilder()
             .setColor(embedColor)
@@ -806,6 +822,18 @@ async function uploadMedia(
       const sentMessage = await sendUploadBatch(message, payload, isFirst);
 
       sentMessageIds.push(sentMessage.id);
+    }
+
+    if (structuredCard) {
+      const footerMessage = await sendUploadBatch(message, {
+        embeds: [
+          new EmbedBuilder()
+            .setColor(embedColor)
+            .setDescription(structuredCard.footer || "\u200b"),
+        ],
+        allowedMentions: { parse: [] },
+      });
+      sentMessageIds.push(footerMessage.id);
     }
   } catch (error) {
     for (const id of sentMessageIds) {

@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { sendUploadBatch } = require("./uploader");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const { sendUploadBatch, uploadMedia } = require("./uploader");
 
 function missingReferenceError() {
   return {
@@ -41,4 +44,33 @@ test("follow-up batches continue to use ordinary channel sends", async () => {
   const result = await sendUploadBatch(message, {}, false);
   assert.equal(result.id, "follow-up");
   assert.equal(replies, 0);
+});
+
+test("successful structured post sends header, media, then footer/comment", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-layout-"));
+  const mediaPath = path.join(tempDir, "photo.jpg");
+  await fs.writeFile(mediaPath, "test image bytes");
+  const sent = [];
+  const message = {
+    channel: {
+      send: async (payload) => {
+        sent.push(payload);
+        return { id: `sent-${sent.length}` };
+      },
+    },
+  };
+  const card = {
+    header: "🎵 **TikTok Video**\n@originalcreator",
+    footer: "Shared by <@123> • Sep 23, 2026\n[View on TikTok](https://example.com)\n\n💬 <@123>: OMG HIS HAIR 😂",
+  };
+
+  const ids = await uploadMedia(message, [{ path: mediaPath }], card);
+
+  assert.deepEqual(ids, ["sent-1", "sent-2", "sent-3"]);
+  assert.equal(sent[0].embeds[0].data.description, card.header);
+  assert.deepEqual(sent[1].files, [mediaPath]);
+  assert.equal(sent[2].embeds[0].data.description, card.footer);
+  assert.deepEqual(sent[0].allowedMentions, { parse: [] });
+  assert.deepEqual(sent[2].allowedMentions, { parse: [] });
+  await fs.rm(tempDir, { recursive: true, force: true });
 });

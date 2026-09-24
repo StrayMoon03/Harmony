@@ -17,6 +17,7 @@ const {
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("../modules/media/formatter");
+const { extractMemberComment } = require("../modules/media/memberComment");
 const { platformHeart } = require("../modules/media/emojiConfig");
 const { uploadMedia } = require("../modules/media/uploader");
 const {
@@ -66,6 +67,18 @@ const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 const { formatDiscordTimestamp } = require("../utils/discordTimestamp");
 const { logMediaError } = require("../services/errorInboxService");
+
+function buildSuccessfulCard(message, processedUrl, options) {
+  const preservation = extractMemberComment(message.content, processedUrl);
+  return {
+    cardText: formatMediaCard({
+      ...options,
+      sharedById: message.author.id,
+      memberComment: preservation.comment,
+    }),
+    safeToDelete: preservation.safeToDelete,
+  };
+}
 
 /**
  * Format a friendly "already shared" reply.
@@ -418,7 +431,7 @@ async function processMediaMessage(message, lifecycle) {
         classification.files
       );
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "Instagram",
         mediaType: classification.label,
         creator,
@@ -437,7 +450,7 @@ async function processMediaMessage(message, lifecycle) {
           ensureAppleCompatibleVideo: true,
         }
       );
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
@@ -541,7 +554,7 @@ async function processMediaMessage(message, lifecycle) {
         info?.creator ||
         "Unknown creator";
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "Facebook",
         mediaType: classification.label,
         creator,
@@ -557,7 +570,7 @@ async function processMediaMessage(message, lifecycle) {
         downloadResult.rawDir
       );
 
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
@@ -678,7 +691,7 @@ async function processMediaMessage(message, lifecycle) {
         info?.creator ||
         "Unknown creator";
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "TikTok",
         mediaType: classification.label,
         creator,
@@ -694,7 +707,7 @@ async function processMediaMessage(message, lifecycle) {
         downloadResult.rawDir,
         { embedColor: 0xff4fa3 }
       );
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
@@ -763,12 +776,15 @@ async function processMediaMessage(message, lifecycle) {
       if (downloadResult.linkOnly) {
         let replacementMessageId = null;
         if (downloadResult.text) {
+          const preservation = extractMemberComment(message.content, originalUrl);
           const textCard = formatXTextPost({
             displayName: downloadResult.displayName,
             handle: downloadResult.creator,
             originalDate: downloadResult.originalDate || extractOriginalDate(info),
             text: downloadResult.text,
             originalUrl,
+            sharedById: message.author.id,
+            memberComment: preservation.comment,
           });
           await lifecycle.markRetrieved();
           const sent = await message.channel.send({
@@ -776,7 +792,11 @@ async function processMediaMessage(message, lifecycle) {
             allowedMentions: { parse: [] },
           });
           replacementMessageId = sent.id;
-          await deleteOriginalAfterSuccess(message, [sent.id]);
+          await deleteOriginalAfterSuccess(
+            message,
+            [sent.id],
+            preservation.safeToDelete
+          );
         }
         shareStore.insert({
           platform,
@@ -823,7 +843,7 @@ async function processMediaMessage(message, lifecycle) {
         mediaType = "GIF";
       }
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "X",
         mediaType,
         creator,
@@ -848,7 +868,7 @@ async function processMediaMessage(message, lifecycle) {
         throw new Error("X media could not fit safely in a standalone Discord replacement.");
       }
 
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
@@ -940,7 +960,7 @@ async function processMediaMessage(message, lifecycle) {
           ? "Short"
           : classification.label;
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "YouTube",
         mediaType,
         creator,
@@ -968,7 +988,7 @@ async function processMediaMessage(message, lifecycle) {
         throw new Error("YouTube media could not fit safely in a standalone Discord replacement.");
       }
 
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
@@ -1054,7 +1074,7 @@ async function processMediaMessage(message, lifecycle) {
         downloadResult.creator ||
         "Unknown creator";
 
-      const cardText = formatMediaCard({
+      const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
         platform: "Threads",
         mediaType: classification.label,
         creator,
@@ -1071,7 +1091,7 @@ async function processMediaMessage(message, lifecycle) {
         { embedColor: 0xffffff }
       );
 
-      await deleteOriginalAfterSuccess(message, sentMessageIds);
+      await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
       shareStore.insert({
         platform,
