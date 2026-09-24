@@ -103,3 +103,17 @@ test("original is deleted only after replacement and rolls replacement back on f
   await assert.rejects(deleteOriginalAfterSuccess(message, ["replacement"]), /permission/);
   assert.equal(replacementDeleted, true);
 });
+
+test("safe link-only or preserved-comment messages are deleted after replacement", async () => {
+  let deleted = false;
+  const message = { delete: async () => { deleted = true; } };
+  assert.equal(await deleteOriginalAfterSuccess(message, ["replacement"], true), true);
+  assert.equal(deleted, true);
+});
+
+test("ambiguous comment parsing preserves the original message", async () => {
+  let deleted = false;
+  const message = { delete: async () => { deleted = true; } };
+  assert.equal(await deleteOriginalAfterSuccess(message, ["replacement"], false), false);
+  assert.equal(deleted, false);
+});

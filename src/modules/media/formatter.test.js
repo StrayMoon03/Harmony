@@ -2,18 +2,36 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("./formatter");
 
-test("compact card includes platform, type, creator, date, and source link only", () => {
-  const text = formatMediaCard({
+test("successful card separates clean header from shared-by/date/link footer", () => {
+  const card = formatMediaCard({
     platform: "Instagram",
     mediaType: "Reel",
     creator: "straykids",
     originalUrl: "https://www.instagram.com/reel/ABC/",
     originalDate: new Date("2026-09-20T12:00:00Z"),
+    sharedById: "123456789012345678",
   });
-  assert.match(text, /Instagram Reel/);
-  assert.match(text, /@straykids • Sep 20, 2026/);
-  assert.match(text, /View on Instagram/);
-  assert.doesNotMatch(text, /Harmony|Shared by|Original Reel/);
+  assert.equal(card.header, "📸 **Instagram Reel**\n@straykids");
+  assert.match(card.footer, /Shared by <@123456789012345678> • Sep 20, 2026/);
+  assert.match(card.footer, /View on Instagram/);
+  assert.doesNotMatch(card.header, /🎬|📷|🖼️|🎥|🎞️/);
+  assert.doesNotMatch(card.footer, /💬/);
+});
+
+test("member comment is attributed once at the bottom", () => {
+  const card = formatMediaCard({
+    platform: "TikTok",
+    mediaType: "Video",
+    creator: "originalcreator",
+    originalUrl: "https://www.tiktok.com/@creator/video/123",
+    originalDate: new Date("2026-09-23T12:00:00Z"),
+    sharedById: "123456789012345678",
+    memberComment: "OMG HIS HAIR 😂",
+  });
+  assert.equal(card.header, "🎵 **TikTok Video**\n@originalcreator");
+  assert.match(card.footer, /^Shared by <@123456789012345678> • Sep 23, 2026/);
+  assert.match(card.footer, /\n\n💬 <@123456789012345678>: OMG HIS HAIR 😂$/);
+  assert.equal((card.header.match(/@originalcreator/g) || []).length, 1);
 });
 
 test("yt-dlp dates are normalized", () => {
@@ -29,9 +47,11 @@ test("X text post uses exact metadata and the compact standalone layout", () => 
     originalDate: "2026-09-20T12:00:00Z",
     text: "Full post text",
     originalUrl: "https://x.com/Stray_Kids/status/123",
+    sharedById: "123456789012345678",
   });
   assert.match(text, /X Post/);
-  assert.match(text, /Stray Kids \(@Stray_Kids\) · Sep 20, 2026/);
+  assert.match(text, /Stray Kids \(@Stray_Kids\)/);
   assert.match(text, /Full post text/);
+  assert.match(text, /Shared by <@123456789012345678> • Sep 20, 2026/);
   assert.match(text, /View on X/);
 });
