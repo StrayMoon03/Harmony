@@ -254,9 +254,12 @@ async function downloadYouTubeMedia(url) {
       );
     }
 
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isUpcomingLiveEvent = /This live event will begin/i.test(errorMessage);
+
     console.warn(
       "YouTube download was unavailable; using the original YouTube player instead:",
-      error instanceof Error ? error.message : error
+      errorMessage
     );
     return {
       files: [],
@@ -264,7 +267,9 @@ async function downloadYouTubeMedia(url) {
       platform: "youtube",
       creator: null,
       linkOnly: true,
-      linkOnlyReason: "download-unavailable",
+      linkOnlyReason: isUpcomingLiveEvent
+        ? "upcoming-live"
+        : "download-unavailable",
       durationSeconds: null,
     };
   }
@@ -273,7 +278,7 @@ async function downloadYouTubeMedia(url) {
 function shouldKeepOriginalYouTubePreview(downloadResult) {
   return Boolean(
     downloadResult?.linkOnly &&
-    downloadResult.linkOnlyReason === "long-video"
+    ["long-video", "upcoming-live"].includes(downloadResult.linkOnlyReason)
   );
 }
 
