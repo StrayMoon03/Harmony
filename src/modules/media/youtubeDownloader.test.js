@@ -15,6 +15,16 @@ test("keeps an intentional long-video streaming preview without reporting an err
   );
 });
 
+test("keeps an upcoming live-event preview without reporting an error", () => {
+  assert.equal(
+    shouldKeepOriginalYouTubePreview({
+      linkOnly: true,
+      linkOnlyReason: "upcoming-live",
+    }),
+    true
+  );
+});
+
 test("does not hide a genuine YouTube download failure", () => {
   assert.equal(
     shouldKeepOriginalYouTubePreview({
