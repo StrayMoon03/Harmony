@@ -18,6 +18,10 @@ class MediaRetrievalTimeoutError extends Error {
   }
 }
 
+function isHandledMediaTimeout(error, lifecycle) {
+  return error instanceof MediaRetrievalTimeoutError || lifecycle?.timedOut === true;
+}
+
 function stickerFiles(kind) {
   const file = STICKERS[kind];
   if (!file || !fs.existsSync(file)) return [];
@@ -183,6 +187,7 @@ module.exports = {
   FAILURE_TEXT,
   STICKERS,
   MediaRetrievalTimeoutError,
+  isHandledMediaTimeout,
   withMediaLifecycle,
   sendStandaloneNotice,
   deleteOriginalAfterSuccess,
