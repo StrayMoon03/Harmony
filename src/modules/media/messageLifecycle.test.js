@@ -4,6 +4,7 @@ const {
   WORKING_TEXT,
   FAILURE_TEXT,
   MediaRetrievalTimeoutError,
+  isHandledMediaTimeout,
   withMediaLifecycle,
   deleteOriginalAfterSuccess,
 } = require("./messageLifecycle");
@@ -69,6 +70,12 @@ test("cutoff removes Working, reports timeout, and leaves original untouched", a
   assert.equal(message.sent[1].payload.content, FAILURE_TEXT);
   await wait(10);
   assert.equal(message.sent[1].deleted, true);
+});
+
+test("a cutoff timeout is recognized as already reported", () => {
+  assert.equal(isHandledMediaTimeout(new MediaRetrievalTimeoutError()), true);
+  assert.equal(isHandledMediaTimeout(new Error("late result"), { timedOut: true }), true);
+  assert.equal(isHandledMediaTimeout(new Error("download failed"), { timedOut: false }), false);
 });
 
 test("configured custom status emoji replaces the fallback attachment", async () => {
