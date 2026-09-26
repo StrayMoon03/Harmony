@@ -10,7 +10,17 @@ const {
 
 test("sends resolved share aliases directly to scoped browser inspection", () => {
   assert.equal(shouldUseScopedBrowserDirectly(true), true);
-  assert.equal(shouldUseScopedBrowserDirectly(false), false);
+  assert.equal(
+    shouldUseScopedBrowserDirectly(
+      false,
+      "https://www.threads.com/@chosen.4000/post/REAL123?xmt=abc"
+    ),
+    true
+  );
+  assert.equal(
+    shouldUseScopedBrowserDirectly(false, "https://www.threads.com/"),
+    false
+  );
 });
 
 test("accepts only exact Threads post permalinks", () => {
