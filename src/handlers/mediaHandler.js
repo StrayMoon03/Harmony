@@ -1,6 +1,6 @@
 const {
   FAILURE_TEXT,
-  MediaRetrievalTimeoutError,
+  isHandledMediaTimeout,
   withMediaLifecycle,
   sendStandaloneNotice,
   deleteOriginalAfterSuccess,
@@ -131,13 +131,17 @@ async function markRetrievedOrCleanup(lifecycle, downloadResult) {
  * @param {unknown} error
  */
 async function replyWithHarmonyError(message, error, lifecycle) {
+  // The lifecycle cutoff already reports timeout failures. If a downloader
+  // finishes just after that cutoff, markRetrieved() surfaces the same timeout
+  // here; returning first prevents a duplicate private incident.
+  if (isHandledMediaTimeout(error, lifecycle)) return;
+
   console.error("Harmony Error:", error);
 
   await logMediaError(message, error).catch((reportError) => {
     console.error("Could not send media failure to Harmony’s error inbox:", reportError);
   });
 
-  if (error instanceof MediaRetrievalTimeoutError || lifecycle?.timedOut) return;
   if (lifecycle && !(await lifecycle.finishFailure())) return;
   await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
     autoDeleteMs: 5000,
