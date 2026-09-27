@@ -143,3 +143,23 @@ test("resolves a share alias from Threads' redirect Location", async (t) => {
     "https://www.threads.com/@chosen.4000/post/REAL123"
   );
 });
+
+test("runs share alias resolution attempts concurrently", async (t) => {
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  let inFlight = 0;
+  let peakInFlight = 0;
+  global.fetch = async () => {
+    inFlight += 1;
+    peakInFlight = Math.max(peakInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    inFlight -= 1;
+    return new Response(null, { status: 204 });
+  };
+
+  assert.equal(
+    await resolveThreadsShareRedirect("https://www.threads.com/share/ALIAS/"),
+    null
+  );
+  assert.equal(peakInFlight, 4);
+});
