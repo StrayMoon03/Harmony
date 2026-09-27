@@ -6,6 +6,7 @@ const { promisify } = require("node:util");
 
 const { probeFile } = require("./downloader");
 const { withBrowserLock } = require("./browserLock");
+const { isFacebookShareAlias } = require("./facebook");
 
 const execFileAsync = promisify(execFile);
 
@@ -968,7 +969,7 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     /\/reels?\/[^/?#]+/i.test(url) ||
     /\/videos\/\d+/i.test(url) ||
     /[?&]v=\d+/i.test(url) ||
-    /\/share\/[vrp]\//i.test(originalUrl);
+    isFacebookShareAlias(originalUrl);
   // Try both the canonical URL and the original /share/ URL. Facebook's
   // downloaders sometimes expose the video on only one of those forms.
   // Downloaders operate on the resolved canonical post URL. The original
