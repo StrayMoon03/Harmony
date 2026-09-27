@@ -28,6 +28,7 @@ const {
 const {
   findFacebookLinks,
   extractFacebookId,
+  isFacebookShareAlias,
 } = require("../modules/media/facebook");
 const {
   normalizeFacebookUrl,
@@ -494,8 +495,11 @@ async function processMediaMessage(message, lifecycle) {
   if (facebookLinks.length > 0) {
     const originalUrl = facebookLinks[0];
 
-    const normalizedUrl =
-      await normalizeFacebookUrl(originalUrl);
+    // The verified Facebook browser follows /share/ aliases itself. Avoid a
+    // separate network resolution pass that consumes the lifecycle budget.
+    const normalizedUrl = isFacebookShareAlias(originalUrl)
+      ? originalUrl
+      : await normalizeFacebookUrl(originalUrl);
 
     let mediaId =
       extractFacebookId(normalizedUrl) ||
