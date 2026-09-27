@@ -19,6 +19,23 @@ function findFacebookLinks(content) {
 }
 
 /**
+ * Share aliases are already followed by the verified browser downloader.
+ * Resolving them separately first only repeats the same network navigation.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isFacebookShareAlias(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)facebook\.com$/i.test(parsed.hostname) &&
+      /^\/share\/[vrp]\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Extracts the strongest Facebook media ID available from a URL.
  *
  * @param {string} url
@@ -53,4 +70,5 @@ function extractFacebookId(url) {
 module.exports = {
   findFacebookLinks,
   extractFacebookId,
+  isFacebookShareAlias,
 };
