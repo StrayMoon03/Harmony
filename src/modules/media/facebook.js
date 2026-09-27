@@ -29,7 +29,7 @@ function isFacebookShareAlias(url) {
   try {
     const parsed = new URL(url);
     return /(^|\.)facebook\.com$/i.test(parsed.hostname) &&
-      /^\/share\/[vrp]\//i.test(parsed.pathname);
+      /^\/share\/(?:[vrp]\/)?[^/]+\/?$/i.test(parsed.pathname);
   } catch {
     return false;
   }
