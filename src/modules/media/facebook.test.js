@@ -7,6 +7,7 @@ test("recognizes Facebook share aliases handled directly by the browser", () => 
     "https://www.facebook.com/share/v/1JRUPjUMVR/",
     "https://facebook.com/share/r/example/",
     "https://m.facebook.com/share/p/example/",
+    "https://www.facebook.com/share/1EQRuWwDbC/",
   ]) {
     assert.equal(isFacebookShareAlias(url), true);
   }
