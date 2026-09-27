@@ -392,8 +392,8 @@ async function resolveThreadsShareRedirect(url) {
     "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
   ];
 
-  for (const userAgent of userAgents) {
-    for (const method of ["HEAD", "GET"]) {
+  const attempts = userAgents.flatMap((userAgent) =>
+    ["HEAD", "GET"].map(async (method) => {
       try {
         const response = await fetch(url, {
           method,
@@ -402,7 +402,7 @@ async function resolveThreadsShareRedirect(url) {
             "User-Agent": userAgent,
             Accept: "text/html,application/xhtml+xml",
           },
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(3000),
         });
         const location = response.headers.get("location");
         const redirectUrl = location
@@ -432,8 +432,14 @@ async function resolveThreadsShareRedirect(url) {
           error instanceof Error ? error.message : error
         );
       }
-    }
-  }
+
+      return null;
+    })
+  );
+
+  const results = await Promise.all(attempts);
+  const resolved = results.find(Boolean);
+  if (resolved) return resolved;
 
   return null;
 }
@@ -780,6 +786,14 @@ async function downloadThreadsMedia(url, options = {}) {
     console.log("Threads page inspection starting.");
 
     const shareUrl = isThreadsShareUrl(url);
+    if (shareUrl) {
+      // Threads' share page often renders only a login shell in Chromium and
+      // never exposes its canonical post. Resolve the public alias first, but
+      // keep the attempts parallel and tightly bounded so the scoped browser
+      // still has most of Harmony's retrieval window.
+      const resolvedUrl = await resolveThreadsShareRedirect(url);
+      if (resolvedUrl) url = resolvedUrl;
+    }
     let html = "";
     let sourceUrl = url;
     let status = 0;
