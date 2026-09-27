@@ -780,15 +780,6 @@ async function downloadThreadsMedia(url, options = {}) {
     console.log("Threads page inspection starting.");
 
     const shareUrl = isThreadsShareUrl(url);
-    if (shareUrl) {
-      const resolvedUrl = await resolveThreadsShareRedirect(url);
-      if (!resolvedUrl) {
-        throw new Error(
-          "Threads share link did not resolve to one exact post."
-        );
-      }
-      url = resolvedUrl;
-    }
     let html = "";
     let sourceUrl = url;
     let status = 0;
@@ -798,13 +789,13 @@ async function downloadThreadsMedia(url, options = {}) {
     let scopedCandidates = [];
 
     if (shouldUseScopedBrowserDirectly(shareUrl, url)) {
-      // The URL already identifies one exact post. Railway's
-      // static Threads requests routinely consume most of the public timeout
-      // before failing, while the browser is still required to verify the
-      // root post. Go directly to that scoped browser inspection.
+      // Exact posts and share aliases both require the scoped browser. The
+      // browser follows a share redirect and verifies the resulting root post,
+      // so resolving the alias in a separate network pass only wastes the
+      // public processing window.
       pageFetchFailed = true;
       console.log(
-        "Threads exact post identified; using scoped browser inspection directly."
+        "Threads scoped URL identified; using browser inspection directly."
       );
     } else {
       try {
