@@ -8,7 +8,7 @@ const {
   shouldUseScopedBrowserDirectly,
 } = require("./threadsDownloader");
 
-test("sends resolved share aliases directly to scoped browser inspection", () => {
+test("sends share aliases and exact posts directly to scoped browser inspection", () => {
   assert.equal(shouldUseScopedBrowserDirectly(true), true);
   assert.equal(
     shouldUseScopedBrowserDirectly(
