@@ -26,13 +26,14 @@ test("private Facebook download errors still reach the shared reporter", () => {
   assert.match(branch, /replyWithHarmonyError\([\s\S]*message,[\s\S]*error/);
 });
 
-test("all six successful media branches preserve submitter text before deletion", () => {
-  const builders = source.match(/buildSuccessfulCard\(message, originalUrl,/g) || [];
+test("all six successful media branches preserve creator handoff before formatting", () => {
+  const builds = [...source.matchAll(/buildSuccessfulCard\(message, originalUrl, \{([\s\S]*?)\n\s+\}\);/g)];
   const guardedDeletes = source.match(
     /deleteOriginalAfterSuccess\(message, sentMessageIds, safeToDelete\)/g
   ) || [];
-  assert.equal(builders.length, 6);
+  assert.equal(builds.length, 6);
   assert.equal(guardedDeletes.length, 6);
+  assert.ok(builds.every((match) => /\bcreator,/.test(match[1])));
   assert.match(source, /sharedById: message\.author\.id/);
   assert.match(source, /memberComment: preservation\.comment/);
 });

@@ -6,7 +6,7 @@ const { platformIcon } = require("./emojiConfig");
  * @param {object} options
  * @param {string} options.platform
  * @param {string} options.mediaType
- * @param {string} options.creator
+ * @param {string|null} [options.creator]
  * @param {string} options.originalUrl
  * @param {string|number|Date|null} [options.originalDate]
  * @param {string} options.sharedById
@@ -15,6 +15,7 @@ const { platformIcon } = require("./emojiConfig");
  */
 function formatMediaCard({
   platform,
+  creator,
   originalUrl,
   originalDate,
   sharedById,
@@ -22,15 +23,28 @@ function formatMediaCard({
 }) {
   const parsedDate = originalDate ? new Date(originalDate) : null;
   const dateText = parsedDate && !Number.isNaN(parsedDate.getTime())
-    ? parsedDate.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })
-    : "Date unavailable";
+    ? parsedDate.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    })
+    : null;
   const sharedBy = sharedById ? `<@${sharedById}>` : "Unknown member";
+  const creatorText = creator && !/^unknown creator$/i.test(String(creator).trim())
+    ? `@${String(creator).trim().replace(/^@+/, "")}`
+    : null;
+  const authorLine = creatorText
+    ? `${creatorText}${dateText ? ` • ${dateText}` : ""}`
+    : null;
   const icon = platformIcon(platform);
   return {
     header: icon ? `${icon} ${platform}` : platform,
     footer: [
-      `Shared by ${sharedBy} • ${dateText}`,
-      memberComment ? `💬 ${sharedBy}: ${memberComment}` : null,
+      authorLine,
+      `Shared by ${sharedBy}`,
+      memberComment ? "💬 MEMBER COMMENT" : null,
+      memberComment ? `${sharedBy}: ${memberComment}` : null,
     ].filter((line) => line !== null).join("\n"),
     buttonLabel: `View on ${platform}`,
     buttonUrl: originalUrl || null,

@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("./formatter");
 
-test("all successful media cards use only the platform above media", () => {
+test("all successful media cards keep only platform identification above media", () => {
   const emojiEnvironment = {
     Facebook: ["HARMONY_PLATFORM_FACEBOOK_ID", "facebook"],
     Instagram: ["HARMONY_PLATFORM_INSTAGRAM_ID", "instagram"],
@@ -26,7 +26,7 @@ test("all successful media cards use only the platform above media", () => {
     });
     assert.equal(card.header, `<:${emojiName}:123456789012345678> ${platform}`);
     assert.doesNotMatch(card.header, /Video|Reel|Photo|Post|straykids/);
-    assert.equal(card.footer, "Shared by <@123456789012345678> • Sep 20, 2026");
+    assert.equal(card.footer, "@straykids • Sep 20, 2026\nShared by <@123456789012345678>");
     assert.equal(card.buttonLabel, `View on ${platform}`);
     assert.equal(card.buttonUrl, originalUrl);
     delete process.env[env];
@@ -37,9 +37,31 @@ test("missing platform emoji falls back to the plain platform name", () => {
   delete process.env.HARMONY_PLATFORM_FACEBOOK_ID;
   const card = formatMediaCard({ platform: "Facebook", sharedById: "123" });
   assert.equal(card.header, "Facebook");
+  assert.equal(card.footer, "Shared by <@123>");
 });
 
-test("member comment is attributed once at the bottom", () => {
+test("original creator remains visible without inventing a date", () => {
+  const card = formatMediaCard({
+    platform: "Facebook",
+    creator: "@originalcreator",
+    sharedById: "123",
+  });
+  assert.equal(card.footer, "@originalcreator\nShared by <@123>");
+  assert.doesNotMatch(card.footer, /Date unavailable/);
+});
+
+test("missing original creator degrades gracefully", () => {
+  const card = formatMediaCard({
+    platform: "Threads",
+    creator: null,
+    originalDate: new Date("2026-09-23T12:00:00Z"),
+    sharedById: "123",
+  });
+  assert.equal(card.footer, "Shared by <@123>");
+  assert.doesNotMatch(card.footer, /Unknown creator/);
+});
+
+test("member comment is labeled once at the bottom", () => {
   const card = formatMediaCard({
     platform: "TikTok",
     mediaType: "Video",
@@ -52,10 +74,10 @@ test("member comment is attributed once at the bottom", () => {
   assert.equal(card.header, "TikTok");
   assert.equal(
     card.footer,
-    "Shared by <@123456789012345678> • Sep 23, 2026\n💬 <@123456789012345678>: OMG HIS HAIR 😂"
+    "@originalcreator • Sep 23, 2026\nShared by <@123456789012345678>\n💬 MEMBER COMMENT\n<@123456789012345678>: OMG HIS HAIR 😂"
   );
-  assert.doesNotMatch(card.footer, /View on/);
   assert.equal(card.buttonLabel, "View on TikTok");
+  assert.equal(card.buttonUrl, "https://www.tiktok.com/@creator/video/123");
 });
 
 test("yt-dlp dates are normalized", () => {
