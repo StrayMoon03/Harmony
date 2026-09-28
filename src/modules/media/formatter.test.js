@@ -108,7 +108,7 @@ test("X text post uses exact metadata and the compact standalone layout", () => 
     sharedById: "123456789012345678",
   });
   assert.match(text, /X Post/);
-  assert.match(text, /Stray Kids \\(@Stray_Kids\\)/);
+  assert.match(text, /Stray Kids \(@Stray_Kids\)/);
   assert.match(text, /Full post text/);
   assert.match(text, /Shared by <@123456789012345678> • Sep 20, 2026/);
   assert.match(text, /View on X/);
