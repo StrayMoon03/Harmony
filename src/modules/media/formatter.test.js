@@ -61,7 +61,7 @@ test("missing original creator degrades gracefully", () => {
   assert.doesNotMatch(card.footer, /Unknown creator/);
 });
 
-test("member comment is labeled once at the bottom", () => {
+test("member comment uses quoted attribution without repeating the mention", () => {
   const card = formatMediaCard({
     platform: "TikTok",
     mediaType: "Video",
@@ -74,10 +74,22 @@ test("member comment is labeled once at the bottom", () => {
   assert.equal(card.header, "TikTok");
   assert.equal(
     card.footer,
-    "@originalcreator • Sep 23, 2026\nShared by <@123456789012345678>\n💬 MEMBER COMMENT\n<@123456789012345678>: OMG HIS HAIR 😂"
+    "@originalcreator • Sep 23, 2026\nShared by <@123456789012345678>\n\n💬 <@123456789012345678> said:\n> OMG HIS HAIR 😂"
   );
+  assert.equal((card.footer.match(/<@123456789012345678>/g) || []).length, 2);
+  assert.doesNotMatch(card.footer, /MEMBER COMMENT/);
   assert.equal(card.buttonLabel, "View on TikTok");
   assert.equal(card.buttonUrl, "https://www.tiktok.com/@creator/video/123");
+});
+
+test("no member comment produces no comment section", () => {
+  const card = formatMediaCard({
+    platform: "Facebook",
+    creator: "creator",
+    sharedById: "123",
+  });
+  assert.equal(card.footer, "@creator\nShared by <@123>");
+  assert.doesNotMatch(card.footer, /said:|MEMBER COMMENT|^>/m);
 });
 
 test("yt-dlp dates are normalized", () => {
@@ -96,7 +108,7 @@ test("X text post uses exact metadata and the compact standalone layout", () => 
     sharedById: "123456789012345678",
   });
   assert.match(text, /X Post/);
-  assert.match(text, /Stray Kids \(@Stray_Kids\)/);
+  assert.match(text, /Stray Kids \\(@Stray_Kids\\)/);
   assert.match(text, /Full post text/);
   assert.match(text, /Shared by <@123456789012345678> • Sep 20, 2026/);
   assert.match(text, /View on X/);
