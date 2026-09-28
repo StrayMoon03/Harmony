@@ -2,11 +2,13 @@
  * Finds TikTok links inside Discord message text.
  *
  * Supports:
- * - Standard TikTok URLs
- * - TikTok video posts
+ * - Standard TikTok video URLs
  * - TikTok photo posts
+ * - tiktok.com/t shortened links
  * - vm.tiktok.com shortened links
  * - vt.tiktok.com shortened links
+ *
+ * Profile pages and other non-media TikTok URLs are intentionally ignored.
  *
  * @param {string} text
  * @returns {string[]}
@@ -20,9 +22,29 @@ function findTikTokLinks(text) {
 
   if (!matches) return [];
 
-  return matches.map((url) =>
-    url.replace(/[)>.,!?]+$/g, "")
-  );
+  return matches
+    .map((url) => url.replace(/[)>.,!?]+$/g, ""))
+    .filter((url) => {
+      try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname.toLowerCase();
+
+        if (/^(?:vm|vt)\.tiktok\.com$/.test(hostname)) {
+          return parsed.pathname !== "/";
+        }
+
+        if (!/^(?:www\.)?tiktok\.com$/.test(hostname)) {
+          return false;
+        }
+
+        return (
+          /^\/t\/[^/]+\/?$/i.test(parsed.pathname) ||
+          /^\/@[^/]+\/(?:video|photo)\/\d+\/?$/i.test(parsed.pathname)
+        );
+      } catch {
+        return false;
+      }
+    });
 }
 
 /**
