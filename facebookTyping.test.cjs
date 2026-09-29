@@ -16,7 +16,7 @@ test("Facebook still reaches metadata and download after duplicate detection", (
   assert.ok(start >= 0 && end > start);
   assert.ok(branch.indexOf("shareStore.find") < branch.indexOf("getMediaInfo"));
   assert.ok(branch.indexOf("getMediaInfo") < branch.indexOf("downloadFacebookMedia"));
-  assert.match(branch, /sendAlreadyShared\(message, existing, platform\)/);
+  assert.match(branch, /sendAlreadySharedAndCleanup\(message, existing, platform, originalUrl\)/);
 });
 
 test("private Facebook download errors still reach the shared reporter", () => {

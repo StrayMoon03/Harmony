@@ -11,6 +11,7 @@ const {
 const {
   findFacebookLinks,
   extractFacebookId,
+  isFacebookShareAlias,
 } = require("../modules/media/facebook");
 const {
   normalizeFacebookUrl,
@@ -58,7 +59,12 @@ async function resolveShareKey(input) {
 
   const facebookUrl = findFacebookLinks(input)[0];
   if (facebookUrl) {
-    const normalizedUrl = await normalizeFacebookUrl(facebookUrl);
+    // The normal share flow keeps verified Facebook /share aliases as-is so
+    // browser retrieval can resolve them within the lifecycle budget. Use the
+    // same key here; resolving first would produce a different media ID.
+    const normalizedUrl = isFacebookShareAlias(facebookUrl)
+      ? facebookUrl
+      : await normalizeFacebookUrl(facebookUrl);
     return {
       platform: "facebook",
       mediaId:
@@ -146,4 +152,5 @@ async function execute(interaction) {
 module.exports = {
   data,
   execute,
+  resolveShareKey,
 };
