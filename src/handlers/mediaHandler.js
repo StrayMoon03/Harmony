@@ -109,6 +109,21 @@ async function sendAlreadyShared(message, record, platform) {
   );
 }
 
+/**
+ * Sends the duplicate response before considering cleanup of the newly
+ * submitted message. Only a link-only message is safe to delete; comments
+ * and ambiguous text remain untouched so member-authored content cannot be
+ * lost.
+ */
+async function sendAlreadySharedAndCleanup(message, record, platform, processedUrl) {
+  const response = await sendAlreadyShared(message, record, platform);
+  const preservation = extractMemberComment(message.content, processedUrl);
+  if (preservation.safeToDelete && !preservation.comment) {
+    await deleteOriginalAfterSuccess(message, [], true);
+  }
+  return response;
+}
+
 async function markRetrievedOrCleanup(lifecycle, downloadResult) {
   try {
     await lifecycle.markRetrieved();
@@ -405,7 +420,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
 
         return;
       }
@@ -521,7 +536,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
         return;
       }
 
@@ -641,7 +656,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
 
         return;
       }
@@ -771,7 +786,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
 
         return;
       }
@@ -932,7 +947,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
         return;
       }
 
@@ -1059,7 +1074,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
-        await sendAlreadyShared(message, existing, platform);
+        await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
         return;
       }
 
@@ -1153,4 +1168,5 @@ async function handleMediaMessage(message) {
 
 module.exports = {
   handleMediaMessage,
+  sendAlreadySharedAndCleanup,
 };
