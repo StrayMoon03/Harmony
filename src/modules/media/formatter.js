@@ -44,7 +44,7 @@ function formatMediaCard({
       authorLine,
       `Shared by ${sharedBy}`,
       memberComment ? "" : null,
-      memberComment ? `💬 ${sharedBy} said:` : null,
+      memberComment ? `**💬 ${sharedBy}**` : null,
       memberComment ? `> ${memberComment}` : null,
     ].filter((line) => line !== null).join("\n"),
     buttonLabel: `View on ${platform}`,
