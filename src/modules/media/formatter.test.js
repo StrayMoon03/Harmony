@@ -61,7 +61,7 @@ test("missing original creator degrades gracefully", () => {
   assert.doesNotMatch(card.footer, /Unknown creator/);
 });
 
-test("member comment uses quoted attribution without repeating the mention", () => {
+test("member comment uses a bold quoted attribution without repeating the mention", () => {
   const card = formatMediaCard({
     platform: "TikTok",
     mediaType: "Video",
@@ -74,10 +74,10 @@ test("member comment uses quoted attribution without repeating the mention", () 
   assert.equal(card.header, "TikTok");
   assert.equal(
     card.footer,
-    "@originalcreator • Sep 23, 2026\nShared by <@123456789012345678>\n\n💬 <@123456789012345678> said:\n> OMG HIS HAIR 😂"
+    "@originalcreator • Sep 23, 2026\nShared by <@123456789012345678>\n\n**💬 <@123456789012345678>**\n> OMG HIS HAIR 😂"
   );
   assert.equal((card.footer.match(/<@123456789012345678>/g) || []).length, 2);
-  assert.doesNotMatch(card.footer, /MEMBER COMMENT/);
+  assert.doesNotMatch(card.footer, /MEMBER COMMENT|said:/);
   assert.equal(card.buttonLabel, "View on TikTok");
   assert.equal(card.buttonUrl, "https://www.tiktok.com/@creator/video/123");
 });
