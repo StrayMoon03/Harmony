@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
-  managerModal,
+  managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
@@ -128,6 +128,131 @@ test("manager modals allow blank optional fields", () => {
   ]).toJSON();
   assert.equal(json.components.length, 2);
   assert.equal(json.components[1].components[0].value, undefined);
+});
+
+function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {} }) {
+  const interaction = {
+    customId,
+    guildId,
+    user: { id: userId },
+    client: {},
+    memberPermissions: { has: () => true },
+    values,
+    fields: { getTextInputValue: (name) => fields[name] || "" },
+    responses: [],
+    isButton: () => kind === "button",
+    isStringSelectMenu: () => kind === "select",
+    isModalSubmit: () => kind === "modal",
+    reply: async (payload) => { interaction.responses.push({ type: "reply", payload }); },
+    showModal: async (modal) => { interaction.responses.push({ type: "modal", modal }); },
+    update: async (payload) => { interaction.responses.push({ type: "update", payload }); },
+  };
+  return interaction;
+}
+
+test("add event follows category-first interaction flow and saves without a second category step", async () => {
+  const guildId = `manager-add-flow-${Date.now()}`;
+  store.setCalendarChannels(guildId, "calendar-stray-kids", "calendar-community");
+
+  const add = fakeInteraction({ customId: "harmony-manager:stray_kids:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  assert.equal(add.responses[0].type, "reply");
+  const categoryMenuJson = add.responses[0].payload.components[0].toJSON().components[0];
+  assert.deepEqual(categoryMenuJson.options.map((option) => option.label), [
+    "🎂 Birthday", "🎬 Content / Video", "🎤 Concert", "📺 Stream / Watch", "💿 Release",
+    "📱 Video Call", "✨ Appearance", "🎮 Community / Game", "📌 Other",
+  ]);
+  assert.equal(categoryMenuJson.options.some((option) => option.label === "content"), false);
+
+  const category = fakeInteraction({
+    customId: "harmony-manager:stray_kids:addcategory:new", kind: "select", guildId, values: ["content"],
+  });
+  await handleEventSchedulerInteraction(category);
+  assert.equal(category.responses[0].type, "modal");
+  assert.equal(category.responses[0].modal.toJSON().custom_id, "harmony-manager:stray_kids:addmodal");
+  assert.equal(category.responses[0].modal.toJSON().components.length, 5);
+
+  const details = fakeInteraction({
+    customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId,
+    fields: {
+      title: "SKZ CODE", "event-date": "2099-01-04", "event-time": "",
+      timezone: "America/New_York", link: "",
+    },
+  });
+  await handleEventSchedulerInteraction(details);
+  assert.equal(details.responses[0].type, "reply");
+  assert.equal(details.responses[0].payload.content, "Event saved!");
+  const savedButtons = details.responses[0].payload.components[0].toJSON().components;
+  assert.deepEqual(savedButtons.map((button) => button.label), ["📝 Add Description", "Done"]);
+  const eventId = Number(savedButtons[0].custom_id.split(":").at(-1));
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.category, "content");
+  assert.equal(saved.link, "");
+  assert.equal(saved.all_day, 1);
+  assert.equal(saved.event_at, null);
+
+  const done = fakeInteraction({ customId: "harmony-manager:stray_kids:done", kind: "button", guildId });
+  await handleEventSchedulerInteraction(done);
+  assert.equal(done.responses[0].type, "update");
+
+  const addDescription = fakeInteraction({ customId: `harmony-manager:stray_kids:description:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(addDescription);
+  assert.equal(addDescription.responses[0].type, "modal");
+  const description = fakeInteraction({
+    customId: `harmony-manager:stray_kids:descriptionmodal:${eventId}`, kind: "modal", guildId,
+    fields: { description: "New episode" },
+  });
+  await handleEventSchedulerInteraction(description);
+  assert.equal(description.responses[0].type, "reply");
+  assert.equal(store.getEvent(guildId, eventId).description, "New episode");
+});
+
+test("edit event keeps friendly category changes and editable links", async () => {
+  const guildId = `manager-edit-flow-${Date.now()}`;
+  store.setCalendarChannels(guildId, "calendar-stray-kids", "calendar-community");
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar-stray-kids",
+    title: "Concert",
+    eventDate: "2099-07-14",
+    eventAt: "2099-07-15T00:00:00.000Z",
+    eventTimezone: "America/New_York",
+    calendarType: "stray_kids",
+    category: "concert",
+    link: "https://example.com/old",
+    createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  assert.equal(edit.responses[0].type, "reply");
+
+  const select = fakeInteraction({ customId: "harmony-manager:stray_kids:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  assert.equal(select.responses[0].type, "modal");
+  const editModal = select.responses[0].modal.toJSON();
+  assert.equal(editModal.components.length, 5);
+  assert.equal(editModal.components.at(-1).components[0].custom_id, "link");
+
+  const editDetails = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
+    fields: {
+      title: "Concert", "event-date": "2099-07-14", "event-time": "20:00",
+      timezone: "America/New_York", link: "https://example.com/new",
+    },
+  });
+  await handleEventSchedulerInteraction(editDetails);
+  const editCategoryMenu = editDetails.responses[0].payload.components[0].toJSON().components[0];
+  assert.ok(editCategoryMenu.options.some((option) => option.label === "🎤 Concert" && option.default));
+  assert.equal(editCategoryMenu.options.some((option) => option.label === "concert"), false);
+
+  const changedCategory = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editcategory:${eventId}`, kind: "select", guildId, values: ["content"],
+  });
+  await handleEventSchedulerInteraction(changedCategory);
+  assert.equal(changedCategory.responses[0].type, "update");
+  const updated = store.getEvent(guildId, eventId);
+  assert.equal(updated.category, "content");
+  assert.equal(updated.link, "https://example.com/new");
 });
 
 function fakeChannel(id) {

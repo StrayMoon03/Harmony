@@ -353,7 +353,7 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (interaction.isButton() || interaction.isModalSubmit()) {
+  if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
     if (await handleEventSchedulerInteraction(interaction)) return;
   }
 
