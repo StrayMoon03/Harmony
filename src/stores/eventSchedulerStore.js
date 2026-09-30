@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventTimezone, calendarType = "community", description, createdBy, announcements }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventDate, eventTimezone, calendarType, category, allDay = false, description, createdBy, announcements }) {
   const db = getDb();
   const now = new Date().toISOString();
   db.exec("BEGIN IMMEDIATE");
@@ -8,9 +8,9 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_timezone, description, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, timezone, calendarType, eventAt || null, eventTimezone || timezone, description || null, createdBy, now);
+        link, timezone, calendar_type, event_at, event_date, event_timezone, description, category, all_day, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, timezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone || timezone, description || null, category || null, allDay ? 1 : 0, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -98,9 +98,34 @@ function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
   return getDb().prepare(`
     SELECT * FROM scheduled_events
     WHERE guild_id = ? AND calendar_type = ? AND cancelled_at IS NULL
-      AND event_at IS NOT NULL AND event_at >= ? AND event_at < ?
-    ORDER BY event_at, id
-  `).all(guildId, calendarType, monthStart, monthEnd);
+      AND (event_at >= ? AND event_at < ? OR event_date >= substr(?, 1, 10) AND event_date < substr(?, 1, 10))
+    ORDER BY COALESCE(event_date, substr(event_at, 1, 10)), event_at, id
+  `).all(guildId, calendarType, monthStart, monthEnd, monthStart, monthEnd);
+}
+
+function listPublishedCalendars(guildId, calendarType, monthKey) {
+  return getDb().prepare(`SELECT * FROM calendar_publications WHERE guild_id = ? AND calendar_type = ? AND month_key = ? ORDER BY part_index`).all(guildId, calendarType, monthKey);
+}
+
+function savePublishedCalendar(guildId, calendarType, monthKey, partIndex, channelId, messageId) {
+  getDb().prepare(`
+    INSERT INTO calendar_publications (guild_id, calendar_type, month_key, part_index, channel_id, message_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, calendar_type, month_key, part_index) DO UPDATE SET
+      channel_id = excluded.channel_id, message_id = excluded.message_id, updated_at = excluded.updated_at
+  `).run(guildId, calendarType, monthKey, partIndex, channelId, messageId, new Date().toISOString());
+}
+
+function removePublishedCalendarPart(guildId, calendarType, monthKey, partIndex) {
+  getDb().prepare(`DELETE FROM calendar_publications WHERE guild_id = ? AND calendar_type = ? AND month_key = ? AND part_index = ?`).run(guildId, calendarType, monthKey, partIndex);
+}
+
+function removePublishedCalendars(guildId, calendarType, monthKey) {
+  getDb().prepare(`DELETE FROM calendar_publications WHERE guild_id = ? AND calendar_type = ? AND month_key = ?`).run(guildId, calendarType, monthKey);
+}
+
+function hasPublishedCalendar(guildId, calendarType, monthKey) {
+  return Boolean(getDb().prepare(`SELECT 1 FROM calendar_publications WHERE guild_id = ? AND calendar_type = ? AND month_key = ? LIMIT 1`).get(guildId, calendarType, monthKey));
 }
 
 function cancelEvent(guildId, eventId, cancelledBy) {
@@ -126,6 +151,18 @@ function cancelEvent(guildId, eventId, cancelledBy) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function updateEvent(guildId, eventId, changes) {
+  const event = getEvent(guildId, eventId);
+  if (!event) return null;
+  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "description", "category", "all_day"];
+  const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
+  if (!fields.length) return event;
+  const assignments = fields.map((field) => `${field} = ?`).join(", ");
+  getDb().prepare(`UPDATE scheduled_events SET ${assignments} WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL`)
+    .run(...fields.map((field) => changes[field]), guildId, eventId);
+  return getEvent(guildId, eventId);
 }
 
 function dueAnnouncements(nowIso, limit = 25) {
@@ -172,6 +209,7 @@ module.exports = {
   addAnnouncement,
   listEvents,
   cancelEvent,
+  updateEvent,
   dueAnnouncements,
   markSending,
   markSent,
@@ -179,4 +217,9 @@ module.exports = {
   setCalendarChannels,
   getCalendarChannels,
   listCalendarEvents,
+  listPublishedCalendars,
+  savePublishedCalendar,
+  removePublishedCalendarPart,
+  removePublishedCalendars,
+  hasPublishedCalendar,
 };
