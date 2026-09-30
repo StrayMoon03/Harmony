@@ -12,6 +12,11 @@ const store = require("../stores/eventSchedulerStore");
 const CHECK_INTERVAL_MS = 30 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
 const HEADER = /^harmony\s+event\b/i;
+const CALENDAR_CATEGORIES = ["birthday", "content", "concert", "stream", "release", "video_call", "appearance", "community", "other"];
+const CALENDAR_CATEGORY_ICONS = {
+  birthday: "🎂", content: "🎬", concert: "🎤", stream: "📺", release: "💿",
+  video_call: "📱", appearance: "✨", community: "🎮", other: "📌",
+};
 
 function isAdmin(message) {
   return Boolean(
@@ -27,6 +32,79 @@ function validTimezone(value) {
   } catch {
     return false;
   }
+}
+
+function monthKeyFromDate(value) {
+  return /^\d{4}-\d{2}$/.test(value) ? value : new Date(value).toISOString().slice(0, 7);
+}
+
+function buildCalendarMessages(calendarType, monthKey, events, now = Date.now()) {
+  const title = calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
+  const lines = [`📅 ${title} • ${new Date(`${monthKey}-01T00:00:00Z`).toLocaleString("en-US", { timeZone: "UTC", month: "long", year: "numeric" }).toUpperCase()}`, "Monthly Schedule", ""];
+  if (!events.length) lines.push("No events scheduled.");
+  for (const event of events) {
+    const date = event.event_date || (event.event_at || "").slice(0, 10);
+    const timed = !event.all_day && event.event_at;
+    const label = new Intl.DateTimeFormat("en-US", { timeZone: event.event_timezone || "UTC", month: "short", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00Z`)).toUpperCase();
+    lines.push(`${label}`, `${CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other} ${event.description ? `${event.description} — ` : ""}**${event.title}**`);
+    if (timed) lines.push(`<t:${Math.floor(new Date(event.event_at).getTime() / 1000)}:F>`);
+    lines.push(event.link, "");
+  }
+  lines.push(`Last updated <t:${Math.floor(now / 1000)}:R>`);
+  const parts = [];
+  let current = "";
+  for (const line of lines) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > 1900 && current) { parts.push(current); current = line; } else current = next;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, { preview = false, interaction = null } = {}) {
+  const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
+  const settings = store.getCalendarChannels(guildId);
+  const channelId = calendarType === "stray_kids" ? settings?.stray_kids_channel_id : settings?.community_channel_id;
+  const channel = channelId && guild ? (guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null)) : null;
+  if (!channel?.isTextBased()) throw new Error("Configure that calendar channel first with `/harmony-schedule setup-calendar`.");
+  const [year, month] = monthKey.split("-").map(Number);
+  const start = `${monthKey}-01T00:00:00.000Z`;
+  const next = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
+  const events = store.listCalendarEvents(guildId, calendarType, start, `${next}-01T00:00:00.000Z`);
+  const parts = buildCalendarMessages(calendarType, monthKey, events);
+  if (preview) {
+    if (interaction) {
+      await interaction.editReply({ content: parts[0], allowedMentions: { parse: [] } });
+      for (const part of parts.slice(1)) {
+        await interaction.followUp({ content: part, flags: 64, allowedMentions: { parse: [] } });
+      }
+    }
+    return { parts, preview: true };
+  }
+  const existing = store.listPublishedCalendars(guildId, calendarType, monthKey);
+  const sent = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const old = existing[i];
+    let message = null;
+    if (old) message = await channel.messages.fetch(old.message_id).catch(() => null);
+    if (message) await message.edit({ content: parts[i], allowedMentions: { parse: [] } });
+    else message = await channel.send({ content: parts[i], allowedMentions: { parse: [] } });
+    store.savePublishedCalendar(guildId, calendarType, monthKey, i, channel.id, message.id);
+    sent.push(message.id);
+  }
+  for (const old of existing.slice(parts.length)) {
+    const message = await channel.messages.fetch(old.message_id).catch(() => null);
+    if (message) await message.delete().catch(() => {});
+    store.removePublishedCalendarPart(guildId, calendarType, monthKey, old.part_index);
+  }
+  return { parts, messageIds: sent, preview: false };
+}
+
+async function refreshPublishedCalendar(client, guildId, calendarType, eventDate) {
+  const monthKey = monthKeyFromDate(eventDate);
+  if (!store.hasPublishedCalendar(guildId, calendarType, monthKey)) return false;
+  await publishMonthlyCalendar(client, guildId, calendarType, monthKey);
+  return true;
 }
 
 function renderEventControls(guildId, eventId) {
@@ -315,4 +393,8 @@ module.exports = {
   handleEventSchedulerInteraction,
   processScheduledAnnouncements,
   startEventScheduler,
+  CALENDAR_CATEGORIES,
+  buildCalendarMessages,
+  publishMonthlyCalendar,
+  refreshPublishedCalendar,
 };
