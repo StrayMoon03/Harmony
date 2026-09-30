@@ -6,6 +6,7 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  StringSelectMenuBuilder,
 } = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
 
@@ -17,6 +18,148 @@ const CALENDAR_CATEGORY_ICONS = {
   birthday: "🎂", content: "🎬", concert: "🎤", stream: "📺", release: "💿",
   video_call: "📱", appearance: "✨", community: "🎮", other: "📌",
 };
+
+const MANAGER_TYPES = ["stray_kids", "community"];
+
+function calendarLabel(calendarType) {
+  return calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
+}
+
+function managerPanelContent(calendarType) {
+  const label = calendarLabel(calendarType);
+  const icon = calendarType === "stray_kids" ? "⭐" : "❤️";
+  return `${icon} **${label} SCHEDULE MANAGER**\nUse the private controls below to manage this calendar. Calendar events do not require an announcement.`;
+}
+
+function managerPanelComponents(calendarType) {
+  const prefix = `harmony-manager:${calendarType}`;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${prefix}:add`).setLabel("➕ Add Event").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`${prefix}:view`).setLabel("👀 View / Preview").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${prefix}:edit`).setLabel("✏️ Edit Event").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${prefix}:cancel`).setLabel("❌ Cancel Event").setStyle(ButtonStyle.Danger)
+  );
+  return [row];
+}
+
+function managerCalendarType(value) {
+  return MANAGER_TYPES.includes(value) ? value : null;
+}
+
+function parseManagerDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value : null;
+}
+
+function parseManagerDraft(fields, calendarType) {
+  const title = fields.title.trim();
+  const eventDate = fields.eventDate.trim();
+  const eventTime = fields.eventTime.trim();
+  const timezone = fields.timezone.trim() || "America/New_York";
+  const link = fields.link.trim();
+  const description = fields.description.trim() || null;
+  if (!title || title.length > 120) throw new Error("Event name is required and must be 120 characters or fewer.");
+  if (!validTimezone(timezone)) throw new Error("That timezone is not valid.");
+  if (!parseManagerDate(eventDate) || !localToUtc(eventDate, "12:00", timezone)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
+  if (eventTime && !localToUtc(eventDate, eventTime, timezone)) throw new Error("Use a valid event time in HH:MM format.");
+  if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("The link must begin with http:// or https://.");
+  return {
+    title, eventDate, eventTime, timezone, link, description,
+    calendarType,
+    allDay: !eventTime,
+    eventAt: eventTime ? localToUtc(eventDate, eventTime, timezone).toISOString() : null,
+    eventTimezone: timezone,
+  };
+}
+
+function managerEventSelect(calendarType, action, events) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:${calendarType}:${action}`)
+    .setPlaceholder("Choose an upcoming event")
+    .addOptions(events.slice(0, 25).map((event) => ({
+      label: `#${event.id} ${event.title}`.slice(0, 100),
+      value: String(event.id),
+      description: `${event.event_date || "date pending"}${event.all_day ? " · all day" : ""}`.slice(0, 100),
+    })));
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+function managerModal(customId, title, fields) {
+  const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
+  modal.addComponents(...fields.map((field) => {
+    const input = new TextInputBuilder()
+      .setCustomId(field.id)
+      .setLabel(field.label)
+      .setStyle(field.paragraph ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(Boolean(field.required))
+      .setMaxLength(field.maxLength || 100);
+    if (field.value) input.setValue(String(field.value));
+    return new ActionRowBuilder().addComponents(input);
+  }));
+  return modal;
+}
+
+function managerFields(event = {}) {
+  return [
+    { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
+    { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
+    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
+    { id: "description", label: "Short description", maxLength: 300, paragraph: true, value: event.description },
+    { id: "link", label: "Link (optional)", maxLength: 500, value: event.link },
+  ];
+}
+
+function editManagerFields(event = {}) {
+  return [
+    { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
+    { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
+    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
+    { id: "timezone", label: "Event timezone", maxLength: 80, value: event.event_timezone || event.timezone || "America/New_York" },
+    { id: "link", label: "Link (optional)", maxLength: 500, value: event.link },
+  ];
+}
+
+function categoryMenu(calendarType, action, eventId = "new", selected = "other") {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:${calendarType}:${action}:${eventId}`)
+    .setPlaceholder("Choose an event category")
+    .addOptions(CALENDAR_CATEGORIES.map((value) => ({
+      label: value.replace(/_/g, " "), value, default: value === selected,
+    })));
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+const managerDrafts = new Map();
+
+function draftKey(interaction, calendarType, eventId = "new") {
+  return `${interaction.guildId}:${interaction.user.id}:${calendarType}:${eventId}`;
+}
+
+function upcomingCalendarEvents(guildId, calendarType) {
+  const now = new Date();
+  const start = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+  const end = new Date(now.getTime() + 366 * 24 * 60 * 60 * 1000).toISOString();
+  return store.listCalendarEvents(guildId, calendarType, start, end);
+}
+
+async function installScheduleManagers(guild) {
+  const settings = store.getCalendarChannels(guild.id);
+  if (!settings) throw new Error("Configure the calendar channels first with `/harmony-schedule setup-calendar`.");
+  const results = [];
+  for (const calendarType of MANAGER_TYPES) {
+    const channelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
+    if (!channelId) continue;
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased()) continue;
+    const existing = store.getManagerPanel(guild.id, calendarType);
+    let message = existing ? await channel.messages.fetch(existing.message_id).catch(() => null) : null;
+    const payload = { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType), allowedMentions: { parse: [] } };
+    if (message) await message.edit(payload);
+    else message = await channel.send(payload);
+    store.saveManagerPanel(guild.id, calendarType, channel.id, message.id);
+    results.push({ calendarType, channelId: channel.id, messageId: message.id });
+  }
+  return results;
+}
 
 function isAdmin(message) {
   return Boolean(
@@ -135,6 +278,10 @@ function renderEventControls(guildId, eventId) {
 
 async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
+  if (customId.startsWith("harmony-manager:")) {
+    await handleManagerInteraction(interaction);
+    return true;
+  }
   if (!customId.startsWith("harmony-schedule:")) return false;
   const admin = Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -195,6 +342,173 @@ async function handleEventSchedulerInteraction(interaction) {
     return true;
   }
   return false;
+}
+
+async function handleManagerInteraction(interaction) {
+  const admin = Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
+  );
+  if (!admin) {
+    await interaction.reply({ content: "Only server admins can use the Schedule Manager.", flags: 64 });
+    return;
+  }
+  const parts = interaction.customId.split(":");
+  const calendarType = managerCalendarType(parts[1]);
+  const action = parts[2];
+  const eventId = parts[3];
+  if (!calendarType) {
+    await interaction.reply({ content: "That calendar manager is no longer available.", flags: 64 });
+    return;
+  }
+  const settings = store.getCalendarChannels(interaction.guildId) || {};
+  const calendarChannelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
+
+  if (action === "add" && interaction.isButton()) {
+    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:addmodal`, "Add calendar event", managerFields()));
+    return;
+  }
+  if (action === "addmodal" && interaction.isModalSubmit()) {
+    try {
+      const draft = parseManagerDraft({
+        title: interaction.fields.getTextInputValue("title"),
+        eventDate: interaction.fields.getTextInputValue("event-date"),
+        eventTime: interaction.fields.getTextInputValue("event-time"),
+        timezone: "America/New_York",
+        link: interaction.fields.getTextInputValue("link"),
+        description: interaction.fields.getTextInputValue("description"),
+      }, calendarType);
+      managerDrafts.set(draftKey(interaction, calendarType), draft);
+      await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "addcategory"), flags: 64 });
+    } catch (error) {
+      await interaction.reply({ content: error.message, flags: 64 });
+    }
+    return;
+  }
+  if (action === "addcategory" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
+    const id = store.createCalendarEvent({
+      guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link,
+      timezone: draft.timezone, eventAt: draft.eventAt, eventDate: draft.eventDate,
+      eventTimezone: draft.eventTimezone, calendarType, category: interaction.values[0],
+      allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id,
+    });
+    managerDrafts.delete(draftKey(interaction, calendarType));
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate).catch(() => {});
+    await interaction.update({ content: `Saved calendar event #${id}.`, components: [] });
+    return;
+  }
+  if ((action === "edit" || action === "cancel") && interaction.isButton()) {
+    const events = upcomingCalendarEvents(interaction.guildId, calendarType);
+    if (!events.length) { await interaction.reply({ content: "There are no upcoming events in this calendar.", flags: 64 }); return; }
+    await interaction.reply({ content: action === "edit" ? "Choose an event to edit." : "Choose an event to cancel.", components: managerEventSelect(calendarType, action === "edit" ? "editselect" : "cancelselect", events), flags: 64 });
+    return;
+  }
+  if (action === "editselect" && interaction.isStringSelectMenu()) {
+    const event = store.getEvent(interaction.guildId, Number(interaction.values[0]));
+    if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
+    managerDrafts.set(draftKey(interaction, calendarType, event.id), { eventId: event.id, existing: event });
+    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:editmodal:${event.id}`, "Edit calendar event", editManagerFields(event)));
+    return;
+  }
+  if (action === "editmodal" && interaction.isModalSubmit()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    try {
+      const draft = parseManagerDraft({
+        title: interaction.fields.getTextInputValue("title"),
+        eventDate: interaction.fields.getTextInputValue("event-date"),
+        eventTime: interaction.fields.getTextInputValue("event-time"),
+        timezone: interaction.fields.getTextInputValue("timezone"),
+        link: interaction.fields.getTextInputValue("link"),
+        description: existing.description || "",
+      }, calendarType);
+      managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
+      await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    return;
+  }
+  if (action === "editcategory" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
+    const updated = store.updateEvent(interaction.guildId, Number(eventId), {
+      title: draft.title, event_date: draft.eventDate, event_at: draft.eventAt,
+      event_timezone: draft.eventTimezone, timezone: draft.timezone, link: draft.link,
+      category: interaction.values[0], all_day: draft.allDay ? 1 : 0,
+    });
+    managerDrafts.delete(draftKey(interaction, calendarType, eventId));
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, existing.event_date).catch(() => {});
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch(() => {});
+    await interaction.update({ content: `Updated calendar event #${eventId}. You can also change its short description.`, components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:description:${eventId}`).setLabel("Edit description").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:done`).setLabel("Done").setStyle(ButtonStyle.Success)
+    )] });
+    return;
+  }
+  if (action === "description" && interaction.isButton()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:descriptionmodal:${eventId}`, "Edit description", [{ id: "description", label: "Short description", maxLength: 300, paragraph: true, value: existing.description }]));
+    return;
+  }
+  if (action === "descriptionmodal" && interaction.isModalSubmit()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    store.updateEvent(interaction.guildId, Number(eventId), { description: interaction.fields.getTextInputValue("description").trim() || null });
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, existing.event_date).catch(() => {});
+    await interaction.reply({ content: `Updated the description for calendar event #${eventId}.`, flags: 64 });
+    return;
+  }
+  if (action === "done" && interaction.isButton()) {
+    await interaction.update({ content: "Calendar event changes saved.", components: [] });
+    return;
+  }
+  if (action === "cancelselect" && interaction.isStringSelectMenu()) {
+    const selected = Number(interaction.values[0]);
+    const event = store.getEvent(interaction.guildId, selected);
+    if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
+    await interaction.update({ content: `Cancel **${event.title}**?`, components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelconfirm:${selected}`).setLabel("Confirm cancellation").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelno`).setLabel("Keep event").setStyle(ButtonStyle.Secondary)
+    )] });
+    return;
+  }
+  if (action === "cancelconfirm" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    const removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
+    if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
+    await interaction.update({ content: removed ? `Cancelled calendar event #${eventId}.` : "That event is no longer active.", components: [] });
+    return;
+  }
+  if (action === "cancelno" && interaction.isButton()) {
+    await interaction.update({ content: "Cancellation cancelled.", components: [] });
+    return;
+  }
+  if (action === "view" && interaction.isButton()) {
+    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:viewmodal`, "View calendar", [{ id: "month", label: "Month YYYY-MM (blank = current)", maxLength: 7 }]));
+    return;
+  }
+  if (action === "viewmodal" && interaction.isModalSubmit()) {
+    const month = interaction.fields.getTextInputValue("month").trim() || new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) { await interaction.reply({ content: "Month must be formatted as YYYY-MM.", flags: 64 }); return; }
+    try {
+      const preview = await publishMonthlyCalendar(interaction.client, interaction.guildId, calendarType, month, { preview: true, interaction });
+      await interaction.followUp({ content: `Preview shown for ${month}. Publish or refresh the official calendar?`, components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:publish:${month}`).setLabel("Publish / Refresh").setStyle(ButtonStyle.Primary)
+      )], flags: 64 });
+      return preview;
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    return;
+  }
+  if (action === "publish" && interaction.isButton()) {
+    const month = eventId;
+    try {
+      const result = await publishMonthlyCalendar(interaction.client, interaction.guildId, calendarType, month);
+      await interaction.update({ content: `Published ${calendarLabel(calendarType)} for ${month} (${result.messageIds.length} message${result.messageIds.length === 1 ? "" : "s"}).`, components: [] });
+    } catch (error) { await interaction.update({ content: error.message, components: [] }); }
+  }
 }
 
 function localToUtc(dateText, timeText, timezone) {
@@ -397,4 +711,11 @@ module.exports = {
   buildCalendarMessages,
   publishMonthlyCalendar,
   refreshPublishedCalendar,
+  installScheduleManagers,
+  managerPanelContent,
+  managerPanelComponents,
+  managerModal,
+  parseManagerDraft,
+  managerCalendarType,
+  MANAGER_TYPES,
 };
