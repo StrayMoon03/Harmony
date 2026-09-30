@@ -11,6 +11,7 @@ const {
   publishMonthlyCalendar,
   refreshPublishedCalendar,
   CALENDAR_CATEGORIES,
+  installScheduleManagers,
 } = require("../services/eventSchedulerService");
 
 const data = new SlashCommandBuilder()
@@ -67,6 +68,10 @@ data.addSubcommand((sub) => sub
   .addStringOption((o) => o.setName("month").setDescription("Month as YYYY-MM (defaults to this month)").setMaxLength(7))
   .addBooleanOption((o) => o.setName("preview").setDescription("Preview privately without publishing")));
 
+data.addSubcommand((sub) => sub
+  .setName("setup-manager")
+  .setDescription("Install or refresh the private calendar Schedule Managers"));
+
 function isAdmin(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -81,6 +86,15 @@ async function execute(interaction) {
     return;
   }
   const action = interaction.options.getSubcommand();
+  if (action === "setup-manager") {
+    try {
+      const panels = await installScheduleManagers(interaction.guild);
+      await interaction.editReply(panels.length
+        ? `Schedule Manager panels installed/refreshed: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
+        : "Configure at least one calendar channel first with `/harmony-schedule setup-calendar`.");
+    } catch (error) { await interaction.editReply(error.message); }
+    return;
+  }
   if (action === "list") {
     const events = store.listEvents(interaction.guildId);
     await interaction.editReply(events.length
