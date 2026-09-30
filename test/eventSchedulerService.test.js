@@ -83,28 +83,40 @@ test("manager drafts support optional links and all-day events without midnight"
     title: "SKZ CODE",
     eventDate: "2099-01-04",
     eventTime: "",
-    timezone: "America/New_York",
-    link: "",
+    location: "Seoul, South Korea",
     description: "New episode",
   }, "stray_kids");
   assert.equal(draft.calendarType, "stray_kids");
   assert.equal(draft.link, "");
   assert.equal(draft.allDay, true);
   assert.equal(draft.eventAt, null);
+  assert.equal(draft.eventTimezone, "Asia/Seoul");
 });
 
-test("manager drafts retain timezone and validate optional links", () => {
+test("manager drafts resolve locations and separate description plus link", () => {
   const draft = parseManagerDraft({
     title: "Concert",
     eventDate: "2099-07-14",
     eventTime: "20:00",
-    timezone: "America/New_York",
-    link: "https://example.com/concert",
-    description: "Live show",
+    location: "Fukuoka, Japan",
+    description: "Live show\nhttps://example.com/concert",
   }, "community");
   assert.equal(draft.allDay, false);
-  assert.equal(draft.eventAt, "2099-07-15T00:00:00.000Z");
-  assert.throws(() => parseManagerDraft({ title: "Bad", eventDate: "2099-01-01", eventTime: "", timezone: "America/New_York", link: "not-a-url", description: "" }, "community"), /http/);
+  assert.equal(draft.eventTimezone, "Asia/Tokyo");
+  assert.equal(draft.link, "https://example.com/concert");
+  assert.equal(draft.description, "Live show");
+  assert.throws(() => parseManagerDraft({ title: "Bad", eventDate: "2099-01-01", eventTime: "", location: "Somewhere" , description: "" }, "community"), /resolve/);
+});
+
+test("manager description input supports description-only, link-only, and legacy timezone events", () => {
+  const descriptionOnly = parseManagerDraft({ title: "Talk", eventDate: "2099-01-01", eventTime: "", location: "Paris, France", description: "Doors open" }, "community");
+  assert.equal(descriptionOnly.description, "Doors open");
+  assert.equal(descriptionOnly.link, "");
+  const linkOnly = parseManagerDraft({ title: "Live", eventDate: "2099-01-01", eventTime: "18:00", location: "New York, USA", description: "https://example.com/live" }, "community");
+  assert.equal(linkOnly.description, null);
+  assert.equal(linkOnly.link, "https://example.com/live");
+  const legacy = parseManagerDraft({ title: "Legacy", eventDate: "2099-01-01", eventTime: "", location: "", fallbackTimezone: "Asia/Seoul", description: "Existing" }, "community");
+  assert.equal(legacy.eventTimezone, "Asia/Seoul");
 });
 
 test("manager panels stay scoped to their calendar", () => {
@@ -204,35 +216,22 @@ test("add event follows category-first interaction flow and saves without a seco
     customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId,
     fields: {
       title: "SKZ CODE", "event-date": "2099-01-04", "event-time": "",
-      timezone: "America/New_York", link: "",
+      location: "Paris, France", description: "Episode details\nhttps://example.com/skz",
     },
   });
   await handleEventSchedulerInteraction(details);
   assert.equal(details.responses[0].type, "reply");
-  assert.equal(details.responses[0].payload.content, "Event saved!");
-  const savedButtons = details.responses[0].payload.components[0].toJSON().components;
-  assert.deepEqual(savedButtons.map((button) => button.label), ["📝 Add Description", "Done"]);
-  const eventId = Number(savedButtons[0].custom_id.split(":").at(-1));
+  assert.match(details.responses[0].payload.content, /Event saved/);
+  assert.deepEqual(details.responses[0].payload.components, []);
+  const eventId = store.listCalendarEvents(guildId, "stray_kids", "2099-01-01T00:00:00.000Z", "2099-02-01T00:00:00.000Z")[0].id;
   const saved = store.getEvent(guildId, eventId);
   assert.equal(saved.category, "content");
-  assert.equal(saved.link, "");
+  assert.equal(saved.link, "https://example.com/skz");
+  assert.equal(saved.description, "Episode details");
+  assert.equal(saved.event_location, "Paris, France");
   assert.equal(saved.all_day, 1);
   assert.equal(saved.event_at, null);
 
-  const done = fakeInteraction({ customId: "harmony-manager:stray_kids:done", kind: "button", guildId });
-  await handleEventSchedulerInteraction(done);
-  assert.equal(done.responses[0].type, "update");
-
-  const addDescription = fakeInteraction({ customId: `harmony-manager:stray_kids:description:${eventId}`, kind: "button", guildId });
-  await handleEventSchedulerInteraction(addDescription);
-  assert.equal(addDescription.responses[0].type, "modal");
-  const description = fakeInteraction({
-    customId: `harmony-manager:stray_kids:descriptionmodal:${eventId}`, kind: "modal", guildId,
-    fields: { description: "New episode" },
-  });
-  await handleEventSchedulerInteraction(description);
-  assert.equal(description.responses[0].type, "reply");
-  assert.equal(store.getEvent(guildId, eventId).description, "New episode");
 });
 
 test("edit event keeps friendly category changes and editable links", async () => {
@@ -259,13 +258,13 @@ test("edit event keeps friendly category changes and editable links", async () =
   assert.equal(select.responses[0].type, "modal");
   const editModal = select.responses[0].modal.toJSON();
   assert.equal(editModal.components.length, 5);
-  assert.equal(editModal.components.at(-1).components[0].custom_id, "link");
+  assert.equal(editModal.components.at(-1).components[0].custom_id, "description");
 
   const editDetails = fakeInteraction({
     customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
     fields: {
       title: "Concert", "event-date": "2099-07-14", "event-time": "20:00",
-      timezone: "America/New_York", link: "https://example.com/new",
+      location: "New York, USA", description: "Updated details\nhttps://example.com/new",
     },
   });
   await handleEventSchedulerInteraction(editDetails);
@@ -281,6 +280,7 @@ test("edit event keeps friendly category changes and editable links", async () =
   const updated = store.getEvent(guildId, eventId);
   assert.equal(updated.category, "content");
   assert.equal(updated.link, "https://example.com/new");
+  assert.equal(updated.description, "Updated details");
 });
 
 function fakeChannel(id) {
@@ -412,7 +412,7 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   await handleEventSchedulerInteraction(category);
   const details = fakeInteraction({
     customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId, client,
-    fields: { title: "Bang Chan's 29th Birthday!", "event-date": "2026-10-03", "event-time": "", timezone: "Asia/Seoul", link: "" },
+    fields: { title: "Bang Chan's 29th Birthday!", "event-date": "2026-10-03", "event-time": "", location: "Seoul, South Korea", description: "" },
   });
   await handleEventSchedulerInteraction(details);
   assert.equal(details.responses[0].type, "reply");
@@ -426,7 +426,7 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   await handleEventSchedulerInteraction(timedCategory);
   const timedDetails = fakeInteraction({
     customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId, client,
-    fields: { title: "SKZ CODE EP. 104", "event-date": "2026-10-01", "event-time": "07:00", timezone: "America/New_York", link: "" },
+    fields: { title: "SKZ CODE EP. 104", "event-date": "2026-10-01", "event-time": "07:00", location: "New York, USA", description: "" },
   });
   await handleEventSchedulerInteraction(timedDetails);
   assert.equal(timedDetails.responses[0].type, "reply");
