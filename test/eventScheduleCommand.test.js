@@ -10,7 +10,7 @@ test("registers the guided Harmony scheduler command", () => {
   const create = json.options.find((option) => option.name === "create");
   assert.deepEqual(
     create.options.map((option) => option.name),
-    ["title", "calendar", "event-date", "event-time", "event-timezone", "description", "category", "all-day", "link", "channel", "date", "time", "message", "timezone"]
+    ["title", "calendar", "event-date", "link", "channel", "date", "time", "message", "event-time", "event-timezone", "description", "category", "all-day", "timezone"]
   );
   assert.equal(create.options.find((option) => option.name === "timezone").required, false);
 });
