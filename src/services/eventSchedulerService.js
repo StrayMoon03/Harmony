@@ -9,6 +9,7 @@ const {
   StringSelectMenuBuilder,
 } = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
+const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
@@ -73,8 +74,8 @@ function parseManagerDraft(fields, calendarType) {
   const link = legacyLinkField ? String(fields.link || "").trim() : parsedDescription.link;
   const description = legacyLinkField ? String(fields.description || "").trim() || null : parsedDescription.description;
   if (!title || title.length > 120) throw new Error("Event name is required and must be 120 characters or fewer.");
-  if (!timezone) throw new Error("I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`.");
-  if (!parseManagerDate(eventDate) || !localToUtc(eventDate, "12:00", timezone)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
+  if (!parseManagerDate(eventDate) || !isValidDateOnly(eventDate)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
+  if (eventTime && !timezone) throw new Error("I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`.");
   if (eventTime && !localToUtc(eventDate, eventTime, timezone)) throw new Error("Use a valid event time in HH:MM format.");
   if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("The link must begin with http:// or https://.");
   return {
@@ -87,17 +88,30 @@ function parseManagerDraft(fields, calendarType) {
   };
 }
 
-const LOCATION_TIMEZONES = new Map([
-  ["fukuoka, japan", "Asia/Tokyo"], ["seoul, south korea", "Asia/Seoul"], ["paris, france", "Europe/Paris"],
-  ["new york, usa", "America/New_York"], ["new york, united states", "America/New_York"],
-  ["tokyo, japan", "Asia/Tokyo"], ["london, uk", "Europe/London"], ["london, united kingdom", "Europe/London"],
-]);
-
 function resolveLocationTimezone(location) {
-  const normalized = String(location || "").trim().toLowerCase().replace(/\s+/g, " ");
-  if (!normalized) return null;
-  if (LOCATION_TIMEZONES.has(normalized)) return LOCATION_TIMEZONES.get(normalized);
-  return null;
+  const normalized = normalizeLocation(location);
+  return normalized ? LOCATION_TIMEZONES[normalized] || null : null;
+}
+
+function normalizeLocation(location) {
+  return String(location || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function isValidDateOnly(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function splitDescriptionAndLink(value) {
