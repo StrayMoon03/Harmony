@@ -5,7 +5,7 @@ const command = require("../src/commands/eventSchedule");
 test("registers the guided Harmony scheduler command", () => {
   const json = command.data.toJSON();
   assert.equal(json.name, "harmony-schedule");
-  assert.deepEqual(json.options.map((option) => option.name), ["create", "list", "cancel", "update", "setup-calendar", "calendar"]);
+  assert.deepEqual(json.options.map((option) => option.name), ["create", "list", "cancel", "update", "setup-calendar", "calendar", "setup-manager"]);
 
   const create = json.options.find((option) => option.name === "create");
   assert.deepEqual(
