@@ -4,7 +4,9 @@ const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal,
+  installScheduleManagers, publishMonthlyCalendar,
 } = require("../src/services/eventSchedulerService");
+const store = require("../src/stores/eventSchedulerStore");
 
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
@@ -126,4 +128,80 @@ test("manager modals allow blank optional fields", () => {
   ]).toJSON();
   assert.equal(json.components.length, 2);
   assert.equal(json.components[1].components[0].value, undefined);
+});
+
+function fakeChannel(id) {
+  const messages = new Map();
+  let sequence = 0;
+  return {
+    id,
+    sent: [],
+    messages: {
+      fetch: async (messageId) => {
+        const message = messages.get(messageId);
+        if (!message) throw new Error("missing message");
+        return message;
+      },
+    },
+    isTextBased: () => true,
+    send: async (payload) => {
+      const message = {
+        id: `${id}-message-${++sequence}`,
+        payload,
+        edit: async (next) => { message.payload = next; return message; },
+        delete: async () => { messages.delete(message.id); },
+      };
+      messages.set(message.id, message);
+      return message;
+    },
+    messageCount: () => messages.size,
+  };
+}
+
+function fakeGuild(id, channels) {
+  const cache = new Map(channels.map((channel) => [channel.id, channel]));
+  return { id, channels: { cache, fetch: async (channelId) => cache.get(channelId) || null } };
+}
+
+test("both managers use one control channel, reuse panels, and recreate deleted panels", async () => {
+  const guildId = `manager-location-${Date.now()}`;
+  const control = fakeChannel("control");
+  const strayKids = fakeChannel("public-stray-kids");
+  const community = fakeChannel("public-community");
+  store.setCalendarChannels(guildId, strayKids.id, community.id);
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control, strayKids, community]);
+
+  const first = await installScheduleManagers(guild);
+  assert.deepEqual(first.map((item) => item.channelId), [control.id, control.id]);
+  assert.equal(control.messageCount(), 2);
+  assert.equal(strayKids.messageCount(), 0);
+  assert.equal(community.messageCount(), 0);
+
+  const ids = first.map((item) => item.messageId);
+  const second = await installScheduleManagers(guild);
+  assert.deepEqual(second.map((item) => item.messageId), ids);
+  assert.equal(control.messageCount(), 2);
+
+  await control.messages.fetch(ids[0]).then((message) => message.delete());
+  const third = await installScheduleManagers(guild);
+  assert.notEqual(third[0].messageId, ids[0]);
+  assert.equal(control.messageCount(), 2);
+  assert.equal(strayKids.messageCount(), 0);
+  assert.equal(community.messageCount(), 0);
+});
+
+test("published calendars still target public calendar channels", async () => {
+  const guildId = `publication-target-${Date.now()}`;
+  const control = fakeChannel("control-publication");
+  const strayKids = fakeChannel("calendar-stray-kids");
+  const community = fakeChannel("calendar-community");
+  store.setCalendarChannels(guildId, strayKids.id, community.id);
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control, strayKids, community]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  await publishMonthlyCalendar(client, guildId, "stray_kids", "2099-12");
+  assert.equal(strayKids.messageCount(), 1);
+  assert.equal(community.messageCount(), 0);
+  assert.equal(control.messageCount(), 0);
 });
