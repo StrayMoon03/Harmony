@@ -296,6 +296,7 @@ function migrate(database) {
       event_at                TEXT,
       event_date              TEXT,
       event_timezone          TEXT,
+      event_location          TEXT,
       description             TEXT,
       category                TEXT,
       all_day                 INTEGER NOT NULL DEFAULT 0,
@@ -369,6 +370,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("event_timezone")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_timezone TEXT");
+  }
+  if (!scheduledEventColumns.has("event_location")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_location TEXT");
   }
   if (!scheduledEventColumns.has("description")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN description TEXT");
