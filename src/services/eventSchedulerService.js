@@ -103,7 +103,7 @@ function managerFields(event = {}) {
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
-    { id: "description", label: "Short description", maxLength: 300, paragraph: true, value: event.description },
+    { id: "timezone", label: "Event timezone", maxLength: 80, value: event.event_timezone || event.timezone || "America/New_York" },
     { id: "link", label: "Link (optional)", maxLength: 500, value: event.link },
   ];
 }
@@ -374,9 +374,9 @@ async function handleManagerInteraction(interaction) {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
-        timezone: "America/New_York",
+        timezone: interaction.fields.getTextInputValue("timezone"),
         link: interaction.fields.getTextInputValue("link"),
-        description: interaction.fields.getTextInputValue("description"),
+        description: "",
       }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType), draft);
       await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "addcategory"), flags: 64 });
@@ -396,7 +396,10 @@ async function handleManagerInteraction(interaction) {
     });
     managerDrafts.delete(draftKey(interaction, calendarType));
     await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate).catch(() => {});
-    await interaction.update({ content: `Saved calendar event #${id}.`, components: [] });
+    await interaction.update({ content: `Saved calendar event #${id}. You can also add a short description.`, components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:description:${id}`).setLabel("Add description").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:done`).setLabel("Done").setStyle(ButtonStyle.Success)
+    )] });
     return;
   }
   if ((action === "edit" || action === "cancel") && interaction.isButton()) {
