@@ -143,20 +143,26 @@ function upcomingCalendarEvents(guildId, calendarType) {
 
 async function installScheduleManagers(guild) {
   const settings = store.getCalendarChannels(guild.id);
-  if (!settings) throw new Error("Configure the calendar channels first with `/harmony-schedule setup-calendar`.");
+  const managerChannelId = settings?.manager_channel_id || store.getManagerChannel(guild.id);
+  if (!managerChannelId) throw new Error("Designate an admin control channel with `/harmony-schedule setup-manager` first.");
+  const managerChannel = guild.channels.cache.get(managerChannelId) || await guild.channels.fetch(managerChannelId).catch(() => null);
+  if (!managerChannel?.isTextBased()) throw new Error("The designated Harmony control channel is unavailable.");
   const results = [];
   for (const calendarType of MANAGER_TYPES) {
-    const channelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
-    if (!channelId) continue;
-    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
-    if (!channel?.isTextBased()) continue;
     const existing = store.getManagerPanel(guild.id, calendarType);
-    let message = existing ? await channel.messages.fetch(existing.message_id).catch(() => null) : null;
+    if (existing?.channel_id && existing.channel_id !== managerChannel.id) {
+      const oldChannel = guild.channels.cache.get(existing.channel_id) || await guild.channels.fetch(existing.channel_id).catch(() => null);
+      const oldMessage = oldChannel ? await oldChannel.messages.fetch(existing.message_id).catch(() => null) : null;
+      if (oldMessage) await oldMessage.delete().catch(() => {});
+    }
+    let message = existing?.channel_id === managerChannel.id
+      ? await managerChannel.messages.fetch(existing.message_id).catch(() => null)
+      : null;
     const payload = { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType), allowedMentions: { parse: [] } };
     if (message) await message.edit(payload);
-    else message = await channel.send(payload);
-    store.saveManagerPanel(guild.id, calendarType, channel.id, message.id);
-    results.push({ calendarType, channelId: channel.id, messageId: message.id });
+    else message = await managerChannel.send(payload);
+    store.saveManagerPanel(guild.id, calendarType, managerChannel.id, message.id);
+    results.push({ calendarType, channelId: managerChannel.id, messageId: message.id });
   }
   return results;
 }
