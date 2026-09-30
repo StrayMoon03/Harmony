@@ -17,7 +17,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
         event_id, scheduled_for, message, status, created_at
       ) VALUES (?, ?, ?, 'pending', ?)
     `);
-    for (const item of announcements) {
+    for (const item of announcements || []) {
       insert.run(eventId, item.scheduledFor, item.message, now);
     }
     db.exec("COMMIT");
@@ -26,6 +26,26 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventDate, eventTimezone = timezone, calendarType, category, allDay = false, description = null, createdBy }) {
+  return createEvent({
+    guildId,
+    sourceChannelId: calendarChannelId || "",
+    destinationChannelId: calendarChannelId || "",
+    title,
+    link: link || "",
+    timezone,
+    eventAt,
+    eventDate,
+    eventTimezone,
+    calendarType,
+    category,
+    allDay,
+    description,
+    createdBy,
+    announcements: [],
+  });
 }
 
 function getEvent(guildId, eventId) {
@@ -94,6 +114,20 @@ function getCalendarChannels(guildId) {
   return getDb().prepare("SELECT * FROM calendar_settings WHERE guild_id = ?").get(guildId) || null;
 }
 
+function setManagerChannel(guildId, managerChannelId) {
+  getDb().prepare(`
+    INSERT INTO calendar_settings (guild_id, manager_channel_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      manager_channel_id = excluded.manager_channel_id,
+      updated_at = excluded.updated_at
+  `).run(guildId, managerChannelId || null, new Date().toISOString());
+}
+
+function getManagerChannel(guildId) {
+  return getDb().prepare("SELECT manager_channel_id FROM calendar_settings WHERE guild_id = ?").get(guildId)?.manager_channel_id || null;
+}
+
 function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
   return getDb().prepare(`
     SELECT * FROM scheduled_events
@@ -156,13 +190,26 @@ function cancelEvent(guildId, eventId, cancelledBy) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "description", "category", "all_day"];
+  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "description", "category", "all_day", "link"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");
   getDb().prepare(`UPDATE scheduled_events SET ${assignments} WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL`)
     .run(...fields.map((field) => changes[field]), guildId, eventId);
   return getEvent(guildId, eventId);
+}
+
+function getManagerPanel(guildId, calendarType) {
+  return getDb().prepare("SELECT * FROM calendar_manager_panels WHERE guild_id = ? AND calendar_type = ?").get(guildId, calendarType) || null;
+}
+
+function saveManagerPanel(guildId, calendarType, channelId, messageId) {
+  getDb().prepare(`
+    INSERT INTO calendar_manager_panels (guild_id, calendar_type, channel_id, message_id, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, calendar_type) DO UPDATE SET
+      channel_id = excluded.channel_id, message_id = excluded.message_id, updated_at = excluded.updated_at
+  `).run(guildId, calendarType, channelId, messageId, new Date().toISOString());
 }
 
 function dueAnnouncements(nowIso, limit = 25) {
@@ -204,18 +251,23 @@ function markFailed(id, error) {
 
 module.exports = {
   createEvent,
+  createCalendarEvent,
   getEvent,
   listAnnouncements,
   addAnnouncement,
   listEvents,
   cancelEvent,
   updateEvent,
+  getManagerPanel,
+  saveManagerPanel,
   dueAnnouncements,
   markSending,
   markSent,
   markFailed,
   setCalendarChannels,
   getCalendarChannels,
+  setManagerChannel,
+  getManagerChannel,
   listCalendarEvents,
   listPublishedCalendars,
   savePublishedCalendar,

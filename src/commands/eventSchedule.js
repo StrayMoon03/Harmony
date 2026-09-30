@@ -11,6 +11,7 @@ const {
   publishMonthlyCalendar,
   refreshPublishedCalendar,
   CALENDAR_CATEGORIES,
+  installScheduleManagers,
 } = require("../services/eventSchedulerService");
 
 const data = new SlashCommandBuilder()
@@ -67,6 +68,11 @@ data.addSubcommand((sub) => sub
   .addStringOption((o) => o.setName("month").setDescription("Month as YYYY-MM (defaults to this month)").setMaxLength(7))
   .addBooleanOption((o) => o.setName("preview").setDescription("Preview privately without publishing")));
 
+data.addSubcommand((sub) => sub
+  .setName("setup-manager")
+  .setDescription("Install or refresh the private calendar Schedule Managers")
+  .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
+
 function isAdmin(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -81,6 +87,22 @@ async function execute(interaction) {
     return;
   }
   const action = interaction.options.getSubcommand();
+  if (action === "setup-manager") {
+    try {
+      const controlChannel = interaction.options.getChannel("control-channel", true);
+      const permissions = controlChannel.permissionsFor(interaction.guild.members.me);
+      if (!controlChannel.isTextBased() || !permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions?.has(PermissionFlagsBits.SendMessages)) {
+        await interaction.editReply(`Harmony cannot view and send messages in <#${controlChannel.id}>.`);
+        return;
+      }
+      store.setManagerChannel(interaction.guildId, controlChannel.id);
+      const panels = await installScheduleManagers(interaction.guild);
+      await interaction.editReply(panels.length
+        ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
+        : "No manager panels could be installed in that control channel.");
+    } catch (error) { await interaction.editReply(error.message); }
+    return;
+  }
   if (action === "list") {
     const events = store.listEvents(interaction.guildId);
     await interaction.editReply(events.length

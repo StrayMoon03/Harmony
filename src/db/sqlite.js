@@ -342,6 +342,15 @@ function migrate(database) {
       updated_at      TEXT NOT NULL,
       PRIMARY KEY (guild_id, calendar_type, month_key, part_index)
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_manager_panels (
+      guild_id       TEXT NOT NULL,
+      calendar_type   TEXT NOT NULL CHECK (calendar_type IN ('stray_kids', 'community')),
+      channel_id      TEXT NOT NULL,
+      message_id      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL,
+      PRIMARY KEY (guild_id, calendar_type)
+    );
   `);
 
   migrateSharesToGuildScope(database);
@@ -372,20 +381,28 @@ function migrate(database) {
   }
 
   const settingColumns = new Set(
+    database.prepare("PRAGMA table_info(calendar_settings)").all()
+      .map((column) => column.name)
+  );
+  if (!settingColumns.has("manager_channel_id")) {
+    database.exec("ALTER TABLE calendar_settings ADD COLUMN manager_channel_id TEXT");
+  }
+
+  const welcomePassSettingColumns = new Set(
     database.prepare("PRAGMA table_info(welcome_pass_settings)").all()
       .map((column) => column.name)
   );
-  if (!settingColumns.has("release_channel_id")) {
+  if (!welcomePassSettingColumns.has("release_channel_id")) {
     database.exec(
       "ALTER TABLE welcome_pass_settings ADD COLUMN release_channel_id TEXT"
     );
   }
-  if (!settingColumns.has("release_message")) {
+  if (!welcomePassSettingColumns.has("release_message")) {
     database.exec(
       "ALTER TABLE welcome_pass_settings ADD COLUMN release_message TEXT"
     );
   }
-  if (!settingColumns.has("grant_mode")) {
+  if (!welcomePassSettingColumns.has("grant_mode")) {
     database.exec(
       "ALTER TABLE welcome_pass_settings ADD COLUMN grant_mode TEXT NOT NULL DEFAULT 'automatic'"
     );
