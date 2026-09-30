@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseEvent, localToUtc } = require("../src/services/eventSchedulerService");
+const { parseEvent, localToUtc, buildCalendarMessages } = require("../src/services/eventSchedulerService");
 
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
@@ -44,4 +44,30 @@ test("rejects impossible local dates and malformed schedule lines", () => {
     ].join("\n")),
     /YYYY-MM-DD HH:MM/
   );
+});
+
+test("renders categorized timed and all-day events without fake midnight times", () => {
+  const parts = buildCalendarMessages("stray_kids", "2099-01", [
+    { title: "SKZ CODE", category: "content", event_date: "2099-01-04", event_at: "2099-01-04T20:00:00.000Z", event_timezone: "America/New_York", link: "https://example.com/skz" },
+    { title: "Birthday", category: "birthday", event_date: "2099-01-05", event_at: null, all_day: 1, event_timezone: "America/New_York", link: "https://example.com/bday" },
+  ], 0);
+  assert.equal(parts.length, 1);
+  assert.match(parts[0], /🎬 \*\*SKZ CODE\*\*/);
+  assert.match(parts[0], /<t:4071240000:F>/);
+  assert.match(parts[0], /🎂 \*\*Birthday\*\*/);
+  assert.doesNotMatch(parts[0], /🎂 \*\*Birthday\*\*\n<t:/);
+});
+
+test("splits busy calendars below Discord's content limit", () => {
+  const events = Array.from({ length: 80 }, (_, index) => ({
+    title: `Event ${index} ${"x".repeat(80)}`,
+    category: "other",
+    event_date: "2099-01-01",
+    all_day: 1,
+    link: `https://example.com/${index}`,
+  }));
+  const parts = buildCalendarMessages("community", "2099-01", events, 0);
+  assert.ok(parts.length > 1);
+  assert.ok(parts.every((part) => part.length <= 1900));
+  assert.match(parts.at(-1), /Last updated/);
 });
