@@ -130,12 +130,12 @@ test("manager modals allow blank optional fields", () => {
   assert.equal(json.components[1].components[0].value, undefined);
 });
 
-function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {} }) {
+function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {}, client = {} }) {
   const interaction = {
     customId,
     guildId,
     user: { id: userId },
-    client: {},
+    client,
     memberPermissions: { has: () => true },
     values,
     fields: { getTextInputValue: (name) => fields[name] || "" },
@@ -144,6 +144,8 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
     isStringSelectMenu: () => kind === "select",
     isModalSubmit: () => kind === "modal",
     reply: async (payload) => { interaction.responses.push({ type: "reply", payload }); },
+    deferReply: async (payload) => { interaction.responses.push({ type: "deferReply", payload }); },
+    followUp: async (payload) => { interaction.responses.push({ type: "followUp", payload }); },
     editReply: async (payload) => { interaction.responses.push({ type: "editReply", payload }); },
     showModal: async (modal) => { interaction.responses.push({ type: "modal", modal }); },
     update: async (payload) => { interaction.responses.push({ type: "update", payload }); },
@@ -391,4 +393,72 @@ test("adding events refreshes the existing published calendar without duplicatin
   assert.equal(strayKids.messageCount(), 1);
   const afterTimed = await strayKids.messages.fetch(originalMessage.id);
   assert.match(afterTimed.payload.content, /Timed event/);
+});
+
+test("manager Add Event refreshes publication and View Preview uses one acknowledged interaction", async () => {
+  const guildId = `manager-live-flow-${Date.now()}`;
+  const control = fakeChannel("control-live-flow");
+  const strayKids = fakeChannel("calendar-live-flow-stray-kids");
+  const community = fakeChannel("calendar-live-flow-community");
+  store.setCalendarChannels(guildId, strayKids.id, community.id);
+  const guild = fakeGuild(guildId, [control, strayKids, community]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  await publishMonthlyCalendar(client, guildId, "stray_kids", "2026-10");
+  const originalMessage = await strayKids.messages.fetch("calendar-live-flow-stray-kids-message-1");
+
+  const add = fakeInteraction({ customId: "harmony-manager:stray_kids:add", kind: "button", guildId, client });
+  await handleEventSchedulerInteraction(add);
+  const category = fakeInteraction({ customId: "harmony-manager:stray_kids:addcategory:new", kind: "select", guildId, client, values: ["birthday"] });
+  await handleEventSchedulerInteraction(category);
+  const details = fakeInteraction({
+    customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId, client,
+    fields: { title: "Bang Chan's 29th Birthday!", "event-date": "2026-10-03", "event-time": "", timezone: "Asia/Seoul", link: "" },
+  });
+  await handleEventSchedulerInteraction(details);
+  assert.equal(details.responses[0].type, "reply");
+  assert.equal(details.responses.some((response) => response.type === "editReply"), false);
+  assert.equal(strayKids.messageCount(), 1);
+  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.content, /Bang Chan's 29th Birthday/);
+
+  const timedAdd = fakeInteraction({ customId: "harmony-manager:stray_kids:add", kind: "button", guildId, client });
+  await handleEventSchedulerInteraction(timedAdd);
+  const timedCategory = fakeInteraction({ customId: "harmony-manager:stray_kids:addcategory:new", kind: "select", guildId, client, values: ["content"] });
+  await handleEventSchedulerInteraction(timedCategory);
+  const timedDetails = fakeInteraction({
+    customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId, client,
+    fields: { title: "SKZ CODE EP. 104", "event-date": "2026-10-01", "event-time": "07:00", timezone: "America/New_York", link: "" },
+  });
+  await handleEventSchedulerInteraction(timedDetails);
+  assert.equal(timedDetails.responses[0].type, "reply");
+  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.content, /SKZ CODE EP\. 104/);
+
+  const view = fakeInteraction({ customId: "harmony-manager:stray_kids:view", kind: "button", guildId, client });
+  await handleEventSchedulerInteraction(view);
+  const viewModal = fakeInteraction({
+    customId: "harmony-manager:stray_kids:viewmodal", kind: "modal", guildId, client,
+    fields: { month: "2026-10" },
+  });
+  await handleEventSchedulerInteraction(viewModal);
+  assert.equal(viewModal.responses[0].type, "deferReply");
+  assert.equal(viewModal.responses.some((response) => response.type === "reply"), false);
+  const previewContent = viewModal.responses.find((response) => response.type === "editReply").payload.content;
+  assert.match(previewContent, /Bang Chan's 29th Birthday/);
+  assert.match(previewContent, /SKZ CODE EP\. 104/);
+
+  const edit = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId, client });
+  await handleEventSchedulerInteraction(edit);
+  const editOptions = edit.responses[0].payload.components[0].toJSON().components[0].options;
+  const editOption = editOptions.find((option) => option.label.includes("Bang Chan's 29th Birthday"));
+  assert.ok(editOption);
+  assert.match(editOption.label, /Bang Chan's 29th Birthday/);
+  assert.doesNotMatch(editOption.label, /#\d+/);
+  assert.match(editOption.description, /2026-10-03/);
+
+  const cancel = fakeInteraction({ customId: "harmony-manager:stray_kids:cancel", kind: "button", guildId, client });
+  await handleEventSchedulerInteraction(cancel);
+  const cancelOptions = cancel.responses[0].payload.components[0].toJSON().components[0].options;
+  const cancelOption = cancelOptions.find((option) => option.label.includes("Bang Chan's 29th Birthday"));
+  assert.ok(cancelOption);
+  assert.match(cancelOption.label, /Bang Chan's 29th Birthday/);
+  assert.doesNotMatch(cancelOption.label, /#\d+/);
 });

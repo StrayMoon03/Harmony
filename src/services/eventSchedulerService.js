@@ -87,7 +87,7 @@ function managerEventSelect(calendarType, action, events) {
     .setCustomId(`harmony-manager:${calendarType}:${action}`)
     .setPlaceholder("Choose an upcoming event")
     .addOptions(events.slice(0, 25).map((event) => ({
-      label: `#${event.id} ${event.title}`.slice(0, 100),
+      label: `${CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other} ${event.title}`.slice(0, 100),
       value: String(event.id),
       description: `${event.event_date || "date pending"}${event.all_day ? " · all day" : ""}`.slice(0, 100),
     })));
@@ -426,7 +426,10 @@ async function handleManagerInteraction(interaction) {
       // modal first so that refresh latency cannot expire the interaction.
       await interaction.reply(savedResponse);
       try {
-        await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate);
+        const refreshed = await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate);
+        if (!refreshed) {
+          await interaction.editReply({ ...savedResponse, content: "Event saved! This month has not been published yet, so the public calendar was not changed." });
+        }
       } catch (refreshError) {
         console.error("Published calendar refresh after Add Event failed:", refreshError);
         await interaction.editReply({ ...savedResponse, content: "Event saved, but the published calendar could not be refreshed. Please use View / Preview to retry." });
@@ -530,13 +533,14 @@ async function handleManagerInteraction(interaction) {
   if (action === "viewmodal" && interaction.isModalSubmit()) {
     const month = interaction.fields.getTextInputValue("month").trim() || new Date().toISOString().slice(0, 7);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) { await interaction.reply({ content: "Month must be formatted as YYYY-MM.", flags: 64 }); return; }
+    await interaction.deferReply({ flags: 64 });
     try {
       const preview = await publishMonthlyCalendar(interaction.client, interaction.guildId, calendarType, month, { preview: true, interaction });
       await interaction.followUp({ content: `Preview shown for ${month}. Publish or refresh the official calendar?`, components: [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:publish:${month}`).setLabel("Publish / Refresh").setStyle(ButtonStyle.Primary)
       )], flags: 64 });
       return preview;
-    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    } catch (error) { await interaction.editReply({ content: error.message, components: [] }); }
     return;
   }
   if (action === "publish" && interaction.isButton()) {
