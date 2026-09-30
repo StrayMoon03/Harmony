@@ -65,21 +65,49 @@ function parseManagerDraft(fields, calendarType) {
   const title = fields.title.trim();
   const eventDate = fields.eventDate.trim();
   const eventTime = fields.eventTime.trim();
-  const timezone = fields.timezone.trim() || "America/New_York";
-  const link = fields.link.trim();
-  const description = fields.description.trim() || null;
+  const location = String(fields.location || "").trim();
+  const legacyTimezone = String(fields.timezone || "").trim();
+  const timezone = resolveLocationTimezone(location) || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null) || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null);
+  const parsedDescription = splitDescriptionAndLink(fields.description || "");
+  const legacyLinkField = Object.prototype.hasOwnProperty.call(fields, "link");
+  const link = legacyLinkField ? String(fields.link || "").trim() : parsedDescription.link;
+  const description = legacyLinkField ? String(fields.description || "").trim() || null : parsedDescription.description;
   if (!title || title.length > 120) throw new Error("Event name is required and must be 120 characters or fewer.");
-  if (!validTimezone(timezone)) throw new Error("That timezone is not valid.");
+  if (!timezone) throw new Error("I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`.");
   if (!parseManagerDate(eventDate) || !localToUtc(eventDate, "12:00", timezone)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
   if (eventTime && !localToUtc(eventDate, eventTime, timezone)) throw new Error("Use a valid event time in HH:MM format.");
   if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("The link must begin with http:// or https://.");
   return {
-    title, eventDate, eventTime, timezone, link, description,
+    title, eventDate, eventTime, location, timezone, link, description,
     calendarType,
     allDay: !eventTime,
     eventAt: eventTime ? localToUtc(eventDate, eventTime, timezone).toISOString() : null,
     eventTimezone: timezone,
+    eventLocation: location,
   };
+}
+
+const LOCATION_TIMEZONES = new Map([
+  ["fukuoka, japan", "Asia/Tokyo"], ["seoul, south korea", "Asia/Seoul"], ["paris, france", "Europe/Paris"],
+  ["new york, usa", "America/New_York"], ["new york, united states", "America/New_York"],
+  ["tokyo, japan", "Asia/Tokyo"], ["london, uk", "Europe/London"], ["london, united kingdom", "Europe/London"],
+]);
+
+function resolveLocationTimezone(location) {
+  const normalized = String(location || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return null;
+  if (LOCATION_TIMEZONES.has(normalized)) return LOCATION_TIMEZONES.get(normalized);
+  return null;
+}
+
+function splitDescriptionAndLink(value) {
+  const text = String(value || "").trim();
+  const matches = [...text.matchAll(/https?:\/\/\S+/gi)];
+  if (!matches.length) return { description: text || null, link: "" };
+  const match = matches[matches.length - 1];
+  const link = match[0].replace(/[),.;!?]+$/, "");
+  const description = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length)}`.replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").trim();
+  return { description: description || null, link };
 }
 
 function managerEventSelect(calendarType, action, events) {
@@ -114,8 +142,8 @@ function managerFields(event = {}) {
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
-    { id: "timezone", label: "Event timezone", maxLength: 80, value: event.event_timezone || event.timezone || "America/New_York" },
-    { id: "link", label: "Link (optional)", maxLength: 500, value: event.link },
+    { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
+    { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
 }
 
@@ -124,8 +152,8 @@ function editManagerFields(event = {}) {
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
-    { id: "timezone", label: "Event timezone", maxLength: 80, value: event.event_timezone || event.timezone || "America/New_York" },
-    { id: "link", label: "Link (optional)", maxLength: 500, value: event.link },
+    { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
+    { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
 }
 
@@ -407,21 +435,17 @@ async function handleManagerInteraction(interaction) {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
-        timezone: interaction.fields.getTextInputValue("timezone"),
-        link: interaction.fields.getTextInputValue("link"),
-        description: "",
+        location: interaction.fields.getTextInputValue("location"),
+        description: interaction.fields.getTextInputValue("description"),
       }, calendarType);
       const id = store.createCalendarEvent({
         guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link,
         timezone: draft.timezone, eventAt: draft.eventAt, eventDate: draft.eventDate,
-        eventTimezone: draft.eventTimezone, calendarType, category: categoryDraft.category,
-        allDay: draft.allDay, description: null, createdBy: interaction.user.id,
+        eventTimezone: draft.eventTimezone, eventLocation: draft.eventLocation, calendarType, category: categoryDraft.category,
+        allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id,
       });
       managerDrafts.delete(draftKey(interaction, calendarType));
-      const savedResponse = { content: "Event saved!", components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:description:${id}`).setLabel("📝 Add Description").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:done`).setLabel("Done").setStyle(ButtonStyle.Success)
-      )], flags: 64 };
+      const savedResponse = { content: `✅ Event saved: **${draft.title}**`, components: [], flags: 64 };
       // A calendar edit can require a Discord API round trip. Acknowledge the
       // modal first so that refresh latency cannot expire the interaction.
       await interaction.reply(savedResponse);
@@ -460,9 +484,9 @@ async function handleManagerInteraction(interaction) {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
-        timezone: interaction.fields.getTextInputValue("timezone"),
-        link: interaction.fields.getTextInputValue("link"),
-        description: existing.description || "",
+        location: interaction.fields.getTextInputValue("location"),
+        description: interaction.fields.getTextInputValue("description"),
+        fallbackTimezone: existing.event_timezone || existing.timezone,
       }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
       await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
@@ -475,16 +499,14 @@ async function handleManagerInteraction(interaction) {
     if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
     const updated = store.updateEvent(interaction.guildId, Number(eventId), {
       title: draft.title, event_date: draft.eventDate, event_at: draft.eventAt,
-      event_timezone: draft.eventTimezone, timezone: draft.timezone, link: draft.link,
+      event_timezone: draft.eventTimezone, event_location: draft.eventLocation, timezone: draft.timezone, link: draft.link,
+      description: draft.description,
       category: interaction.values[0], all_day: draft.allDay ? 1 : 0,
     });
     managerDrafts.delete(draftKey(interaction, calendarType, eventId));
     await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, existing.event_date).catch(() => {});
     await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch(() => {});
-    await interaction.update({ content: `Updated calendar event #${eventId}. You can also change its short description.`, components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:description:${eventId}`).setLabel("Edit description").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:done`).setLabel("Done").setStyle(ButtonStyle.Success)
-    )] });
+    await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
     return;
   }
   if (action === "description" && interaction.isButton()) {
