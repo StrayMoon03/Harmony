@@ -342,6 +342,15 @@ function migrate(database) {
       updated_at      TEXT NOT NULL,
       PRIMARY KEY (guild_id, calendar_type, month_key, part_index)
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_manager_panels (
+      guild_id       TEXT NOT NULL,
+      calendar_type   TEXT NOT NULL CHECK (calendar_type IN ('stray_kids', 'community')),
+      channel_id      TEXT NOT NULL,
+      message_id      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL,
+      PRIMARY KEY (guild_id, calendar_type)
+    );
   `);
 
   migrateSharesToGuildScope(database);
