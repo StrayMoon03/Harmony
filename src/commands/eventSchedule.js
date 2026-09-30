@@ -70,7 +70,8 @@ data.addSubcommand((sub) => sub
 
 data.addSubcommand((sub) => sub
   .setName("setup-manager")
-  .setDescription("Install or refresh the private calendar Schedule Managers"));
+  .setDescription("Install or refresh the private calendar Schedule Managers")
+  .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
 
 function isAdmin(interaction) {
   return Boolean(
@@ -88,10 +89,17 @@ async function execute(interaction) {
   const action = interaction.options.getSubcommand();
   if (action === "setup-manager") {
     try {
+      const controlChannel = interaction.options.getChannel("control-channel", true);
+      const permissions = controlChannel.permissionsFor(interaction.guild.members.me);
+      if (!controlChannel.isTextBased() || !permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions?.has(PermissionFlagsBits.SendMessages)) {
+        await interaction.editReply(`Harmony cannot view and send messages in <#${controlChannel.id}>.`);
+        return;
+      }
+      store.setManagerChannel(interaction.guildId, controlChannel.id);
       const panels = await installScheduleManagers(interaction.guild);
       await interaction.editReply(panels.length
-        ? `Schedule Manager panels installed/refreshed: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
-        : "Configure at least one calendar channel first with `/harmony-schedule setup-calendar`.");
+        ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
+        : "No manager panels could be installed in that control channel.");
     } catch (error) { await interaction.editReply(error.message); }
     return;
   }
