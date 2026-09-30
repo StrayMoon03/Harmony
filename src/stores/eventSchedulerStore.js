@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, createdBy, announcements }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventTimezone, calendarType = "community", description, createdBy, announcements }) {
   const db = getDb();
   const now = new Date().toISOString();
   db.exec("BEGIN IMMEDIATE");
@@ -8,9 +8,9 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, timezone, createdBy, now);
+        link, timezone, calendar_type, event_at, event_timezone, description, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, timezone, calendarType, eventAt || null, eventTimezone || timezone, description || null, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -77,6 +77,30 @@ function listEvents(guildId, limit = 20) {
     ORDER BY MIN(CASE WHEN a.status = 'pending' THEN a.scheduled_for END)
     LIMIT ?
   `).all(guildId, limit);
+}
+
+function setCalendarChannels(guildId, strayKidsChannelId, communityChannelId) {
+  getDb().prepare(`
+    INSERT INTO calendar_settings (guild_id, stray_kids_channel_id, community_channel_id, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      stray_kids_channel_id = excluded.stray_kids_channel_id,
+      community_channel_id = excluded.community_channel_id,
+      updated_at = excluded.updated_at
+  `).run(guildId, strayKidsChannelId || null, communityChannelId || null, new Date().toISOString());
+}
+
+function getCalendarChannels(guildId) {
+  return getDb().prepare("SELECT * FROM calendar_settings WHERE guild_id = ?").get(guildId) || null;
+}
+
+function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
+  return getDb().prepare(`
+    SELECT * FROM scheduled_events
+    WHERE guild_id = ? AND calendar_type = ? AND cancelled_at IS NULL
+      AND event_at IS NOT NULL AND event_at >= ? AND event_at < ?
+    ORDER BY event_at, id
+  `).all(guildId, calendarType, monthStart, monthEnd);
 }
 
 function cancelEvent(guildId, eventId, cancelledBy) {
@@ -152,4 +176,7 @@ module.exports = {
   markSending,
   markSent,
   markFailed,
+  setCalendarChannels,
+  getCalendarChannels,
+  listCalendarEvents,
 };

@@ -291,6 +291,11 @@ function migrate(database) {
       title                   TEXT NOT NULL,
       link                    TEXT NOT NULL,
       timezone                TEXT NOT NULL DEFAULT 'America/New_York',
+      calendar_type           TEXT NOT NULL DEFAULT 'community'
+                              CHECK (calendar_type IN ('stray_kids', 'community')),
+      event_at                TEXT,
+      event_timezone          TEXT,
+      description             TEXT,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
       cancelled_at            TEXT,
@@ -316,9 +321,32 @@ function migrate(database) {
 
     CREATE INDEX IF NOT EXISTS idx_scheduled_events_guild
       ON scheduled_events (guild_id, cancelled_at);
+
+    CREATE TABLE IF NOT EXISTS calendar_settings (
+      guild_id               TEXT PRIMARY KEY,
+      stray_kids_channel_id  TEXT,
+      community_channel_id   TEXT,
+      updated_at             TEXT NOT NULL
+    );
   `);
 
   migrateSharesToGuildScope(database);
+
+  const scheduledEventColumns = new Set(
+    database.prepare("PRAGMA table_info(scheduled_events)").all().map((column) => column.name)
+  );
+  if (!scheduledEventColumns.has("calendar_type")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN calendar_type TEXT NOT NULL DEFAULT 'community'");
+  }
+  if (!scheduledEventColumns.has("event_at")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_at TEXT");
+  }
+  if (!scheduledEventColumns.has("event_timezone")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_timezone TEXT");
+  }
+  if (!scheduledEventColumns.has("description")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN description TEXT");
+  }
 
   const settingColumns = new Set(
     database.prepare("PRAGMA table_info(welcome_pass_settings)").all()
