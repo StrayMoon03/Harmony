@@ -105,7 +105,27 @@ test("manager drafts resolve locations and separate description plus link", () =
   assert.equal(draft.eventTimezone, "Asia/Tokyo");
   assert.equal(draft.link, "https://example.com/concert");
   assert.equal(draft.description, "Live show");
-  assert.throws(() => parseManagerDraft({ title: "Bad", eventDate: "2099-01-01", eventTime: "", location: "Somewhere" , description: "" }, "community"), /resolve/);
+  const allDayWithoutLocation = parseManagerDraft({ title: "Birthday", eventDate: "2099-01-01", eventTime: "", location: "", description: "" }, "community");
+  assert.equal(allDayWithoutLocation.allDay, true);
+  assert.equal(allDayWithoutLocation.eventAt, null);
+  assert.equal(allDayWithoutLocation.eventTimezone, null);
+  assert.equal(allDayWithoutLocation.eventLocation, "");
+  assert.throws(() => parseManagerDraft({ title: "Timed", eventDate: "2099-01-01", eventTime: "18:00", location: "", description: "" }, "community"), /resolve/);
+});
+
+test("manager drafts resolve common worldwide city and country locations deterministically", () => {
+  const examples = [
+    ["Sydney, Australia", "Australia/Sydney"],
+    ["Osaka, Japan", "Asia/Tokyo"],
+    ["Mexico City, Mexico", "America/Mexico_City"],
+    ["Berlin, Germany", "Europe/Berlin"],
+    ["Toronto, Canada", "America/Toronto"],
+    ["Singapore, Singapore", "Asia/Singapore"],
+  ];
+  for (const [location, timezone] of examples) {
+    const draft = parseManagerDraft({ title: "Event", eventDate: "2099-01-01", eventTime: "12:00", location, description: "" }, "community");
+    assert.equal(draft.eventTimezone, timezone, location);
+  }
 });
 
 test("manager description input supports description-only, link-only, and legacy timezone events", () => {
