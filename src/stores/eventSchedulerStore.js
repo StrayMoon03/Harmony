@@ -114,6 +114,20 @@ function getCalendarChannels(guildId) {
   return getDb().prepare("SELECT * FROM calendar_settings WHERE guild_id = ?").get(guildId) || null;
 }
 
+function setManagerChannel(guildId, managerChannelId) {
+  getDb().prepare(`
+    INSERT INTO calendar_settings (guild_id, manager_channel_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      manager_channel_id = excluded.manager_channel_id,
+      updated_at = excluded.updated_at
+  `).run(guildId, managerChannelId || null, new Date().toISOString());
+}
+
+function getManagerChannel(guildId) {
+  return getDb().prepare("SELECT manager_channel_id FROM calendar_settings WHERE guild_id = ?").get(guildId)?.manager_channel_id || null;
+}
+
 function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
   return getDb().prepare(`
     SELECT * FROM scheduled_events
@@ -252,6 +266,8 @@ module.exports = {
   markFailed,
   setCalendarChannels,
   getCalendarChannels,
+  setManagerChannel,
+  getManagerChannel,
   listCalendarEvents,
   listPublishedCalendars,
   savePublishedCalendar,
