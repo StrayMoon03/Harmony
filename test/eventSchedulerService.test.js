@@ -4,7 +4,7 @@ const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal, handleEventSchedulerInteraction,
-  installScheduleManagers, publishMonthlyCalendar,
+  installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 
@@ -144,11 +144,37 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
     isStringSelectMenu: () => kind === "select",
     isModalSubmit: () => kind === "modal",
     reply: async (payload) => { interaction.responses.push({ type: "reply", payload }); },
+    editReply: async (payload) => { interaction.responses.push({ type: "editReply", payload }); },
     showModal: async (modal) => { interaction.responses.push({ type: "modal", modal }); },
     update: async (payload) => { interaction.responses.push({ type: "update", payload }); },
   };
   return interaction;
 }
+
+test("timed calendar dates preserve the entered year through storage and rendering", () => {
+  const guildId = `calendar-year-${Date.now()}`;
+  const eventAt = localToUtc("2026-10-01", "07:00", "America/New_York");
+  assert.equal(eventAt.toISOString(), "2026-10-01T11:00:00.000Z");
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar-stray-kids",
+    title: "SKZ CODE EP. 104",
+    eventDate: "2026-10-01",
+    eventAt: eventAt.toISOString(),
+    eventTimezone: "America/New_York",
+    calendarType: "stray_kids",
+    category: "content",
+    createdBy: "admin",
+  });
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.event_date, "2026-10-01");
+  assert.equal(saved.event_at, "2026-10-01T11:00:00.000Z");
+  const upcoming = store.listCalendarEvents(guildId, "stray_kids", "2026-10-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z");
+  assert.equal(upcoming.some((event) => event.id === eventId), true);
+  const rendered = buildCalendarMessages("stray_kids", "2026-10", [saved], 0).join("\n");
+  assert.match(rendered, /<t:1790852400:F>/);
+  assert.doesNotMatch(rendered, /2006/);
+});
 
 test("add event follows category-first interaction flow and saves without a second category step", async () => {
   const guildId = `manager-add-flow-${Date.now()}`;
@@ -329,4 +355,40 @@ test("published calendars still target public calendar channels", async () => {
   assert.equal(strayKids.messageCount(), 1);
   assert.equal(community.messageCount(), 0);
   assert.equal(control.messageCount(), 0);
+});
+
+test("adding events refreshes the existing published calendar without duplicating it", async () => {
+  const guildId = `calendar-refresh-${Date.now()}`;
+  const control = fakeChannel("control-refresh");
+  const strayKids = fakeChannel("calendar-refresh-stray-kids");
+  const community = fakeChannel("calendar-refresh-community");
+  store.setCalendarChannels(guildId, strayKids.id, community.id);
+  const guild = fakeGuild(guildId, [control, strayKids, community]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+
+  await publishMonthlyCalendar(client, guildId, "stray_kids", "2026-10");
+  assert.equal(strayKids.messageCount(), 1);
+  const originalMessage = await strayKids.messages.fetch("calendar-refresh-stray-kids-message-1");
+
+  const allDayId = store.createCalendarEvent({
+    guildId, calendarChannelId: strayKids.id, title: "Bang Chan's 29th Birthday!",
+    eventDate: "2026-10-03", eventTimezone: "Asia/Seoul", calendarType: "stray_kids",
+    category: "birthday", createdBy: "admin", allDay: true,
+  });
+  assert.equal(await refreshPublishedCalendar(client, guildId, "stray_kids", "2026-10-03"), true);
+  assert.equal(strayKids.messageCount(), 1);
+  const afterAllDay = await strayKids.messages.fetch(originalMessage.id);
+  assert.match(afterAllDay.payload.content, /Bang Chan's 29th Birthday/);
+  assert.ok(store.getEvent(guildId, allDayId));
+
+  const timedAt = localToUtc("2026-10-04", "07:00", "America/New_York");
+  store.createCalendarEvent({
+    guildId, calendarChannelId: strayKids.id, title: "Timed event", eventDate: "2026-10-04",
+    eventAt: timedAt.toISOString(), eventTimezone: "America/New_York", calendarType: "stray_kids",
+    category: "content", createdBy: "admin",
+  });
+  assert.equal(await refreshPublishedCalendar(client, guildId, "stray_kids", "2026-10-04"), true);
+  assert.equal(strayKids.messageCount(), 1);
+  const afterTimed = await strayKids.messages.fetch(originalMessage.id);
+  assert.match(afterTimed.payload.content, /Timed event/);
 });

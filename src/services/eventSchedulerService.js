@@ -195,7 +195,12 @@ function validTimezone(value) {
 }
 
 function monthKeyFromDate(value) {
-  return /^\d{4}-\d{2}$/.test(value) ? value : new Date(value).toISOString().slice(0, 7);
+  const text = String(value || "");
+  if (/^\d{4}-\d{2}$/.test(text)) return text;
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (date) return `${date[1]}-${date[2]}`;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 7);
 }
 
 function buildCalendarMessages(calendarType, monthKey, events, now = Date.now()) {
@@ -262,6 +267,7 @@ async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, {
 
 async function refreshPublishedCalendar(client, guildId, calendarType, eventDate) {
   const monthKey = monthKeyFromDate(eventDate);
+  if (!monthKey) return false;
   if (!store.hasPublishedCalendar(guildId, calendarType, monthKey)) return false;
   await publishMonthlyCalendar(client, guildId, calendarType, monthKey);
   return true;
@@ -412,11 +418,19 @@ async function handleManagerInteraction(interaction) {
         allDay: draft.allDay, description: null, createdBy: interaction.user.id,
       });
       managerDrafts.delete(draftKey(interaction, calendarType));
-      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate).catch(() => {});
-      await interaction.reply({ content: "Event saved!", components: [new ActionRowBuilder().addComponents(
+      const savedResponse = { content: "Event saved!", components: [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:description:${id}`).setLabel("📝 Add Description").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:done`).setLabel("Done").setStyle(ButtonStyle.Success)
-      )], flags: 64 });
+      )], flags: 64 };
+      // A calendar edit can require a Discord API round trip. Acknowledge the
+      // modal first so that refresh latency cannot expire the interaction.
+      await interaction.reply(savedResponse);
+      try {
+        await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate);
+      } catch (refreshError) {
+        console.error("Published calendar refresh after Add Event failed:", refreshError);
+        await interaction.editReply({ ...savedResponse, content: "Event saved, but the published calendar could not be refreshed. Please use View / Preview to retry." });
+      }
     } catch (error) {
       await interaction.reply({ content: error.message, flags: 64 });
     }
@@ -543,7 +557,15 @@ function localToUtc(dateText, timeText, timezone) {
     hour: Number(clock[1]), minute: Number(clock[2]),
   };
   if (target.hour > 23 || target.minute > 59) return null;
-  let value = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
+  const utcMillis = (year, monthIndex, day, hour, minute) => {
+    // Date.UTC maps years 0-99 to 1900-1999. Build the value with
+    // setUTCFullYear so a four-digit input year is never rewritten.
+    const date = new Date(0);
+    date.setUTCFullYear(year, monthIndex, day);
+    date.setUTCHours(hour, minute, 0, 0);
+    return date.getTime();
+  };
+  let value = utcMillis(target.year, target.month - 1, target.day, target.hour, target.minute);
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, hour12: false, year: "numeric", month: "2-digit",
     day: "2-digit", hour: "2-digit", minute: "2-digit",
@@ -555,8 +577,8 @@ function localToUtc(dateText, timeText, timezone) {
         .map((part) => [part.type, Number(part.value)])
     );
     if (parts.hour === 24) parts.hour = 0;
-    const shown = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
-    const wanted = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
+    const shown = utcMillis(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
+    const wanted = utcMillis(target.year, target.month - 1, target.day, target.hour, target.minute);
     value += wanted - shown;
   }
   const result = new Date(value);
