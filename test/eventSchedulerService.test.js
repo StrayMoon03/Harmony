@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseEvent, localToUtc, buildCalendarMessages } = require("../src/services/eventSchedulerService");
+const {
+  parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
+  managerPanelContent, managerPanelComponents, managerCalendarType,
+  managerModal,
+} = require("../src/services/eventSchedulerService");
 
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
@@ -70,4 +74,56 @@ test("splits busy calendars below Discord's content limit", () => {
   assert.ok(parts.length > 1);
   assert.ok(parts.every((part) => part.length <= 1900));
   assert.match(parts.at(-1), /Last updated/);
+});
+
+test("manager drafts support optional links and all-day events without midnight", () => {
+  const draft = parseManagerDraft({
+    title: "SKZ CODE",
+    eventDate: "2099-01-04",
+    eventTime: "",
+    timezone: "America/New_York",
+    link: "",
+    description: "New episode",
+  }, "stray_kids");
+  assert.equal(draft.calendarType, "stray_kids");
+  assert.equal(draft.link, "");
+  assert.equal(draft.allDay, true);
+  assert.equal(draft.eventAt, null);
+});
+
+test("manager drafts retain timezone and validate optional links", () => {
+  const draft = parseManagerDraft({
+    title: "Concert",
+    eventDate: "2099-07-14",
+    eventTime: "20:00",
+    timezone: "America/New_York",
+    link: "https://example.com/concert",
+    description: "Live show",
+  }, "community");
+  assert.equal(draft.allDay, false);
+  assert.equal(draft.eventAt, "2099-07-15T00:00:00.000Z");
+  assert.throws(() => parseManagerDraft({ title: "Bad", eventDate: "2099-01-01", eventTime: "", timezone: "America/New_York", link: "not-a-url", description: "" }, "community"), /http/);
+});
+
+test("manager panels stay scoped to their calendar", () => {
+  assert.equal(managerCalendarType("stray_kids"), "stray_kids");
+  assert.equal(managerCalendarType("other"), null);
+  assert.match(managerPanelContent("stray_kids"), /STRAY KIDS SCHEDULE MANAGER/);
+  assert.match(managerPanelContent("community"), /YOUTIFUL STAYS SCHEDULE MANAGER/);
+  const ids = managerPanelComponents("stray_kids")[0].toJSON().components.map((button) => button.custom_id);
+  assert.deepEqual(ids, [
+    "harmony-manager:stray_kids:add",
+    "harmony-manager:stray_kids:view",
+    "harmony-manager:stray_kids:edit",
+    "harmony-manager:stray_kids:cancel",
+  ]);
+});
+
+test("manager modals allow blank optional fields", () => {
+  const json = managerModal("manager:test", "Add event", [
+    { id: "title", label: "Title", required: true, value: "Event" },
+    { id: "link", label: "Link", value: "" },
+  ]).toJSON();
+  assert.equal(json.components.length, 2);
+  assert.equal(json.components[1].components[0].value, undefined);
 });
