@@ -93,6 +93,28 @@ test("manager drafts support optional links and all-day events without midnight"
   assert.equal(draft.eventTimezone, "Asia/Seoul");
 });
 
+test("calendar-only all-day events with blank location save without a timezone", () => {
+  const guildId = `all-day-no-location-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar-community",
+    title: "Unlocated birthday",
+    eventDate: "2099-01-04",
+    timezone: null,
+    eventTimezone: null,
+    eventLocation: "",
+    calendarType: "community",
+    category: "birthday",
+    allDay: true,
+    createdBy: "admin",
+  });
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.all_day, 1);
+  assert.equal(saved.event_at, null);
+  assert.equal(saved.event_timezone, null);
+  assert.equal(saved.event_location, null);
+});
+
 test("manager drafts resolve locations and separate description plus link", () => {
   const draft = parseManagerDraft({
     title: "Concert",
