@@ -3,6 +3,10 @@ const { getDb } = require("../db/sqlite");
 function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventDate, eventTimezone, eventLocation, calendarType, category, allDay = false, description, createdBy, announcements }) {
   const db = getDb();
   const now = new Date().toISOString();
+  // The legacy announcement column is NOT NULL, but calendar-only all-day
+  // events do not need a timezone. Keep that legacy column valid without
+  // inventing an event timezone; event_timezone remains nullable metadata.
+  const storedTimezone = timezone || "America/New_York";
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = db.prepare(`
@@ -10,7 +14,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
         guild_id, source_channel_id, destination_channel_id, title,
         link, timezone, calendar_type, event_at, event_date, event_timezone, event_location, description, category, all_day, created_by, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, timezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone || timezone, eventLocation || null, description || null, category || null, allDay ? 1 : 0, createdBy, now);
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, allDay ? 1 : 0, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
