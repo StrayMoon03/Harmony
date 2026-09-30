@@ -294,8 +294,11 @@ function migrate(database) {
       calendar_type           TEXT NOT NULL DEFAULT 'community'
                               CHECK (calendar_type IN ('stray_kids', 'community')),
       event_at                TEXT,
+      event_date              TEXT,
       event_timezone          TEXT,
       description             TEXT,
+      category                TEXT,
+      all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
       cancelled_at            TEXT,
@@ -328,6 +331,17 @@ function migrate(database) {
       community_channel_id   TEXT,
       updated_at             TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_publications (
+      guild_id       TEXT NOT NULL,
+      calendar_type   TEXT NOT NULL CHECK (calendar_type IN ('stray_kids', 'community')),
+      month_key       TEXT NOT NULL,
+      part_index      INTEGER NOT NULL,
+      channel_id      TEXT NOT NULL,
+      message_id      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL,
+      PRIMARY KEY (guild_id, calendar_type, month_key, part_index)
+    );
   `);
 
   migrateSharesToGuildScope(database);
@@ -341,11 +355,20 @@ function migrate(database) {
   if (!scheduledEventColumns.has("event_at")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_at TEXT");
   }
+  if (!scheduledEventColumns.has("event_date")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_date TEXT");
+  }
   if (!scheduledEventColumns.has("event_timezone")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_timezone TEXT");
   }
   if (!scheduledEventColumns.has("description")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN description TEXT");
+  }
+  if (!scheduledEventColumns.has("category")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN category TEXT");
+  }
+  if (!scheduledEventColumns.has("all_day")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0");
   }
 
   const settingColumns = new Set(
