@@ -58,10 +58,14 @@ test("renders categorized timed and all-day events without fake midnight times",
     { title: "Birthday", category: "birthday", event_date: "2099-01-05", event_at: null, all_day: 1, event_timezone: "America/New_York", link: "https://example.com/bday" },
   ], 0);
   assert.equal(parts.length, 1);
-  assert.match(parts[0], /🎬 \*\*SKZ CODE\*\*/);
-  assert.match(parts[0], /<t:4071240000:F>/);
-  assert.match(parts[0], /🎂 \*\*Birthday\*\*/);
-  assert.doesNotMatch(parts[0], /🎂 \*\*Birthday\*\*\n<t:/);
+  const embed = parts[0].embeds[0];
+  assert.match(embed.description, /🎬 \*\*SKZ CODE\*\*/);
+  assert.match(embed.description, /<t:4071240000:D>/);
+  assert.match(embed.description, /<t:4071240000:t>/);
+  assert.match(embed.description, /🎂 \*\*Birthday\*\* • All Day/);
+  assert.doesNotMatch(embed.description, /🎂 \*\*Birthday\*\* • All Day\n<t:/);
+  assert.equal(embed.color, 0xE53935);
+  assert.match(embed.footer.text, /Times display in your local timezone/);
 });
 
 test("splits busy calendars below Discord's content limit", () => {
@@ -74,8 +78,32 @@ test("splits busy calendars below Discord's content limit", () => {
   }));
   const parts = buildCalendarMessages("community", "2099-01", events, 0);
   assert.ok(parts.length > 1);
-  assert.ok(parts.every((part) => part.length <= 1900));
-  assert.match(parts.at(-1), /Last updated/);
+  assert.ok(parts.every((part) => part.embeds[0].description.length <= 3900));
+  assert.match(parts.at(-1).embeds[0].footer.text, /Last updated/);
+});
+
+test("calendar cards keep title primary, optional metadata secondary, and add Shopping / Pop-Up", () => {
+  const parts = buildCalendarMessages("stray_kids", "2026-10", [{
+    title: "RUN IT JAPAN Pop-Up", category: "shopping", event_date: "2026-10-16", all_day: true,
+    description: "Limited goods", event_location: "Fukuoka, Japan", link: "https://example.com/popup",
+  }], 0);
+  const embed = parts[0].embeds[0];
+  assert.match(embed.description, /Friday, October 16, 2026/);
+  assert.match(embed.description, /🛍️ \*\*RUN IT JAPAN Pop-Up\*\* • All Day/);
+  assert.ok(embed.description.indexOf("**RUN IT JAPAN Pop-Up**") < embed.description.indexOf("Limited goods"));
+  assert.match(embed.description, /📍 Fukuoka, Japan/);
+  assert.match(embed.description, /\[Open event link\]\(https:\/\/example\.com\/popup\)/);
+});
+
+test("timed calendar cards use one localized date token and a time-only token", () => {
+  const parts = buildCalendarMessages("stray_kids", "2026-10", [{
+    title: "SKZ CODE", category: "content", event_date: "2026-10-01", event_at: "2026-10-01T11:00:00.000Z", all_day: 0,
+  }], 0);
+  const description = parts[0].embeds[0].description;
+  assert.match(description, /<t:1790852400:D>/);
+  assert.match(description, /<t:1790852400:t> • 🎬 \*\*SKZ CODE\*\*/);
+  assert.doesNotMatch(description, /<t:1790852400:F>/);
+  assert.equal((description.match(/<t:1790852400:D>/g) || []).length, 1);
 });
 
 test("manager drafts support optional links and all-day events without midnight", () => {
@@ -227,8 +255,9 @@ test("timed calendar dates preserve the entered year through storage and renderi
   assert.equal(saved.event_at, "2026-10-01T11:00:00.000Z");
   const upcoming = store.listCalendarEvents(guildId, "stray_kids", "2026-10-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z");
   assert.equal(upcoming.some((event) => event.id === eventId), true);
-  const rendered = buildCalendarMessages("stray_kids", "2026-10", [saved], 0).join("\n");
-  assert.match(rendered, /<t:1790852400:F>/);
+  const rendered = buildCalendarMessages("stray_kids", "2026-10", [saved])[0].embeds[0].description;
+  assert.match(rendered, /<t:1790852400:D>/);
+  assert.match(rendered, /<t:1790852400:t>/);
   assert.doesNotMatch(rendered, /2006/);
 });
 
@@ -242,7 +271,7 @@ test("add event follows category-first interaction flow and saves without a seco
   const categoryMenuJson = add.responses[0].payload.components[0].toJSON().components[0];
   assert.deepEqual(categoryMenuJson.options.map((option) => option.label), [
     "🎂 Birthday", "🎬 Content / Video", "🎤 Concert", "📺 Stream / Watch", "💿 Release",
-    "📱 Video Call", "✨ Appearance", "🎮 Community / Game", "📌 Other",
+    "📱 Video Call", "✨ Appearance", "🎮 Community / Game", "🛍️ Shopping / Pop-Up", "📌 Other",
   ]);
   assert.equal(categoryMenuJson.options.some((option) => option.label === "content"), false);
 
@@ -422,7 +451,7 @@ test("adding events refreshes the existing published calendar without duplicatin
   assert.equal(await refreshPublishedCalendar(client, guildId, "stray_kids", "2026-10-03"), true);
   assert.equal(strayKids.messageCount(), 1);
   const afterAllDay = await strayKids.messages.fetch(originalMessage.id);
-  assert.match(afterAllDay.payload.content, /Bang Chan's 29th Birthday/);
+  assert.match(afterAllDay.payload.embeds[0].description, /Bang Chan's 29th Birthday/);
   assert.ok(store.getEvent(guildId, allDayId));
 
   const timedAt = localToUtc("2026-10-04", "07:00", "America/New_York");
@@ -434,7 +463,7 @@ test("adding events refreshes the existing published calendar without duplicatin
   assert.equal(await refreshPublishedCalendar(client, guildId, "stray_kids", "2026-10-04"), true);
   assert.equal(strayKids.messageCount(), 1);
   const afterTimed = await strayKids.messages.fetch(originalMessage.id);
-  assert.match(afterTimed.payload.content, /Timed event/);
+  assert.match(afterTimed.payload.embeds[0].description, /Timed event/);
 });
 
 test("manager Add Event refreshes publication and View Preview uses one acknowledged interaction", async () => {
@@ -460,7 +489,7 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   assert.equal(details.responses[0].type, "reply");
   assert.equal(details.responses.some((response) => response.type === "editReply"), false);
   assert.equal(strayKids.messageCount(), 1);
-  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.content, /Bang Chan's 29th Birthday/);
+  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.embeds[0].description, /Bang Chan's 29th Birthday/);
 
   const timedAdd = fakeInteraction({ customId: "harmony-manager:stray_kids:add", kind: "button", guildId, client });
   await handleEventSchedulerInteraction(timedAdd);
@@ -472,7 +501,7 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   });
   await handleEventSchedulerInteraction(timedDetails);
   assert.equal(timedDetails.responses[0].type, "reply");
-  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.content, /SKZ CODE EP\. 104/);
+  assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.embeds[0].description, /SKZ CODE EP\. 104/);
 
   const view = fakeInteraction({ customId: "harmony-manager:stray_kids:view", kind: "button", guildId, client });
   await handleEventSchedulerInteraction(view);
@@ -483,7 +512,7 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   await handleEventSchedulerInteraction(viewModal);
   assert.equal(viewModal.responses[0].type, "deferReply");
   assert.equal(viewModal.responses.some((response) => response.type === "reply"), false);
-  const previewContent = viewModal.responses.find((response) => response.type === "editReply").payload.content;
+  const previewContent = viewModal.responses.find((response) => response.type === "editReply").payload.embeds[0].description;
   assert.match(previewContent, /Bang Chan's 29th Birthday/);
   assert.match(previewContent, /SKZ CODE EP\. 104/);
 

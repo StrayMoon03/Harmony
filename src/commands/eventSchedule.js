@@ -11,6 +11,7 @@ const {
   publishMonthlyCalendar,
   refreshPublishedCalendar,
   CALENDAR_CATEGORIES,
+  CALENDAR_CATEGORY_LABELS,
   installScheduleManagers,
 } = require("../services/eventSchedulerService");
 
@@ -33,7 +34,7 @@ const data = new SlashCommandBuilder()
     .addStringOption((o) => o.setName("event-time").setDescription("Actual event time: HH:MM (omit for all-day)").setMaxLength(5))
     .addStringOption((o) => o.setName("event-timezone").setDescription("Timezone for the actual event").setMaxLength(80))
     .addStringOption((o) => o.setName("description").setDescription("Short calendar details").setMaxLength(300))
-    .addStringOption((o) => o.setName("category").setDescription("Calendar category").addChoices(...CALENDAR_CATEGORIES.map((value) => ({ name: value.replace(/_/g, " "), value }))))
+    .addStringOption((o) => o.setName("category").setDescription("Calendar category").addChoices(...CALENDAR_CATEGORIES.map((value) => ({ name: CALENDAR_CATEGORY_LABELS[value], value }))))
     .addBooleanOption((o) => o.setName("all-day").setDescription("Show a date without a time"))
     .addStringOption((o) => o.setName("timezone").setDescription("Defaults to America/New_York").setMaxLength(80)))
   .addSubcommand((sub) => sub.setName("list").setDescription("Show upcoming scheduled events"))
@@ -50,7 +51,7 @@ const data = new SlashCommandBuilder()
     .addStringOption((o) => o.setName("event-date").setDescription("Actual event date: YYYY-MM").setMaxLength(10))
     .addStringOption((o) => o.setName("event-time").setDescription("Actual event time: HH:MM; omit for all-day").setMaxLength(5))
     .addStringOption((o) => o.setName("event-timezone").setDescription("Timezone for the actual event").setMaxLength(80))
-    .addStringOption((o) => o.setName("category").setDescription("Calendar category").addChoices(...CALENDAR_CATEGORIES.map((value) => ({ name: value.replace(/_/g, " "), value }))))
+    .addStringOption((o) => o.setName("category").setDescription("Calendar category").addChoices(...CALENDAR_CATEGORIES.map((value) => ({ name: CALENDAR_CATEGORY_LABELS[value], value }))))
     .addStringOption((o) => o.setName("description").setDescription("Short calendar details").setMaxLength(300))
     .addBooleanOption((o) => o.setName("all-day").setDescription("Show a date without a time")));
 
