@@ -3,6 +3,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  EmbedBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -14,10 +15,10 @@ const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 const CHECK_INTERVAL_MS = 30 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
 const HEADER = /^harmony\s+event\b/i;
-const CALENDAR_CATEGORIES = ["birthday", "content", "concert", "stream", "release", "video_call", "appearance", "community", "other"];
+const CALENDAR_CATEGORIES = ["birthday", "content", "concert", "stream", "release", "video_call", "appearance", "community", "shopping", "other"];
 const CALENDAR_CATEGORY_ICONS = {
   birthday: "🎂", content: "🎬", concert: "🎤", stream: "📺", release: "💿",
-  video_call: "📱", appearance: "✨", community: "🎮", other: "📌",
+  video_call: "📱", appearance: "✨", community: "🎮", shopping: "🛍️", other: "📌",
 };
 const CALENDAR_CATEGORY_LABELS = {
   birthday: "Birthday",
@@ -28,6 +29,7 @@ const CALENDAR_CATEGORY_LABELS = {
   video_call: "Video Call",
   appearance: "Appearance",
   community: "Community / Game",
+  shopping: "Shopping / Pop-Up",
   other: "Other",
 };
 
@@ -245,27 +247,75 @@ function monthKeyFromDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 7);
 }
 
-function buildCalendarMessages(calendarType, monthKey, events, now = Date.now()) {
-  const title = calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
-  const lines = [`📅 ${title} • ${new Date(`${monthKey}-01T00:00:00Z`).toLocaleString("en-US", { timeZone: "UTC", month: "long", year: "numeric" }).toUpperCase()}`, "Monthly Schedule", ""];
-  if (!events.length) lines.push("No events scheduled.");
-  for (const event of events) {
-    const date = event.event_date || (event.event_at || "").slice(0, 10);
-    const timed = !event.all_day && event.event_at;
-    const label = new Intl.DateTimeFormat("en-US", { timeZone: event.event_timezone || "UTC", month: "short", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00Z`)).toUpperCase();
-    lines.push(`${label}`, `${CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other} ${event.description ? `${event.description} — ` : ""}**${event.title}**`);
-    if (timed) lines.push(`<t:${Math.floor(new Date(event.event_at).getTime() / 1000)}:F>`);
-    lines.push(event.link, "");
-  }
-  lines.push(`Last updated <t:${Math.floor(now / 1000)}:R>`);
+const CALENDAR_COLORS = { stray_kids: 0xE53935, community: 0x5865F2 };
+const EMBED_DESCRIPTION_LIMIT = 3900;
+
+function calendarMonthLabel(monthKey) {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", year: "numeric" })
+    .format(new Date(`${monthKey}-01T00:00:00Z`)).toUpperCase();
+}
+
+function allDayDateHeading(date) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC", weekday: "long", month: "long", day: "numeric", year: "numeric",
+  }).format(new Date(`${date}T00:00:00Z`));
+}
+
+function eventCalendarBlock(event) {
+  const date = event.event_date || (event.event_at || "").slice(0, 10);
+  const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
+  const allDay = !timestamp;
+  const dateLine = timestamp ? `<t:${timestamp}:D>` : allDayDateHeading(date);
+  const timePrefix = timestamp ? `<t:${timestamp}:t> • ` : "";
+  const icon = CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other;
+  const lines = [dateLine, `${timePrefix}${icon} **${event.title}**${allDay ? " • All Day" : ""}`];
+  if (event.description) lines.push(event.description);
+  if (event.event_location) lines.push(`📍 ${event.event_location}`);
+  if (event.link) lines.push(`[Open event link](${event.link})`);
+  return lines.join("\n");
+}
+
+function splitCalendarDescription(blocks, header) {
   const parts = [];
-  let current = "";
-  for (const line of lines) {
-    const next = current ? `${current}\n${line}` : line;
-    if (next.length > 1900 && current) { parts.push(current); current = line; } else current = next;
+  let current = header;
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length <= EMBED_DESCRIPTION_LIMIT) {
+      current = candidate;
+      continue;
+    }
+    if (current) parts.push(current);
+    if (block.length <= EMBED_DESCRIPTION_LIMIT) {
+      current = block;
+      continue;
+    }
+    // Keep every character, including long descriptions, without exceeding
+    // Discord's embed description limit. A long single event may span cards.
+    for (let offset = 0; offset < block.length; offset += EMBED_DESCRIPTION_LIMIT) {
+      const chunk = block.slice(offset, offset + EMBED_DESCRIPTION_LIMIT);
+      if (offset + EMBED_DESCRIPTION_LIMIT < block.length) parts.push(chunk);
+      else current = chunk;
+    }
   }
   if (current) parts.push(current);
   return parts;
+}
+
+function buildCalendarMessages(calendarType, monthKey, events, now = Date.now()) {
+  const title = calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
+  const header = "Monthly Schedule";
+  const blocks = events.length ? events.map(eventCalendarBlock) : ["No events scheduled."];
+  const descriptions = splitCalendarDescription(blocks, header);
+  const footer = `Times display in your local timezone • Last updated <t:${Math.floor(now / 1000)}:R>`;
+  return descriptions.map((description) => ({
+    embeds: [new EmbedBuilder()
+      .setColor(CALENDAR_COLORS[calendarType] || CALENDAR_COLORS.community)
+      .setTitle(`📅 ${title} • ${calendarMonthLabel(monthKey)}`)
+      .setDescription(description)
+      .setFooter({ text: footer })
+      .toJSON()],
+    allowedMentions: { parse: [] },
+  }));
 }
 
 async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, { preview = false, interaction = null } = {}) {
@@ -281,9 +331,9 @@ async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, {
   const parts = buildCalendarMessages(calendarType, monthKey, events);
   if (preview) {
     if (interaction) {
-      await interaction.editReply({ content: parts[0], allowedMentions: { parse: [] } });
+      await interaction.editReply(parts[0]);
       for (const part of parts.slice(1)) {
-        await interaction.followUp({ content: part, flags: 64, allowedMentions: { parse: [] } });
+        await interaction.followUp({ ...part, flags: 64 });
       }
     }
     return { parts, preview: true };
@@ -294,8 +344,8 @@ async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, {
     const old = existing[i];
     let message = null;
     if (old) message = await channel.messages.fetch(old.message_id).catch(() => null);
-    if (message) await message.edit({ content: parts[i], allowedMentions: { parse: [] } });
-    else message = await channel.send({ content: parts[i], allowedMentions: { parse: [] } });
+    if (message) await message.edit(parts[i]);
+    else message = await channel.send(parts[i]);
     store.savePublishedCalendar(guildId, calendarType, monthKey, i, channel.id, message.id);
     sent.push(message.id);
   }
@@ -793,6 +843,7 @@ module.exports = {
   processScheduledAnnouncements,
   startEventScheduler,
   CALENDAR_CATEGORIES,
+  CALENDAR_CATEGORY_LABELS,
   buildCalendarMessages,
   publishMonthlyCalendar,
   refreshPublishedCalendar,
