@@ -541,13 +541,17 @@ async function createNativeScheduledEvent(guild, draft, channelId) {
   if (!draft.eventAt) throw new Error("All-day events stay Harmony-only and do not create a native scheduled event.");
   const start = new Date(draft.eventAt);
   const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const channel = channelId ? (guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null)) : null;
   return guild.scheduledEvents.create({
     name: draft.title,
     scheduledStartTime: start,
     scheduledEndTime: end,
     privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
     entityType: GuildScheduledEventEntityType.External,
-    entityMetadata: { location: channelId ? `#${channelId}` : "Harmony calendar" },
+    // Discord channel-bound events only support voice/stage channels. The
+    // manager intentionally selects text/announcement channels, so External
+    // is the correct entity type and uses a human-readable location.
+    entityMetadata: { location: channel ? `#${channel.name}` : "Harmony calendar" },
     description: draft.description || undefined,
   });
 }
@@ -574,6 +578,46 @@ function interestedStateSupport() {
   return { supported: true, reason: "discord.js exposes guildScheduledEventUserAdd/guildScheduledEventUserRemove and GuildScheduledEvent.fetchSubscribers(). Harmony requests the GuildScheduledEvents intent; a complete Interested list still requires Manage Events or event visibility." };
 }
 
+async function offerEventReminder(client, event, user) {
+  if (!event?.guildId || !store.getEventByDiscordId(event.guildId, event.id)) return;
+  try {
+    const dm = await user.createDM();
+    await dm.send({ content: `Would you like a Harmony reminder for **${event.name}**?`, components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:86400`).setLabel("1 day before").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:3600`).setLabel("1 hour before").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:0`).setLabel("No thanks").setStyle(ButtonStyle.Secondary)
+    )] });
+  } catch { /* DMs are optional and must fail quietly. */ }
+}
+
+async function handleReminderInteraction(interaction) {
+  const [, discordEventId, rawOffset] = interaction.customId.split(":");
+  const offset = Number(rawOffset);
+  if (![0, 3600, 86400].includes(offset)) return false;
+  if (offset === 0) store.cancelDiscordEventReminder(discordEventId, interaction.user.id);
+  else {
+    const event = Array.from(interaction.client.guilds.cache.values())
+      .map((guild) => guild.scheduledEvents.cache.get(discordEventId))
+      .find(Boolean);
+    if (!event?.scheduledStartAt) { await interaction.update({ content: "That Discord event is no longer available.", components: [] }); return true; }
+    const remindAt = new Date(event.scheduledStartAt.getTime() - offset * 1000);
+    if (remindAt <= new Date()) { await interaction.update({ content: "That reminder time has already passed.", components: [] }); return true; }
+    store.saveDiscordEventReminder(event.guildId, discordEventId, interaction.user.id, offset, remindAt.toISOString());
+  }
+  await interaction.update({ content: offset === 0 ? "No Harmony reminder will be sent." : `Saved your Harmony reminder for ${offset === 86400 ? "1 day" : "1 hour"} before the event.`, components: [] });
+  return true;
+}
+
+async function processDiscordEventReminders(client) {
+  for (const reminder of store.dueDiscordEventReminders(new Date().toISOString())) {
+    try {
+      const user = await client.users.fetch(reminder.user_id);
+      await user.send(`⏰ Harmony reminder: your Discord event starts soon. <https://discord.com/events/${reminder.guild_id}/${reminder.discord_event_id}>`);
+      store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id);
+    } catch { store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id); }
+  }
+}
+
 async function fetchInterestedMembers(scheduledEvent) {
   if (!scheduledEvent?.fetchSubscribers) throw new Error("Discord Scheduled Event subscriber APIs are unavailable.");
   const subscribers = await scheduledEvent.fetchSubscribers({ withMember: true });
@@ -594,10 +638,16 @@ async function handleGuildScheduledEventCreate(client, event) {
   const match = candidates.length === 1 ? candidates[0] : null;
   const payload = { content: match
     ? `A native Discord Scheduled Event **${event.name}** appeared. Link it to the matching Harmony calendar event #${match.id}, or keep it separate?`
-    : `A native Discord Scheduled Event **${event.name}** appeared. No exact Harmony event match was found, so it was left separate.`, allowedMentions: { parse: [] } };
+    : candidates.length > 1 ? `A native Discord Scheduled Event **${event.name}** appeared. Choose the Harmony event to link, or add it as a new calendar event.`
+      : `A native Discord Scheduled Event **${event.name}** appeared. Choose whether to link it to an existing event or add it to the calendar.`, allowedMentions: { parse: [] } };
   if (match) payload.components = [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`harmony-manager:community:linknative:${match.id}:${event.id}`).setLabel("Link to Harmony event").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("harmony-manager:community:keepnative").setLabel("Keep separate").setStyle(ButtonStyle.Secondary)
+  )];
+  else if (candidates.length) payload.components = [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`harmony-manager:community:nativelinkselect:${event.id}`).setPlaceholder("Link to Existing").addOptions(candidates.slice(0, 25).map((item) => ({ label: item.title.slice(0, 100), value: String(item.id) }))))];
+  else payload.components = [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("harmony-manager:community:keepnative").setLabel("Keep Separate").setStyle(ButtonStyle.Secondary)
   )];
   await channel.send(payload);
 }
@@ -606,10 +656,13 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   if (!event?.guildId) return;
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
-  // Preserve Harmony's canonical event metadata. Native edits are surfaced to
-  // admins rather than guessed into a potentially different local timezone.
-  const channel = await managerControlChannel(client, event.guildId);
-  if (channel?.isTextBased()) await channel.send({ content: `Linked Discord event **${event.name}** changed. Review Harmony event **${linked.title}** in Schedule Manager.`, allowedMentions: { parse: [] } });
+  if (!event.scheduledStartAt) return;
+  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime()) return;
+  const timezone = linked.event_timezone || linked.timezone;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
+  const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  store.updateEvent(event.guildId, linked.id, { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_date: `${localDate.year}-${localDate.month}-${localDate.day}` });
+  await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
 }
 
 async function handleGuildScheduledEventDelete(client, event) {
@@ -621,8 +674,19 @@ async function handleGuildScheduledEventDelete(client, event) {
   if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${linked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
 }
 
+async function addNativeEventToCalendar(interaction, discordEventId) {
+  const event = await interaction.guild.scheduledEvents.fetch(discordEventId);
+  if (!event?.scheduledStartAt) throw new Error("The Discord event is no longer available.");
+  if (store.getEventByDiscordId(interaction.guildId, discordEventId)) return store.getEventByDiscordId(interaction.guildId, discordEventId);
+  const eventAt = event.scheduledStartAt.toISOString();
+  const eventDate = eventAt.slice(0, 10);
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: event.description || null, createdBy: interaction.user.id });
+  return store.getEvent(interaction.guildId, id);
+}
+
 async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
+  if (customId.startsWith("harmony-reminder:")) return handleReminderInteraction(interaction);
   if (customId.startsWith("harmony-manager:")) {
     await handleManagerInteraction(interaction);
     return true;
@@ -709,9 +773,27 @@ async function handleManagerInteraction(interaction) {
   const settings = store.getCalendarChannels(interaction.guildId) || {};
   const calendarChannelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
 
+  if (calendarType === "community" && action === "nativelinkselect" && interaction.isStringSelectMenu()) {
+    const linked = store.getEvent(interaction.guildId, Number(interaction.values[0]));
+    if (!linked) { await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+    const nativeId = eventId;
+    if (store.getEventByDiscordId(interaction.guildId, nativeId)) { await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
+    store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
+    await interaction.update({ content: `Linked the native event to **${linked.title}**.`, components: [] });
+    return;
+  }
+  if (calendarType === "community" && action === "nativeadd" && interaction.isButton()) {
+    try {
+      const added = await addNativeEventToCalendar(interaction, eventId);
+      await interaction.update({ content: `Added **${added.title}** to the Youtiful Stays calendar.`, components: [] });
+      await refreshPublishedCalendar(interaction.client, interaction.guildId, "community", added.event_date).catch(() => {});
+    } catch (error) { await interaction.update({ content: error.message, components: [] }); }
+    return;
+  }
   if (calendarType === "community" && action === "linknative" && interaction.isButton()) {
     const linked = store.getEvent(interaction.guildId, Number(eventId));
     if (!linked) { await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+    if (store.getEventByDiscordId(interaction.guildId, parts[4])) { await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: parts[4] });
     await interaction.update({ content: `Linked the native Discord event to **${linked.title}**.`, components: [] });
     return;
@@ -1168,8 +1250,12 @@ async function processScheduledAnnouncements(client) {
 
 function startEventScheduler(client) {
   processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
+  processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
   const timer = setInterval(
-    () => processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error)),
+    () => {
+      processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
+      processDiscordEventReminders(client).catch((error) => console.error("Discord event reminders failed:", error));
+    },
     CHECK_INTERVAL_MS
   );
   timer.unref?.();
@@ -1209,4 +1295,8 @@ module.exports = {
   handleGuildScheduledEventCreate,
   handleGuildScheduledEventUpdate,
   handleGuildScheduledEventDelete,
+  offerEventReminder,
+  handleReminderInteraction,
+  processDiscordEventReminders,
+  addNativeEventToCalendar,
 };

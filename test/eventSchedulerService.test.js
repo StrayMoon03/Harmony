@@ -7,6 +7,7 @@ const {
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS,
   interestedStateSupport,
+  handleReminderInteraction,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 
@@ -33,6 +34,34 @@ test("Interested state uses Discord Scheduled Event subscriber capabilities", ()
   const support = interestedStateSupport();
   assert.equal(support.supported, true);
   assert.match(support.reason, /fetchSubscribers|UserAdd/i);
+});
+
+test("saved Youtiful Stays titles support add, rename, remove, defaults, and guild isolation", () => {
+  const first = `guild-title-${Date.now()}`;
+  const second = `${first}-other`;
+  assert.equal(store.ensureDefaultCalendarEventTitles(first, "community").length, 7);
+  assert.equal(store.ensureDefaultCalendarEventTitles(first, "community").length, 7);
+  store.addCalendarEventTitle(first, "community", "Fan Meeting");
+  assert.equal(store.renameCalendarEventTitle(first, "community", "Fan Meeting", "Stay Meeting"), true);
+  assert.equal(store.removeCalendarEventTitle(first, "community", "Stay Meeting"), true);
+  assert.equal(store.listCalendarEventTitles(second, "community").length, 0);
+  assert.throws(() => store.addCalendarEventTitle(first, "community", "Other / Custom"));
+});
+
+test("reminder selection persists and removal cancels it", async () => {
+  const id = `native-${Date.now()}`;
+  const userId = `user-${Date.now()}`;
+  const interaction = {
+    customId: `harmony-reminder:${id}:3600`, user: { id: userId },
+    client: { guilds: { cache: new Map([
+      ["g", { scheduledEvents: { cache: new Map([[id, { scheduledStartAt: new Date(Date.now() + 7200000), guildId: "g" }]]) } }],
+    ]) } },
+    update: async (payload) => { interaction.payload = payload; },
+  };
+  await handleReminderInteraction(interaction);
+  assert.equal(store.dueDiscordEventReminders(new Date(Date.now() + 7200000).toISOString(), 100).some((row) => row.discord_event_id === id), true);
+  assert.equal(store.cancelDiscordEventReminder(id, userId), true);
+  assert.equal(store.dueDiscordEventReminders(new Date(Date.now() + 7200000).toISOString(), 100).some((row) => row.discord_event_id === id), false);
 });
 
 test("parses several announcements for one event and one link", () => {

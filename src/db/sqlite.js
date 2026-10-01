@@ -365,6 +365,19 @@ function migrate(database) {
       updated_at     TEXT NOT NULL,
       PRIMARY KEY (guild_id, calendar_type, title)
     );
+
+    CREATE TABLE IF NOT EXISTS discord_event_reminders (
+      guild_id TEXT NOT NULL,
+      discord_event_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      reminder_offset_seconds INTEGER NOT NULL,
+      remind_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (discord_event_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_discord_event_reminders_due
+      ON discord_event_reminders (status, remind_at);
   `);
 
   migrateSharesToGuildScope(database);

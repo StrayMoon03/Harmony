@@ -77,7 +77,9 @@ data.addSubcommand((sub) => sub
 data.addSubcommand((sub) => sub
   .setName("event-titles")
   .setDescription("List or add saved Youtiful Stays event titles")
-  .addStringOption((o) => o.setName("add").setDescription("Add a saved title").setMaxLength(100)));
+  .addStringOption((o) => o.setName("action").setDescription("Title action").setRequired(true).addChoices({ name: "List", value: "list" }, { name: "Add Title", value: "add" }, { name: "Rename Title", value: "rename" }, { name: "Remove Title", value: "remove" }))
+  .addStringOption((o) => o.setName("title").setDescription("Existing title").setMaxLength(100))
+  .addStringOption((o) => o.setName("new-title").setDescription("Replacement title for rename").setMaxLength(100)));
 
 function isAdmin(interaction) {
   return Boolean(
@@ -110,10 +112,20 @@ async function execute(interaction) {
     return;
   }
   if (action === "event-titles") {
-    const added = interaction.options.getString("add");
-    if (added) store.addCalendarEventTitle(interaction.guildId, "community", added);
-    const titles = store.ensureDefaultCalendarEventTitles(interaction.guildId, "community");
-    await interaction.editReply(`Youtiful Stays saved titles:\n${titles.map((item) => `• ${item.title}`).join("\n")}`);
+    try {
+      const titleAction = interaction.options.getString("action", true);
+      const title = interaction.options.getString("title");
+      const newTitle = interaction.options.getString("new-title");
+      if (titleAction === "add") store.addCalendarEventTitle(interaction.guildId, "community", title);
+      if (titleAction === "rename") {
+        if (!title || !newTitle || !store.renameCalendarEventTitle(interaction.guildId, "community", title, newTitle)) throw new Error("That saved title was not found.");
+      }
+      if (titleAction === "remove") {
+        if (!title || !store.removeCalendarEventTitle(interaction.guildId, "community", title)) throw new Error("That saved title was not found.");
+      }
+      const titles = store.ensureDefaultCalendarEventTitles(interaction.guildId, "community");
+      await interaction.editReply(`Youtiful Stays saved titles:\n${titles.map((item) => `• ${item.title}`).join("\n")}`);
+    } catch (error) { await interaction.editReply(error.message); }
     return;
   }
   if (action === "list") {

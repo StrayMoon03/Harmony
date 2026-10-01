@@ -63,6 +63,7 @@ function listCalendarEventTitles(guildId, calendarType = "community") {
 }
 function ensureDefaultCalendarEventTitles(guildId, calendarType = "community") {
   const now = new Date().toISOString();
+  if (getDb().prepare("SELECT 1 FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? LIMIT 1").get(guildId, calendarType)) return listCalendarEventTitles(guildId, calendarType);
   const insert = getDb().prepare("INSERT OR IGNORE INTO calendar_event_titles (guild_id, calendar_type, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)");
   for (const title of calendarType === "community" ? YOUTIFUL_EVENT_TITLES : []) insert.run(guildId, calendarType, title, now, now);
   return listCalendarEventTitles(guildId, calendarType);
@@ -70,9 +71,32 @@ function ensureDefaultCalendarEventTitles(guildId, calendarType = "community") {
 function addCalendarEventTitle(guildId, calendarType, title) {
   const clean = String(title || "").trim().slice(0, 100);
   if (!clean) throw new Error("A title is required.");
+  if (clean.toLowerCase() === "other / custom") throw new Error("Other / Custom is a one-off option, not a saved recurring title.");
   const now = new Date().toISOString();
   getDb().prepare("INSERT OR IGNORE INTO calendar_event_titles (guild_id, calendar_type, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(guildId, calendarType, clean, now, now);
   return listCalendarEventTitles(guildId, calendarType);
+}
+function renameCalendarEventTitle(guildId, calendarType, oldTitle, newTitle) {
+  const clean = String(newTitle || "").trim().slice(0, 100);
+  if (!clean || clean.toLowerCase() === "other / custom") throw new Error("Choose a valid recurring title.");
+  const result = getDb().prepare("UPDATE calendar_event_titles SET title = ?, updated_at = ? WHERE guild_id = ? AND calendar_type = ? AND title = ?").run(clean, new Date().toISOString(), guildId, calendarType, oldTitle);
+  return result.changes > 0;
+}
+function removeCalendarEventTitle(guildId, calendarType, title) {
+  return getDb().prepare("DELETE FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? AND title = ?").run(guildId, calendarType, title).changes > 0;
+}
+function saveDiscordEventReminder(guildId, discordEventId, userId, offsetSeconds, remindAt) {
+  getDb().prepare(`INSERT INTO discord_event_reminders (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(discord_event_id, user_id) DO UPDATE SET reminder_offset_seconds = excluded.reminder_offset_seconds, remind_at = excluded.remind_at, status = 'pending'`).run(guildId, discordEventId, userId, offsetSeconds, remindAt, new Date().toISOString());
+}
+function cancelDiscordEventReminder(discordEventId, userId) {
+  return getDb().prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId).changes > 0;
+}
+function dueDiscordEventReminders(nowIso, limit = 50) {
+  return getDb().prepare("SELECT * FROM discord_event_reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT ?").all(nowIso, limit);
+}
+function markDiscordEventReminderSent(discordEventId, userId) {
+  getDb().prepare("UPDATE discord_event_reminders SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
 }
 
 function getEvent(guildId, eventId) {
@@ -313,4 +337,10 @@ module.exports = {
   ensureDefaultCalendarEventTitles,
   addCalendarEventTitle,
   YOUTIFUL_EVENT_TITLES,
+  renameCalendarEventTitle,
+  removeCalendarEventTitle,
+  saveDiscordEventReminder,
+  cancelDiscordEventReminder,
+  dueDiscordEventReminders,
+  markDiscordEventReminderSent,
 };
