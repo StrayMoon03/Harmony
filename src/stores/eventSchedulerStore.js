@@ -195,7 +195,7 @@ function cancelEvent(guildId, eventId, cancelledBy) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "event_location", "description", "category", "all_day", "link"];
+  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "all_day", "link"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");

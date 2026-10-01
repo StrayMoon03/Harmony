@@ -330,12 +330,13 @@ test("edit event keeps friendly category changes and editable links", async () =
   const editModal = select.responses[0].modal.toJSON();
   assert.equal(editModal.components.length, 5);
   assert.equal(editModal.components.at(-1).components[0].custom_id, "description");
+  assert.equal(editModal.components[2].components[0].value, "20:00");
 
   const editDetails = fakeInteraction({
     customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
     fields: {
-      title: "Concert", "event-date": "2099-07-14", "event-time": "20:00",
-      location: "New York, USA", description: "Updated details\nhttps://example.com/new",
+      title: "Updated Concert", "event-date": "2099-08-14", "event-time": "18:30",
+      location: "Tokyo, Japan", description: "Updated details\nhttps://example.com/new",
     },
   });
   await handleEventSchedulerInteraction(editDetails);
@@ -350,8 +351,25 @@ test("edit event keeps friendly category changes and editable links", async () =
   assert.equal(changedCategory.responses[0].type, "update");
   const updated = store.getEvent(guildId, eventId);
   assert.equal(updated.category, "content");
+  assert.equal(updated.title, "Updated Concert");
+  assert.equal(updated.event_date, "2099-08-14");
+  assert.equal(updated.event_location, "Tokyo, Japan");
+  assert.equal(updated.event_timezone, "Asia/Tokyo");
+  assert.equal(updated.timezone, "Asia/Tokyo");
+  assert.equal(updated.all_day, 0);
   assert.equal(updated.link, "https://example.com/new");
   assert.equal(updated.description, "Updated details");
+
+  const reopened = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(reopened);
+  const reopenedSelect = fakeInteraction({ customId: "harmony-manager:stray_kids:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(reopenedSelect);
+  const reopenedModal = reopenedSelect.responses[0].modal.toJSON();
+  assert.equal(reopenedModal.components[0].components[0].value, "Updated Concert");
+  assert.equal(reopenedModal.components[1].components[0].value, "2099-08-14");
+  assert.equal(reopenedModal.components[2].components[0].value, "18:30");
+  assert.equal(reopenedModal.components[3].components[0].value, "Tokyo, Japan");
+  assert.match(reopenedModal.components[4].components[0].value, /https:\/\/example\.com\/new/);
 });
 
 function fakeChannel(id) {

@@ -153,11 +153,22 @@ function managerModal(customId, title, fields) {
   return modal;
 }
 
+function eventLocalTime(event = {}) {
+  if (event.all_day || !event.event_at) return "";
+  const timezone = event.event_timezone || event.timezone || "UTC";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone, hour12: false, hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(event.event_at))
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
+}
+
 function managerFields(event = {}) {
   return [
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
-    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
+    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
     { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
@@ -167,7 +178,7 @@ function editManagerFields(event = {}) {
   return [
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
-    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: event.all_day ? "" : (event.event_at || "").slice(11, 16) },
+    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
     { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
