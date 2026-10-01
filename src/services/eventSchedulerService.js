@@ -101,6 +101,7 @@ function parseManagerDraft(fields, calendarType) {
   const title = fields.title.trim();
   const eventDate = fields.eventDate.trim();
   const eventTime = fields.eventTime.trim();
+  const endTime = String(fields.endTime || "").trim();
   const location = String(fields.location || "").trim();
   const legacyTimezone = String(fields.timezone || "").trim();
   const timezone = resolveLocationTimezone(location) || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null) || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null);
@@ -112,15 +113,44 @@ function parseManagerDraft(fields, calendarType) {
   if (!parseManagerDate(eventDate) || !isValidDateOnly(eventDate)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
   if (eventTime && !timezone) throw new Error("I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`.");
   if (eventTime && !localToUtc(eventDate, eventTime, timezone)) throw new Error("Use a valid event time in HH:MM format.");
+  if (endTime && !eventTime) throw new Error("End Time requires a Start Time.");
+  let eventEndAt = null;
+  if (eventTime && endTime) {
+    if (!/^\d{1,2}:\d{2}$/.test(endTime)) throw new Error("Use a valid end time in HH:MM format.");
+    const [hour, minute] = endTime.split(":").map(Number);
+    if (hour > 23 || minute > 59) throw new Error("Use a valid end time in HH:MM format.");
+    const startParts = eventTime.split(":").map(Number);
+    const endDate = hour * 60 + minute <= startParts[0] * 60 + startParts[1]
+      ? addCalendarDay(eventDate)
+      : eventDate;
+    const end = localToUtc(endDate, endTime, timezone);
+    if (!end) throw new Error("Use a valid end time in HH:MM format.");
+    eventEndAt = end.toISOString();
+  }
   if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("The link must begin with http:// or https://.");
   return {
     title, eventDate, eventTime, location, timezone, link, description,
     calendarType,
     allDay: !eventTime,
     eventAt: eventTime ? localToUtc(eventDate, eventTime, timezone).toISOString() : null,
+    eventEndAt,
     eventTimezone: timezone,
     eventLocation: location,
   };
+}
+
+function addCalendarDay(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (!match) return value;
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function nativeEventEndTime(event) {
+  if (event?.event_end_at || event?.eventEndAt) return new Date(event.event_end_at || event.eventEndAt);
+  return new Date(new Date(event.event_at || event.eventAt).getTime() + 60 * 60 * 1000);
 }
 
 function resolveLocationTimezone(location) {
@@ -215,6 +245,27 @@ function editManagerFields(event = {}) {
     { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
+}
+
+function youtifulEditFields(event = {}) {
+  return [
+    { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
+    { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
+    { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
+    { id: "event-end-time", label: "End time HH:MM (optional)", maxLength: 5, value: eventEndLocalTime(event) },
+    { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
+  ];
+}
+
+function eventEndLocalTime(event = {}) {
+  if (event.all_day || !event.event_end_at) return "";
+  const timezone = event.event_timezone || event.timezone || "UTC";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone, hour12: false, hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(event.event_end_at))
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
 }
 
 function categoryMenu(calendarType, action, eventId = "new", selected = "other") {
@@ -540,7 +591,7 @@ async function createNativeScheduledEvent(guild, draft, channelId) {
   if (me && !me.permissions.has(PermissionFlagsBits.ManageEvents)) throw new Error("Harmony needs Manage Events permission to create a Discord Scheduled Event.");
   if (!draft.eventAt) throw new Error("All-day events stay Harmony-only and do not create a native scheduled event.");
   const start = new Date(draft.eventAt);
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const end = nativeEventEndTime(draft);
   const channel = channelId ? (guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null)) : null;
   return guild.scheduledEvents.create({
     name: draft.title,
@@ -564,7 +615,7 @@ async function syncNativeScheduledEvent(client, event) {
   await native.edit({
     name: event.title,
     scheduledStartTime: new Date(event.event_at),
-    scheduledEndTime: new Date(new Date(event.event_at).getTime() + 60 * 60 * 1000),
+    scheduledEndTime: nativeEventEndTime(event),
     description: event.description || undefined,
   });
   return true;
@@ -657,11 +708,11 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
   if (!event.scheduledStartAt) return;
-  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime()) return;
+  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime()) return;
   const timezone = linked.event_timezone || linked.timezone;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
   const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  store.updateEvent(event.guildId, linked.id, { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_date: `${localDate.year}-${localDate.month}-${localDate.day}` });
+  store.updateEvent(event.guildId, linked.id, { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_end_at: event.scheduledEndAt?.toISOString() || null, event_date: `${localDate.year}-${localDate.month}-${localDate.day}` });
   await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
 }
 
@@ -680,7 +731,7 @@ async function addNativeEventToCalendar(interaction, discordEventId) {
   if (store.getEventByDiscordId(interaction.guildId, discordEventId)) return store.getEventByDiscordId(interaction.guildId, discordEventId);
   const eventAt = event.scheduledStartAt.toISOString();
   const eventDate = eventAt.slice(0, 10);
-  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: event.description || null, createdBy: interaction.user.id });
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: event.description || null, createdBy: interaction.user.id });
   return store.getEvent(interaction.guildId, id);
 }
 
@@ -824,6 +875,7 @@ async function handleManagerInteraction(interaction) {
       ...(selected === "other" ? [{ id: "title", label: "Custom event title", required: true, maxLength: 120 }] : []),
       { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10 },
       { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5 },
+      { id: "event-end-time", label: "End time HH:MM (optional)", maxLength: 5 },
       { id: "description", label: "Description (optional)", maxLength: 1000, paragraph: true },
     ];
     await interaction.showModal(managerModal("harmony-manager:community:ysdetails", "Add Youtiful Stays event", fields));
@@ -834,7 +886,7 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
     try {
       const title = draft.title || interaction.fields.getTextInputValue("title");
-      const parsed = parseManagerDraft({ title, eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: "", description: interaction.fields.getTextInputValue("description") }, calendarType);
+      const parsed = parseManagerDraft({ title, eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), endTime: interaction.fields.getTextInputValue("event-end-time"), location: "", description: interaction.fields.getTextInputValue("description") }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, ...parsed, title });
       await interaction.reply({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu(), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
@@ -851,7 +903,7 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
     try {
-      const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link, timezone: draft.timezone, eventAt: draft.eventAt, eventDate: draft.eventDate, eventTimezone: draft.eventTimezone, calendarType, category: draft.calendarEventType, allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id, calendarEventType: draft.calendarEventType, eventChannelId: draft.eventChannelId });
+      const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link, timezone: draft.timezone, eventAt: draft.eventAt, eventEndAt: draft.eventEndAt, eventDate: draft.eventDate, eventTimezone: draft.eventTimezone, calendarType, category: draft.calendarEventType, allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id, calendarEventType: draft.calendarEventType, eventChannelId: draft.eventChannelId });
       let nativeId = null;
       let nativeWarning = "";
       if (eventId && interaction.customId.endsWith(":yes") && !draft.allDay) {
@@ -937,7 +989,7 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(interaction.values[0]));
     if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
     managerDrafts.set(draftKey(interaction, calendarType, event.id), { eventId: event.id, existing: event });
-    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:editmodal:${event.id}`, "Edit calendar event", editManagerFields(event)));
+    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:editmodal:${event.id}`, "Edit calendar event", calendarType === "community" ? youtifulEditFields(event) : editManagerFields(event)));
     return;
   }
   if (action === "editmodal" && interaction.isModalSubmit()) {
@@ -948,7 +1000,8 @@ async function handleManagerInteraction(interaction) {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
-        location: interaction.fields.getTextInputValue("location"),
+        location: calendarType === "community" ? (existing.event_location || "") : interaction.fields.getTextInputValue("location"),
+        endTime: calendarType === "community" ? interaction.fields.getTextInputValue("event-end-time") : "",
         description: interaction.fields.getTextInputValue("description"),
         fallbackTimezone: existing.event_timezone || existing.timezone,
       }, calendarType);
@@ -961,6 +1014,7 @@ async function handleManagerInteraction(interaction) {
         event_timezone: draft.eventTimezone, event_location: draft.eventLocation, timezone: draft.timezone,
         link: draft.link, description: draft.description, all_day: draft.allDay ? 1 : 0,
         member: existing.member || null,
+        ...(calendarType === "community" ? { event_end_at: draft.eventEndAt } : {}),
       });
       if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
@@ -1282,6 +1336,8 @@ module.exports = {
   managerPanelComponents,
   managerModal,
   parseManagerDraft,
+  nativeEventEndTime,
+  syncNativeScheduledEvent,
   managerCalendarType,
   MANAGER_TYPES,
   YOUTIFUL_EVENT_TYPES,

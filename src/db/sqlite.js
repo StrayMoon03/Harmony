@@ -294,6 +294,7 @@ function migrate(database) {
       calendar_type           TEXT NOT NULL DEFAULT 'community'
                               CHECK (calendar_type IN ('stray_kids', 'community')),
       event_at                TEXT,
+      event_end_at            TEXT,
       event_date              TEXT,
       event_timezone          TEXT,
       event_location          TEXT,
@@ -390,6 +391,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("event_at")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_at TEXT");
+  }
+  if (!scheduledEventColumns.has("event_end_at")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_end_at TEXT");
   }
   if (!scheduledEventColumns.has("event_date")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_date TEXT");

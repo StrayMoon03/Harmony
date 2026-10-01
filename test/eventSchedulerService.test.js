@@ -8,6 +8,8 @@ const {
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS,
   interestedStateSupport,
   handleReminderInteraction,
+  nativeEventEndTime,
+  syncNativeScheduledEvent,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 
@@ -217,6 +219,55 @@ test("manager drafts resolve locations and separate description plus link", () =
   assert.equal(allDayWithoutLocation.eventTimezone, null);
   assert.equal(allDayWithoutLocation.eventLocation, "");
   assert.throws(() => parseManagerDraft({ title: "Timed", eventDate: "2099-01-01", eventTime: "18:00", location: "", description: "" }, "community"), /resolve/);
+});
+
+test("Youtiful timed drafts persist an explicit end time", () => {
+  const draft = parseManagerDraft({
+    title: "Fukuoka concert", eventDate: "2026-10-24", eventTime: "18:30", endTime: "21:30",
+    location: "Fukuoka, Japan", description: "",
+  }, "community");
+  assert.equal(draft.eventAt, "2026-10-24T09:30:00.000Z");
+  assert.equal(draft.eventEndAt, "2026-10-24T12:30:00.000Z");
+  assert.equal(nativeEventEndTime(draft).toISOString(), draft.eventEndAt);
+});
+
+test("blank end time retains the safe one-hour native default", () => {
+  const draft = parseManagerDraft({
+    title: "Seoul stream", eventDate: "2026-10-03", eventTime: "18:00", endTime: "",
+    location: "Seoul, South Korea", description: "",
+  }, "community");
+  assert.equal(draft.eventEndAt, null);
+  assert.equal(nativeEventEndTime(draft).toISOString(), "2026-10-03T10:00:00.000Z");
+});
+
+test("end times crossing midnight use the following local calendar date", () => {
+  const draft = parseManagerDraft({
+    title: "Late event", eventDate: "2026-10-24", eventTime: "23:30", endTime: "01:00",
+    location: "New York, USA", description: "",
+  }, "community");
+  assert.equal(draft.eventAt, "2026-10-25T03:30:00.000Z");
+  assert.equal(draft.eventEndAt, "2026-10-25T05:00:00.000Z");
+  assert.ok(new Date(draft.eventEndAt) > new Date(draft.eventAt));
+});
+
+test("an end time cannot be supplied for an all-day event", () => {
+  assert.throws(() => parseManagerDraft({
+    title: "Birthday", eventDate: "2026-10-03", eventTime: "", endTime: "01:00",
+    location: "Seoul, South Korea", description: "",
+  }, "community"), /requires a Start Time/);
+});
+
+test("editing a linked event synchronizes its explicit native end time", async () => {
+  const calls = [];
+  const native = { edit: async (payload) => { calls.push(payload); } };
+  const client = { guilds: { cache: new Map([["g", { scheduledEvents: { cache: new Map([["native-edit", native]]) } }]]) } };
+  const event = {
+    guild_id: "g", discord_event_id: "native-edit", event_at: "2026-10-24T09:30:00.000Z",
+    event_end_at: "2026-10-24T12:30:00.000Z", title: "Updated concert", description: "Updated",
+  };
+  assert.equal(await syncNativeScheduledEvent(client, event), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].scheduledEndTime.toISOString(), event.event_end_at);
 });
 
 test("manager drafts resolve common worldwide city and country locations deterministically", () => {
