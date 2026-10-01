@@ -231,6 +231,16 @@ test("Youtiful timed drafts persist an explicit end time", () => {
   assert.equal(nativeEventEndTime(draft).toISOString(), draft.eventEndAt);
 });
 
+test("explicit end time survives scheduled event storage", () => {
+  const guildId = `end-time-storage-${Date.now()}`;
+  const id = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-community", title: "Stored event",
+    eventDate: "2026-10-24", eventAt: "2026-10-24T09:30:00.000Z", eventEndAt: "2026-10-24T12:30:00.000Z",
+    eventTimezone: "Asia/Tokyo", timezone: "Asia/Tokyo", calendarType: "community", category: "concert", createdBy: "admin",
+  });
+  assert.equal(store.getEvent(guildId, id).event_end_at, "2026-10-24T12:30:00.000Z");
+});
+
 test("blank end time retains the safe one-hour native default", () => {
   const draft = parseManagerDraft({
     title: "Seoul stream", eventDate: "2026-10-03", eventTime: "18:00", endTime: "",
