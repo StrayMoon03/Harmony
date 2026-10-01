@@ -64,6 +64,10 @@ const {
   handleEventSchedulerMessage,
   handleEventSchedulerInteraction,
   startEventScheduler,
+  handleGuildScheduledEventCreate,
+  handleGuildScheduledEventUpdate,
+  handleGuildScheduledEventDelete,
+  offerEventReminder,
 } = require("./services/eventSchedulerService");
 
 const commands = [
@@ -102,6 +106,7 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildScheduledEvents,
   ],
   partials: [Partials.Message, Partials.Channel],
 });
@@ -166,6 +171,15 @@ client.on("guildCreate", async (guild) => {
       error
     );
   }
+});
+
+client.on("guildScheduledEventCreate", (event) => handleGuildScheduledEventCreate(client, event).catch((error) => console.error("Scheduled event create sync failed:", error)));
+client.on("guildScheduledEventUpdate", (oldEvent, event) => handleGuildScheduledEventUpdate(client, oldEvent, event).catch((error) => console.error("Scheduled event update sync failed:", error)));
+client.on("guildScheduledEventDelete", (event) => handleGuildScheduledEventDelete(client, event).catch((error) => console.error("Scheduled event delete sync failed:", error)));
+client.on("guildScheduledEventUserAdd", (event, user) => offerEventReminder(client, event, user));
+client.on("guildScheduledEventUserRemove", (event, user) => {
+  const reminderStore = require("./stores/eventSchedulerStore");
+  reminderStore.cancelDiscordEventReminder(event.id, user.id);
 });
 
 async function getConfiguredGreetingChannel(guild, settings) {

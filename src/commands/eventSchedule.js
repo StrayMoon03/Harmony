@@ -74,6 +74,13 @@ data.addSubcommand((sub) => sub
   .setDescription("Install or refresh the private calendar Schedule Managers")
   .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
 
+data.addSubcommand((sub) => sub
+  .setName("event-titles")
+  .setDescription("List or add saved Youtiful Stays event titles")
+  .addStringOption((o) => o.setName("action").setDescription("Title action").setRequired(true).addChoices({ name: "List", value: "list" }, { name: "Add Title", value: "add" }, { name: "Rename Title", value: "rename" }, { name: "Remove Title", value: "remove" }))
+  .addStringOption((o) => o.setName("title").setDescription("Existing title").setMaxLength(100))
+  .addStringOption((o) => o.setName("new-title").setDescription("Replacement title for rename").setMaxLength(100)));
+
 function isAdmin(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -101,6 +108,23 @@ async function execute(interaction) {
       await interaction.editReply(panels.length
         ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
         : "No manager panels could be installed in that control channel.");
+    } catch (error) { await interaction.editReply(error.message); }
+    return;
+  }
+  if (action === "event-titles") {
+    try {
+      const titleAction = interaction.options.getString("action", true);
+      const title = interaction.options.getString("title");
+      const newTitle = interaction.options.getString("new-title");
+      if (titleAction === "add") store.addCalendarEventTitle(interaction.guildId, "community", title);
+      if (titleAction === "rename") {
+        if (!title || !newTitle || !store.renameCalendarEventTitle(interaction.guildId, "community", title, newTitle)) throw new Error("That saved title was not found.");
+      }
+      if (titleAction === "remove") {
+        if (!title || !store.removeCalendarEventTitle(interaction.guildId, "community", title)) throw new Error("That saved title was not found.");
+      }
+      const titles = store.ensureDefaultCalendarEventTitles(interaction.guildId, "community");
+      await interaction.editReply(`Youtiful Stays saved titles:\n${titles.map((item) => `• ${item.title}`).join("\n")}`);
     } catch (error) { await interaction.editReply(error.message); }
     return;
   }

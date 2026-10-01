@@ -294,12 +294,16 @@ function migrate(database) {
       calendar_type           TEXT NOT NULL DEFAULT 'community'
                               CHECK (calendar_type IN ('stray_kids', 'community')),
       event_at                TEXT,
+      event_end_at            TEXT,
       event_date              TEXT,
       event_timezone          TEXT,
       event_location          TEXT,
       description             TEXT,
       category                TEXT,
       member                  TEXT,
+      calendar_event_type     TEXT,
+      event_channel_id        TEXT,
+      discord_event_id        TEXT,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -353,6 +357,28 @@ function migrate(database) {
       updated_at      TEXT NOT NULL,
       PRIMARY KEY (guild_id, calendar_type)
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_event_titles (
+      guild_id       TEXT NOT NULL,
+      calendar_type  TEXT NOT NULL CHECK (calendar_type IN ('stray_kids', 'community')),
+      title          TEXT NOT NULL,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL,
+      PRIMARY KEY (guild_id, calendar_type, title)
+    );
+
+    CREATE TABLE IF NOT EXISTS discord_event_reminders (
+      guild_id TEXT NOT NULL,
+      discord_event_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      reminder_offset_seconds INTEGER NOT NULL,
+      remind_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (discord_event_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_discord_event_reminders_due
+      ON discord_event_reminders (status, remind_at);
   `);
 
   migrateSharesToGuildScope(database);
@@ -365,6 +391,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("event_at")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_at TEXT");
+  }
+  if (!scheduledEventColumns.has("event_end_at")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_end_at TEXT");
   }
   if (!scheduledEventColumns.has("event_date")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN event_date TEXT");
@@ -386,6 +415,15 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("all_day")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!scheduledEventColumns.has("calendar_event_type")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN calendar_event_type TEXT");
+  }
+  if (!scheduledEventColumns.has("event_channel_id")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN event_channel_id TEXT");
+  }
+  if (!scheduledEventColumns.has("discord_event_id")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN discord_event_id TEXT");
   }
 
   const settingColumns = new Set(

@@ -5,8 +5,66 @@ const {
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
+  buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS,
+  interestedStateSupport,
+  handleReminderInteraction,
+  nativeEventEndTime,
+  syncNativeScheduledEvent,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
+
+test("Youtiful Stays event types use the approved custom emoji set", () => {
+  assert.deepEqual(YOUTIFUL_EVENT_TYPES, ["kdrama", "chans_room", "skz_code", "chat_only", "concert_stream", "games", "birthday", "other"]);
+  assert.equal(YOUTIFUL_EVENT_TYPE_ICONS.kdrama, "<:Harmony_Kdramas:1555094992475791400>");
+  assert.equal(YOUTIFUL_EVENT_TYPE_ICONS.birthday, "<:Harmony_Birthdays:1555095112218972170>");
+  assert.deepEqual(Object.keys(YOUTIFUL_EVENT_TYPE_ICONS), YOUTIFUL_EVENT_TYPES);
+});
+
+test("Youtiful Stays calendar renders compact channel rows and native links", () => {
+  const [part] = buildYoutifulCalendarMessages("2026-10", [{
+    guild_id: "guild", calendar_event_type: "kdrama", event_date: "2026-10-03", all_day: 1,
+    title: "K-Drama With Us", description: "Watch together", event_channel_id: "123", discord_event_id: "456",
+  }], Date.parse("2026-10-01T00:00:00Z"));
+  const text = part.embeds[0].description;
+  assert.match(text, /Harmony_Kdramas/);
+  assert.match(text, /<#[0-9]+>/);
+  assert.match(text, /View Discord Event/);
+  assert.equal(part.embeds[0].title, "📅 YOUTIFUL STAYS • OCTOBER 2026");
+});
+
+test("Interested state uses Discord Scheduled Event subscriber capabilities", () => {
+  const support = interestedStateSupport();
+  assert.equal(support.supported, true);
+  assert.match(support.reason, /fetchSubscribers|UserAdd/i);
+});
+
+test("saved Youtiful Stays titles support add, rename, remove, defaults, and guild isolation", () => {
+  const first = `guild-title-${Date.now()}`;
+  const second = `${first}-other`;
+  assert.equal(store.ensureDefaultCalendarEventTitles(first, "community").length, 7);
+  assert.equal(store.ensureDefaultCalendarEventTitles(first, "community").length, 7);
+  store.addCalendarEventTitle(first, "community", "Fan Meeting");
+  assert.equal(store.renameCalendarEventTitle(first, "community", "Fan Meeting", "Stay Meeting"), true);
+  assert.equal(store.removeCalendarEventTitle(first, "community", "Stay Meeting"), true);
+  assert.equal(store.listCalendarEventTitles(second, "community").length, 0);
+  assert.throws(() => store.addCalendarEventTitle(first, "community", "Other / Custom"));
+});
+
+test("reminder selection persists and removal cancels it", async () => {
+  const id = `native-${Date.now()}`;
+  const userId = `user-${Date.now()}`;
+  const interaction = {
+    customId: `harmony-reminder:${id}:3600`, user: { id: userId },
+    client: { guilds: { cache: new Map([
+      ["g", { scheduledEvents: { cache: new Map([[id, { scheduledStartAt: new Date(Date.now() + 7200000), guildId: "g" }]]) } }],
+    ]) } },
+    update: async (payload) => { interaction.payload = payload; },
+  };
+  await handleReminderInteraction(interaction);
+  assert.equal(store.dueDiscordEventReminders(new Date(Date.now() + 7200000).toISOString(), 100).some((row) => row.discord_event_id === id), true);
+  assert.equal(store.cancelDiscordEventReminder(id, userId), true);
+  assert.equal(store.dueDiscordEventReminders(new Date(Date.now() + 7200000).toISOString(), 100).some((row) => row.discord_event_id === id), false);
+});
 
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
@@ -161,6 +219,65 @@ test("manager drafts resolve locations and separate description plus link", () =
   assert.equal(allDayWithoutLocation.eventTimezone, null);
   assert.equal(allDayWithoutLocation.eventLocation, "");
   assert.throws(() => parseManagerDraft({ title: "Timed", eventDate: "2099-01-01", eventTime: "18:00", location: "", description: "" }, "community"), /resolve/);
+});
+
+test("Youtiful timed drafts persist an explicit end time", () => {
+  const draft = parseManagerDraft({
+    title: "Fukuoka concert", eventDate: "2026-10-24", eventTime: "18:30", endTime: "21:30",
+    location: "Fukuoka, Japan", description: "",
+  }, "community");
+  assert.equal(draft.eventAt, "2026-10-24T09:30:00.000Z");
+  assert.equal(draft.eventEndAt, "2026-10-24T12:30:00.000Z");
+  assert.equal(nativeEventEndTime(draft).toISOString(), draft.eventEndAt);
+});
+
+test("explicit end time survives scheduled event storage", () => {
+  const guildId = `end-time-storage-${Date.now()}`;
+  const id = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-community", title: "Stored event",
+    eventDate: "2026-10-24", eventAt: "2026-10-24T09:30:00.000Z", eventEndAt: "2026-10-24T12:30:00.000Z",
+    eventTimezone: "Asia/Tokyo", timezone: "Asia/Tokyo", calendarType: "community", category: "concert", createdBy: "admin",
+  });
+  assert.equal(store.getEvent(guildId, id).event_end_at, "2026-10-24T12:30:00.000Z");
+});
+
+test("blank end time retains the safe one-hour native default", () => {
+  const draft = parseManagerDraft({
+    title: "Seoul stream", eventDate: "2026-10-03", eventTime: "18:00", endTime: "",
+    location: "Seoul, South Korea", description: "",
+  }, "community");
+  assert.equal(draft.eventEndAt, null);
+  assert.equal(nativeEventEndTime(draft).toISOString(), "2026-10-03T10:00:00.000Z");
+});
+
+test("end times crossing midnight use the following local calendar date", () => {
+  const draft = parseManagerDraft({
+    title: "Late event", eventDate: "2026-10-24", eventTime: "23:30", endTime: "01:00",
+    location: "New York, USA", description: "",
+  }, "community");
+  assert.equal(draft.eventAt, "2026-10-25T03:30:00.000Z");
+  assert.equal(draft.eventEndAt, "2026-10-25T05:00:00.000Z");
+  assert.ok(new Date(draft.eventEndAt) > new Date(draft.eventAt));
+});
+
+test("an end time cannot be supplied for an all-day event", () => {
+  assert.throws(() => parseManagerDraft({
+    title: "Birthday", eventDate: "2026-10-03", eventTime: "", endTime: "01:00",
+    location: "Seoul, South Korea", description: "",
+  }, "community"), /requires a Start Time/);
+});
+
+test("editing a linked event synchronizes its explicit native end time", async () => {
+  const calls = [];
+  const native = { edit: async (payload) => { calls.push(payload); } };
+  const client = { guilds: { cache: new Map([["g", { scheduledEvents: { cache: new Map([["native-edit", native]]) } }]]) } };
+  const event = {
+    guild_id: "g", discord_event_id: "native-edit", event_at: "2026-10-24T09:30:00.000Z",
+    event_end_at: "2026-10-24T12:30:00.000Z", title: "Updated concert", description: "Updated",
+  };
+  assert.equal(await syncNativeScheduledEvent(client, event), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].scheduledEndTime.toISOString(), event.event_end_at);
 });
 
 test("manager drafts resolve common worldwide city and country locations deterministically", () => {

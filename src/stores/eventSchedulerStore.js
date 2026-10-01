@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null }) {
   const db = getDb();
   const now = new Date().toISOString();
   // The legacy announcement column is NOT NULL, but calendar-only all-day
@@ -12,9 +12,9 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_date, event_timezone, event_location, description, category, member, all_day, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, createdBy, now);
+        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -32,7 +32,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
-function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy }) {
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null }) {
   return createEvent({
     guildId,
     sourceChannelId: calendarChannelId || "",
@@ -41,6 +41,7 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     link: link || "",
     timezone,
     eventAt,
+    eventEndAt,
     eventDate,
     eventTimezone,
     eventLocation,
@@ -49,9 +50,54 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     member,
     allDay,
     description,
+    calendarEventType,
+    eventChannelId,
+    discordEventId,
     createdBy,
     announcements: [],
   });
+}
+
+const YOUTIFUL_EVENT_TITLES = ["K-Drama With Us", "Bang Chan & Chaos", "Chan's Room", "SKZ CODE", "Concert Stream", "Games", "Chat Only"];
+function listCalendarEventTitles(guildId, calendarType = "community") {
+  return getDb().prepare("SELECT * FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? ORDER BY title").all(guildId, calendarType);
+}
+function ensureDefaultCalendarEventTitles(guildId, calendarType = "community") {
+  const now = new Date().toISOString();
+  if (getDb().prepare("SELECT 1 FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? LIMIT 1").get(guildId, calendarType)) return listCalendarEventTitles(guildId, calendarType);
+  const insert = getDb().prepare("INSERT OR IGNORE INTO calendar_event_titles (guild_id, calendar_type, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)");
+  for (const title of calendarType === "community" ? YOUTIFUL_EVENT_TITLES : []) insert.run(guildId, calendarType, title, now, now);
+  return listCalendarEventTitles(guildId, calendarType);
+}
+function addCalendarEventTitle(guildId, calendarType, title) {
+  const clean = String(title || "").trim().slice(0, 100);
+  if (!clean) throw new Error("A title is required.");
+  if (clean.toLowerCase() === "other / custom") throw new Error("Other / Custom is a one-off option, not a saved recurring title.");
+  const now = new Date().toISOString();
+  getDb().prepare("INSERT OR IGNORE INTO calendar_event_titles (guild_id, calendar_type, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(guildId, calendarType, clean, now, now);
+  return listCalendarEventTitles(guildId, calendarType);
+}
+function renameCalendarEventTitle(guildId, calendarType, oldTitle, newTitle) {
+  const clean = String(newTitle || "").trim().slice(0, 100);
+  if (!clean || clean.toLowerCase() === "other / custom") throw new Error("Choose a valid recurring title.");
+  const result = getDb().prepare("UPDATE calendar_event_titles SET title = ?, updated_at = ? WHERE guild_id = ? AND calendar_type = ? AND title = ?").run(clean, new Date().toISOString(), guildId, calendarType, oldTitle);
+  return result.changes > 0;
+}
+function removeCalendarEventTitle(guildId, calendarType, title) {
+  return getDb().prepare("DELETE FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? AND title = ?").run(guildId, calendarType, title).changes > 0;
+}
+function saveDiscordEventReminder(guildId, discordEventId, userId, offsetSeconds, remindAt) {
+  getDb().prepare(`INSERT INTO discord_event_reminders (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(discord_event_id, user_id) DO UPDATE SET reminder_offset_seconds = excluded.reminder_offset_seconds, remind_at = excluded.remind_at, status = 'pending'`).run(guildId, discordEventId, userId, offsetSeconds, remindAt, new Date().toISOString());
+}
+function cancelDiscordEventReminder(discordEventId, userId) {
+  return getDb().prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId).changes > 0;
+}
+function dueDiscordEventReminders(nowIso, limit = 50) {
+  return getDb().prepare("SELECT * FROM discord_event_reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT ?").all(nowIso, limit);
+}
+function markDiscordEventReminderSent(discordEventId, userId) {
+  getDb().prepare("UPDATE discord_event_reminders SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
 }
 
 function getEvent(guildId, eventId) {
@@ -63,6 +109,12 @@ function getEvent(guildId, eventId) {
     WHERE e.guild_id = ? AND e.id = ? AND e.cancelled_at IS NULL
     GROUP BY e.id
   `).get(guildId, eventId);
+}
+function getEventByDiscordId(guildId, discordEventId) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? AND cancelled_at IS NULL").get(guildId, discordEventId) || null;
+}
+function listUnlinkedCommunityEvents(guildId) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND calendar_type = 'community' AND discord_event_id IS NULL AND cancelled_at IS NULL ORDER BY event_date, id").all(guildId);
 }
 
 function listAnnouncements(eventId) {
@@ -196,7 +248,7 @@ function cancelEvent(guildId, eventId, cancelledBy) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link"];
+  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");
@@ -259,6 +311,8 @@ module.exports = {
   createEvent,
   createCalendarEvent,
   getEvent,
+  getEventByDiscordId,
+  listUnlinkedCommunityEvents,
   listAnnouncements,
   addAnnouncement,
   listEvents,
@@ -280,4 +334,14 @@ module.exports = {
   removePublishedCalendarPart,
   removePublishedCalendars,
   hasPublishedCalendar,
+  listCalendarEventTitles,
+  ensureDefaultCalendarEventTitles,
+  addCalendarEventTitle,
+  YOUTIFUL_EVENT_TITLES,
+  renameCalendarEventTitle,
+  removeCalendarEventTitle,
+  saveDiscordEventReminder,
+  cancelDiscordEventReminder,
+  dueDiscordEventReminders,
+  markDiscordEventReminderSent,
 };
