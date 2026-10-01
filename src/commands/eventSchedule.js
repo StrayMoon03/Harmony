@@ -74,6 +74,11 @@ data.addSubcommand((sub) => sub
   .setDescription("Install or refresh the private calendar Schedule Managers")
   .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
 
+data.addSubcommand((sub) => sub
+  .setName("event-titles")
+  .setDescription("List or add saved Youtiful Stays event titles")
+  .addStringOption((o) => o.setName("add").setDescription("Add a saved title").setMaxLength(100)));
+
 function isAdmin(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -102,6 +107,13 @@ async function execute(interaction) {
         ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
         : "No manager panels could be installed in that control channel.");
     } catch (error) { await interaction.editReply(error.message); }
+    return;
+  }
+  if (action === "event-titles") {
+    const added = interaction.options.getString("add");
+    if (added) store.addCalendarEventTitle(interaction.guildId, "community", added);
+    const titles = store.ensureDefaultCalendarEventTitles(interaction.guildId, "community");
+    await interaction.editReply(`Youtiful Stays saved titles:\n${titles.map((item) => `• ${item.title}`).join("\n")}`);
     return;
   }
   if (action === "list") {

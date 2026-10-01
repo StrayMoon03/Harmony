@@ -5,8 +5,35 @@ const {
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
+  buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS,
+  interestedStateSupport,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
+
+test("Youtiful Stays event types use the approved custom emoji set", () => {
+  assert.deepEqual(YOUTIFUL_EVENT_TYPES, ["kdrama", "chans_room", "skz_code", "chat_only", "concert_stream", "games", "birthday", "other"]);
+  assert.equal(YOUTIFUL_EVENT_TYPE_ICONS.kdrama, "<:Harmony_Kdramas:1555094992475791400>");
+  assert.equal(YOUTIFUL_EVENT_TYPE_ICONS.birthday, "<:Harmony_Birthdays:1555095112218972170>");
+  assert.deepEqual(Object.keys(YOUTIFUL_EVENT_TYPE_ICONS), YOUTIFUL_EVENT_TYPES);
+});
+
+test("Youtiful Stays calendar renders compact channel rows and native links", () => {
+  const [part] = buildYoutifulCalendarMessages("2026-10", [{
+    guild_id: "guild", calendar_event_type: "kdrama", event_date: "2026-10-03", all_day: 1,
+    title: "K-Drama With Us", description: "Watch together", event_channel_id: "123", discord_event_id: "456",
+  }], Date.parse("2026-10-01T00:00:00Z"));
+  const text = part.embeds[0].description;
+  assert.match(text, /Harmony_Kdramas/);
+  assert.match(text, /<#[0-9]+>/);
+  assert.match(text, /View Discord Event/);
+  assert.equal(part.embeds[0].title, "📅 YOUTIFUL STAYS • OCTOBER 2026");
+});
+
+test("Interested state uses Discord Scheduled Event subscriber capabilities", () => {
+  const support = interestedStateSupport();
+  assert.equal(support.supported, true);
+  assert.match(support.reason, /fetchSubscribers|UserAdd/i);
+});
 
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
