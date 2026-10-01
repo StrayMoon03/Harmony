@@ -252,7 +252,7 @@ function youtifulEditFields(event = {}) {
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
-    { id: "event-end-time", label: "End time HH:MM (optional)", maxLength: 5, value: eventEndLocalTime(event) },
+    { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
 }
@@ -875,7 +875,7 @@ async function handleManagerInteraction(interaction) {
       ...(selected === "other" ? [{ id: "title", label: "Custom event title", required: true, maxLength: 120 }] : []),
       { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10 },
       { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5 },
-      { id: "event-end-time", label: "End time HH:MM (optional)", maxLength: 5 },
+      { id: "location", label: "Location (city, country)", maxLength: 100 },
       { id: "description", label: "Description (optional)", maxLength: 1000, paragraph: true },
     ];
     await interaction.showModal(managerModal("harmony-manager:community:ysdetails", "Add Youtiful Stays event", fields));
@@ -886,7 +886,7 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
     try {
       const title = draft.title || interaction.fields.getTextInputValue("title");
-      const parsed = parseManagerDraft({ title, eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), endTime: interaction.fields.getTextInputValue("event-end-time"), location: "", description: interaction.fields.getTextInputValue("description") }, calendarType);
+      const parsed = parseManagerDraft({ title, eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: interaction.fields.getTextInputValue("location"), description: interaction.fields.getTextInputValue("description") }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, ...parsed, title });
       await interaction.reply({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu(), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
@@ -1000,8 +1000,7 @@ async function handleManagerInteraction(interaction) {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
-        location: calendarType === "community" ? (existing.event_location || "") : interaction.fields.getTextInputValue("location"),
-        endTime: calendarType === "community" ? interaction.fields.getTextInputValue("event-end-time") : "",
+        location: interaction.fields.getTextInputValue("location"),
         description: interaction.fields.getTextInputValue("description"),
         fallbackTimezone: existing.event_timezone || existing.timezone,
       }, calendarType);

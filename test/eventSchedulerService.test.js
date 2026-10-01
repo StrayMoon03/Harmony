@@ -727,3 +727,41 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   assert.match(cancelOption.label, /Bang Chan's 29th Birthday/);
   assert.doesNotMatch(cancelOption.label, /#\d+/);
 });
+
+
+test("Youtiful create and edit modals expose Location instead of End Time", async () => {
+  const guildId = `youtiful-location-ui-${Date.now()}`;
+  const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["kdrama"] });
+  await handleEventSchedulerInteraction(type);
+  const title = fakeInteraction({ customId: "harmony-manager:community:ystitle", kind: "select", guildId, values: ["title:K-Drama With Us"] });
+  await handleEventSchedulerInteraction(title);
+  const addModal = title.responses[0].modal.toJSON();
+  const addIds = addModal.components.map((row) => row.components[0].custom_id);
+  assert.deepEqual(addIds, ["event-date", "event-time", "location", "description"]);
+  assert.equal(addIds.includes("event-end-time"), false);
+
+  const eventDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar-community",
+    title: "K-Drama With Us",
+    eventDate,
+    allDay: true,
+    eventTimezone: null,
+    timezone: null,
+    calendarType: "community",
+    category: "kdrama",
+    calendarEventType: "kdrama",
+    createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  const editModal = select.responses[0].modal.toJSON();
+  const editIds = editModal.components.map((row) => row.components[0].custom_id);
+  assert.deepEqual(editIds, ["title", "event-date", "event-time", "location", "description"]);
+  assert.equal(editIds.includes("event-end-time"), false);
+});
