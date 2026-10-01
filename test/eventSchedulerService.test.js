@@ -279,9 +279,15 @@ test("add event follows category-first interaction flow and saves without a seco
     customId: "harmony-manager:stray_kids:addcategory:new", kind: "select", guildId, values: ["content"],
   });
   await handleEventSchedulerInteraction(category);
-  assert.equal(category.responses[0].type, "modal");
-  assert.equal(category.responses[0].modal.toJSON().custom_id, "harmony-manager:stray_kids:addmodal");
-  assert.equal(category.responses[0].modal.toJSON().components.length, 5);
+  assert.equal(category.responses[0].type, "update");
+  assert.match(category.responses[0].payload.content, /optional Stray Kids member/);
+  const member = fakeInteraction({
+    customId: "harmony-manager:stray_kids:addmember:new", kind: "select", guildId, values: ["none"],
+  });
+  await handleEventSchedulerInteraction(member);
+  assert.equal(member.responses[0].type, "modal");
+  assert.equal(member.responses[0].modal.toJSON().custom_id, "harmony-manager:stray_kids:addmodal");
+  assert.equal(member.responses[0].modal.toJSON().components.length, 5);
 
   const details = fakeInteraction({
     customId: "harmony-manager:stray_kids:addmodal", kind: "modal", guildId,
@@ -302,7 +308,31 @@ test("add event follows category-first interaction flow and saves without a seco
   assert.equal(saved.event_location, "Paris, France");
   assert.equal(saved.all_day, 1);
   assert.equal(saved.event_at, null);
+  assert.equal(saved.member, null);
 
+});
+
+test("Stray Kids member selection persists and renders exact Harmony emoji, while community stays undecorated", () => {
+  const guildId = `member-emoji-${Date.now()}`;
+  const members = [
+    ["bang_chan", "<:Harmony_Wolfchan:1555008944127221861>"],
+    ["lee_know", "<:Harmony_LeeBit:1555012112571433074>"],
+    ["changbin", "<:Harmony_Dwaekki:1555012505103892590>"],
+    ["hyunjin", "<:Harmony_Jiniret:1555012684510924800>"],
+    ["han", "<:Harmony_Qoukka:1555012780732588062>"],
+    ["felix", "<:Harmony_bbokari:1555014305194184834>"],
+    ["seungmin", "<:Harmony_puppym:1555013392098525215>"],
+    ["i_n", "<:Harmony_Foxlny:1555014818983977101>"],
+  ];
+  for (const [member, emoji] of members) {
+    const description = buildCalendarMessages("stray_kids", "2099-01", [{ title: "Event", category: "content", member, event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
+    assert.match(description, new RegExp(`${emoji} 🎬 \\*\\*Event\\*\\*`));
+  }
+  const ot8 = buildCalendarMessages("stray_kids", "2099-01", [{ title: "OT8", category: "content", member: null, event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
+  assert.match(ot8, /🎬 \*\*OT8\*\*/);
+  assert.doesNotMatch(ot8, /Harmony_/);
+  const community = buildCalendarMessages("community", "2099-01", [{ title: "Community", category: "content", member: "felix", event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
+  assert.doesNotMatch(community, /Harmony_bbokari/);
 });
 
 test("edit event keeps friendly category changes and editable links", async () => {
@@ -340,6 +370,11 @@ test("edit event keeps friendly category changes and editable links", async () =
     },
   });
   await handleEventSchedulerInteraction(editDetails);
+  // Modal submission itself persists the editable fields; category/member are
+  // metadata follow-ups and must not gate the core edit.
+  const immediatelySaved = store.getEvent(guildId, eventId);
+  assert.equal(immediatelySaved.title, "Updated Concert");
+  assert.equal(immediatelySaved.event_date, "2099-08-14");
   const editCategoryMenu = editDetails.responses[0].payload.components[0].toJSON().components[0];
   assert.ok(editCategoryMenu.options.some((option) => option.label === "🎤 Concert" && option.default));
   assert.equal(editCategoryMenu.options.some((option) => option.label === "concert"), false);
@@ -349,6 +384,11 @@ test("edit event keeps friendly category changes and editable links", async () =
   });
   await handleEventSchedulerInteraction(changedCategory);
   assert.equal(changedCategory.responses[0].type, "update");
+  const memberChange = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmember:${eventId}`, kind: "select", guildId, values: ["felix"],
+  });
+  await handleEventSchedulerInteraction(memberChange);
+  assert.equal(memberChange.responses[0].type, "update");
   const updated = store.getEvent(guildId, eventId);
   assert.equal(updated.category, "content");
   assert.equal(updated.title, "Updated Concert");
@@ -359,6 +399,7 @@ test("edit event keeps friendly category changes and editable links", async () =
   assert.equal(updated.all_day, 0);
   assert.equal(updated.link, "https://example.com/new");
   assert.equal(updated.description, "Updated details");
+  assert.equal(updated.member, "felix");
 
   const reopened = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId });
   await handleEventSchedulerInteraction(reopened);
@@ -370,6 +411,24 @@ test("edit event keeps friendly category changes and editable links", async () =
   assert.equal(reopenedModal.components[2].components[0].value, "18:30");
   assert.equal(reopenedModal.components[3].components[0].value, "Tokyo, Japan");
   assert.match(reopenedModal.components[4].components[0].value, /https:\/\/example\.com\/new/);
+
+  const clearMemberModal = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
+    fields: {
+      title: "Updated Concert", "event-date": "2099-08-14", "event-time": "18:30",
+      location: "Tokyo, Japan", description: "Updated details\nhttps://example.com/new",
+    },
+  });
+  await handleEventSchedulerInteraction(clearMemberModal);
+  const keepCategory = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editcategory:${eventId}`, kind: "select", guildId, values: ["content"],
+  });
+  await handleEventSchedulerInteraction(keepCategory);
+  const clearMember = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmember:${eventId}`, kind: "select", guildId, values: ["none"],
+  });
+  await handleEventSchedulerInteraction(clearMember);
+  assert.equal(store.getEvent(guildId, eventId).member, null);
 });
 
 function fakeChannel(id) {
