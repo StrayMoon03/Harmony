@@ -12,6 +12,7 @@ const {
   ChannelType,
   GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel,
+  GuildScheduledEventStatus,
 } = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
 const birthdayStore = require("../stores/birthdayStore");
@@ -551,6 +552,20 @@ async function createNativeScheduledEvent(guild, draft, channelId) {
   });
 }
 
+async function syncNativeScheduledEvent(client, event) {
+  if (!event?.discord_event_id || !event.event_at) return false;
+  const guild = client.guilds.cache.get(event.guild_id) || await client.guilds.fetch(event.guild_id).catch(() => null);
+  const native = guild?.scheduledEvents?.cache?.get(event.discord_event_id) || await guild?.scheduledEvents?.fetch(event.discord_event_id).catch(() => null);
+  if (!native) return false;
+  await native.edit({
+    name: event.title,
+    scheduledStartTime: new Date(event.event_at),
+    scheduledEndTime: new Date(new Date(event.event_at).getTime() + 60 * 60 * 1000),
+    description: event.description || undefined,
+  });
+  return true;
+}
+
 function scheduledEventLink(event) {
   return event?.guildId && event?.id ? `https://discord.com/events/${event.guildId}/${event.id}` : null;
 }
@@ -865,6 +880,7 @@ async function handleManagerInteraction(interaction) {
         link: draft.link, description: draft.description, all_day: draft.allDay ? 1 : 0,
         member: existing.member || null,
       });
+      if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
@@ -926,6 +942,10 @@ async function handleManagerInteraction(interaction) {
   if (action === "cancelconfirm" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     const removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
+    if (removed && event?.discord_event_id) {
+      const native = interaction.guild?.scheduledEvents?.cache?.get(event.discord_event_id) || await interaction.guild?.scheduledEvents?.fetch(event.discord_event_id).catch(() => null);
+      if (native) await native.edit({ status: GuildScheduledEventStatus.Canceled }).catch((error) => console.error("Linked Discord event cancellation failed:", error));
+    }
     if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
     await interaction.update({ content: removed ? `Cancelled calendar event #${eventId}.` : "That event is no longer active.", components: [] });
     return;
