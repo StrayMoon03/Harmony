@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventDate, eventTimezone, eventLocation, calendarType, category, allDay = false, description, createdBy, announcements }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements }) {
   const db = getDb();
   const now = new Date().toISOString();
   // The legacy announcement column is NOT NULL, but calendar-only all-day
@@ -12,9 +12,9 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_date, event_timezone, event_location, description, category, all_day, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, allDay ? 1 : 0, createdBy, now);
+        link, timezone, calendar_type, event_at, event_date, event_timezone, event_location, description, category, member, all_day, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -32,7 +32,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
-function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, allDay = false, description = null, createdBy }) {
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy }) {
   return createEvent({
     guildId,
     sourceChannelId: calendarChannelId || "",
@@ -46,6 +46,7 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     eventLocation,
     calendarType,
     category,
+    member,
     allDay,
     description,
     createdBy,
@@ -195,7 +196,7 @@ function cancelEvent(guildId, eventId, cancelledBy) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "all_day", "link"];
+  const allowed = ["title", "calendar_type", "event_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");

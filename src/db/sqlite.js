@@ -299,6 +299,7 @@ function migrate(database) {
       event_location          TEXT,
       description             TEXT,
       category                TEXT,
+      member                  TEXT,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -379,6 +380,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("category")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN category TEXT");
+  }
+  if (!scheduledEventColumns.has("member")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN member TEXT");
   }
   if (!scheduledEventColumns.has("all_day")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0");

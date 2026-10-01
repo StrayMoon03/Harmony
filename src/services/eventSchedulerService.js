@@ -32,6 +32,18 @@ const CALENDAR_CATEGORY_LABELS = {
   shopping: "Shopping / Pop-Up",
   other: "Other",
 };
+const SKZOO_MEMBER_OPTIONS = [
+  { value: "none", label: "None / OT8", emoji: "" },
+  { value: "bang_chan", label: "Bang Chan", emoji: "<:Harmony_Wolfchan:1555008944127221861>" },
+  { value: "lee_know", label: "Lee Know", emoji: "<:Harmony_LeeBit:1555012112571433074>" },
+  { value: "changbin", label: "Changbin", emoji: "<:Harmony_Dwaekki:1555012505103892590>" },
+  { value: "hyunjin", label: "Hyunjin", emoji: "<:Harmony_Jiniret:1555012684510924800>" },
+  { value: "han", label: "Han", emoji: "<:Harmony_Qoukka:1555012780732588062>" },
+  { value: "felix", label: "Felix", emoji: "<:Harmony_bbokari:1555014305194184834>" },
+  { value: "seungmin", label: "Seungmin", emoji: "<:Harmony_puppym:1555013392098525215>" },
+  { value: "i_n", label: "I.N", emoji: "<:Harmony_Foxlny:1555014818983977101>" },
+];
+const SKZOO_MEMBER_EMOJIS = Object.fromEntries(SKZOO_MEMBER_OPTIONS.map((option) => [option.value, option.emoji]).filter(([, emoji]) => emoji));
 
 const MANAGER_TYPES = ["stray_kids", "community"];
 
@@ -194,6 +206,16 @@ function categoryMenu(calendarType, action, eventId = "new", selected = "other")
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
+function memberMenu(calendarType, action, eventId = "new", selected = null) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:${calendarType}:${action}:${eventId}`)
+    .setPlaceholder("Choose a Stray Kids member (optional)")
+    .addOptions(SKZOO_MEMBER_OPTIONS.map((option) => ({
+      label: option.label, value: option.value, default: (selected || "none") === option.value,
+    })));
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
 const managerDrafts = new Map();
 
 function draftKey(interaction, calendarType, eventId = "new") {
@@ -272,14 +294,16 @@ function allDayDateHeading(date) {
   }).format(new Date(`${date}T00:00:00Z`));
 }
 
-function eventCalendarBlock(event) {
+function eventCalendarBlock(event, calendarType) {
   const date = event.event_date || (event.event_at || "").slice(0, 10);
   const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
   const allDay = !timestamp;
   const dateLine = timestamp ? `<t:${timestamp}:D>` : allDayDateHeading(date);
   const timePrefix = timestamp ? `<t:${timestamp}:t> • ` : "";
   const icon = CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other;
-  const lines = [dateLine, `${timePrefix}${icon} **${event.title}**${allDay ? " • All Day" : ""}`];
+  const memberEmoji = calendarType === "stray_kids" ? (SKZOO_MEMBER_EMOJIS[event.member] || "") : "";
+  const eventPrefix = memberEmoji ? `${memberEmoji} ` : "";
+  const lines = [dateLine, `${timePrefix}${eventPrefix}${icon} **${event.title}**${allDay ? " • All Day" : ""}`];
   if (event.description) lines.push(event.description);
   if (event.event_location) lines.push(`📍 ${event.event_location}`);
   if (event.link) lines.push(`[Open event link](${event.link})`);
@@ -315,7 +339,7 @@ function splitCalendarDescription(blocks, header) {
 function buildCalendarMessages(calendarType, monthKey, events, now = Date.now()) {
   const title = calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
   const header = "Monthly Schedule";
-  const blocks = events.length ? events.map(eventCalendarBlock) : ["No events scheduled."];
+  const blocks = events.length ? events.map((event) => eventCalendarBlock(event, calendarType)) : ["No events scheduled."];
   const descriptions = splitCalendarDescription(blocks, header);
   const footer = `Times display in your local timezone • Last updated <t:${Math.floor(now / 1000)}:R>`;
   return descriptions.map((description) => ({
@@ -374,6 +398,11 @@ async function refreshPublishedCalendar(client, guildId, calendarType, eventDate
   if (!store.hasPublishedCalendar(guildId, calendarType, monthKey)) return false;
   await publishMonthlyCalendar(client, guildId, calendarType, monthKey);
   return true;
+}
+
+async function refreshEditedMonths(client, guildId, calendarType, oldDate, newDate) {
+  const months = [...new Set([oldDate, newDate].map(monthKeyFromDate).filter(Boolean))];
+  for (const month of months) await refreshPublishedCalendar(client, guildId, calendarType, month);
 }
 
 function renderEventControls(guildId, eventId) {
@@ -496,6 +525,17 @@ async function handleManagerInteraction(interaction) {
   }
   if (action === "addcategory" && interaction.isStringSelectMenu()) {
     managerDrafts.set(draftKey(interaction, calendarType), { category: interaction.values[0] });
+    if (calendarType === "stray_kids") {
+      await interaction.update({ content: "Choose an optional Stray Kids member.", components: memberMenu(calendarType, "addmember") });
+    } else {
+      await interaction.showModal(managerModal(`harmony-manager:${calendarType}:addmodal`, "Add calendar event", managerFields()));
+    }
+    return;
+  }
+  if (action === "addmember" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
+    managerDrafts.set(draftKey(interaction, calendarType), { ...draft, member: interaction.values[0] === "none" ? null : interaction.values[0] });
     await interaction.showModal(managerModal(`harmony-manager:${calendarType}:addmodal`, "Add calendar event", managerFields()));
     return;
   }
@@ -516,7 +556,7 @@ async function handleManagerInteraction(interaction) {
       const id = store.createCalendarEvent({
         guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link,
         timezone: draft.timezone, eventAt: draft.eventAt, eventDate: draft.eventDate,
-        eventTimezone: draft.eventTimezone, eventLocation: draft.eventLocation, calendarType, category: categoryDraft.category,
+        eventTimezone: draft.eventTimezone, eventLocation: draft.eventLocation, calendarType, category: categoryDraft.category, member: categoryDraft.member || null,
         allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id,
       });
       managerDrafts.delete(draftKey(interaction, calendarType));
@@ -565,6 +605,15 @@ async function handleManagerInteraction(interaction) {
       }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
       await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
+      // Persist all modal fields immediately. The category/member controls are
+      // follow-up metadata, not a gate that can silently discard the edit.
+      const saved = store.updateEvent(interaction.guildId, Number(eventId), {
+        title: draft.title, event_date: draft.eventDate, event_at: draft.eventAt,
+        event_timezone: draft.eventTimezone, event_location: draft.eventLocation, timezone: draft.timezone,
+        link: draft.link, description: draft.description, all_day: draft.allDay ? 1 : 0,
+        member: existing.member || null,
+      });
+      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
   }
@@ -572,15 +621,25 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
-    const updated = store.updateEvent(interaction.guildId, Number(eventId), {
-      title: draft.title, event_date: draft.eventDate, event_at: draft.eventAt,
-      event_timezone: draft.eventTimezone, event_location: draft.eventLocation, timezone: draft.timezone, link: draft.link,
-      description: draft.description,
-      category: interaction.values[0], all_day: draft.allDay ? 1 : 0,
-    });
+    const updated = store.updateEvent(interaction.guildId, Number(eventId), { category: interaction.values[0] });
+    if (calendarType === "stray_kids") {
+      managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, existing, member: updated.member || null });
+      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
+      await interaction.update({ content: "Choose an optional Stray Kids member.", components: memberMenu(calendarType, "editmember", eventId, updated.member) });
+    } else {
+      managerDrafts.delete(draftKey(interaction, calendarType, eventId));
+      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
+      await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
+    }
+    return;
+  }
+  if (action === "editmember" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
+    const updated = store.updateEvent(interaction.guildId, Number(eventId), { member: interaction.values[0] === "none" ? null : interaction.values[0] });
     managerDrafts.delete(draftKey(interaction, calendarType, eventId));
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, existing.event_date).catch(() => {});
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch(() => {});
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after member edit failed:", refreshError));
     await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
     return;
   }
@@ -855,6 +914,8 @@ module.exports = {
   startEventScheduler,
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,
+  SKZOO_MEMBER_OPTIONS,
+  SKZOO_MEMBER_EMOJIS,
   buildCalendarMessages,
   publishMonthlyCalendar,
   refreshPublishedCalendar,
