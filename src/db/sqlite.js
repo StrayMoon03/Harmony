@@ -304,6 +304,13 @@ function migrate(database) {
       calendar_event_type     TEXT,
       event_channel_id        TEXT,
       discord_event_id        TEXT,
+      recurrence_series_id    TEXT,
+      recurrence_rule        TEXT,
+      recurrence_index        INTEGER,
+      recurrence_end_date     TEXT,
+      recurrence_end_count    INTEGER,
+      recurrence_exception    INTEGER NOT NULL DEFAULT 0,
+      recurrence_native_enabled INTEGER NOT NULL DEFAULT 0,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -424,6 +431,27 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("discord_event_id")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN discord_event_id TEXT");
+  }
+  if (!scheduledEventColumns.has("recurrence_series_id")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_series_id TEXT");
+  }
+  if (!scheduledEventColumns.has("recurrence_rule")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_rule TEXT");
+  }
+  if (!scheduledEventColumns.has("recurrence_index")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_index INTEGER");
+  }
+  if (!scheduledEventColumns.has("recurrence_end_date")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_end_date TEXT");
+  }
+  if (!scheduledEventColumns.has("recurrence_end_count")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_end_count INTEGER");
+  }
+  if (!scheduledEventColumns.has("recurrence_exception")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_exception INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!scheduledEventColumns.has("recurrence_native_enabled")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_native_enabled INTEGER NOT NULL DEFAULT 0");
   }
 
   const settingColumns = new Set(

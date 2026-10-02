@@ -7,12 +7,14 @@ const {
   managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS, YOUTIFUL_TIMEZONE_OPTIONS,
+  applyRecurringChanges,
   interestedStateSupport,
   handleReminderInteraction,
   nativeEventEndTime,
   syncNativeScheduledEvent,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
+const { normalizeRecurrenceRule, generateRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
 
 test("Youtiful Stays event types use the approved custom emoji set", () => {
   assert.deepEqual(YOUTIFUL_EVENT_TYPES, ["kdrama", "chans_room", "skz_code", "chat_only", "concert_stream", "games", "birthday", "other"]);
@@ -783,6 +785,24 @@ test("Youtiful timezone choices store IANA zones and enforce timed/all-day rules
   assert.equal(allDay.eventTimezone, null);
 });
 
+test("Youtiful recurrence rules generate bounded occurrences with DST-safe wall-clock times", () => {
+  const weekly = normalizeRecurrenceRule({ type: "weekly", endDate: "2026-11-13" }, "2026-10-02");
+  const weeklyOccurrences = generateRecurringOccurrences({ startDate: "2026-10-02", startTime: "20:00", timezone: "America/New_York", rule: weekly, localToUtc });
+  assert.deepEqual(weeklyOccurrences.map((item) => item.eventDate), ["2026-10-02", "2026-10-09", "2026-10-16", "2026-10-23", "2026-10-30", "2026-11-06", "2026-11-13"]);
+  assert.equal(new Date(weeklyOccurrences[0].eventAt).getUTCHours(), 0);
+  assert.equal(new Date(weeklyOccurrences.at(-1).eventAt).getUTCHours(), 1, "wall-clock time remains 8 PM after DST ends");
+
+  const biweekly = normalizeRecurrenceRule({ type: "biweekly", count: 3 }, "2026-10-02");
+  assert.deepEqual(generateRecurringOccurrences({ startDate: "2026-10-02", rule: biweekly, localToUtc }).map((item) => item.eventDate), ["2026-10-02", "2026-10-16", "2026-10-30"]);
+  const monthly = normalizeRecurrenceRule({ type: "monthly", endDate: "2026-05-31" }, "2026-01-31");
+  assert.deepEqual(generateRecurringOccurrences({ startDate: "2026-01-31", rule: monthly, localToUtc }).map((item) => item.eventDate), ["2026-01-31", "2026-03-31", "2026-05-31"]);
+  const custom = normalizeRecurrenceRule({ type: "custom", interval: 2, weekdays: [2, 4], count: 5 }, "2026-10-06");
+  assert.deepEqual(generateRecurringOccurrences({ startDate: "2026-10-06", rule: custom, localToUtc }).map((item) => item.eventDate), ["2026-10-06", "2026-10-08", "2026-10-20", "2026-10-22", "2026-11-03"]);
+  const allDay = generateRecurringOccurrences({ startDate: "2026-10-03", startTime: "", timezone: null, rule: normalizeRecurrenceRule({ type: "weekly", count: 2 }, "2026-10-03"), localToUtc });
+  assert.deepEqual(allDay.map((item) => item.eventAt), [null, null]);
+  assert.throws(() => normalizeRecurrenceRule({ type: "weekly", count: MAX_RECURRENCE_OCCURRENCES + 1 }, "2026-10-02"), /between/);
+});
+
 test("Youtiful channel selection advances to native-event choice and remains acknowledged", async () => {
   const guildId = `youtiful-channel-flow-${Date.now()}`;
   const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
@@ -807,8 +827,11 @@ test("Youtiful channel selection advances to native-event choice and remains ack
   await handleEventSchedulerInteraction(channel);
   assert.equal(channel.responses.length, 1);
   assert.equal(channel.responses[0].type, "update");
-  assert.match(channel.responses[0].payload.content, /native Discord Scheduled Event/);
-  assert.equal(channel.responses[0].payload.components[0].toJSON().components.length, 2);
+  assert.match(channel.responses[0].payload.content, /repeat/);
+  const recurrence = fakeInteraction({ customId: "harmony-manager:community:ysrecurrence", kind: "select", guildId, values: ["none"] });
+  await handleEventSchedulerInteraction(recurrence);
+  assert.match(recurrence.responses[0].payload.content, /native Discord Scheduled Event/);
+  assert.equal(recurrence.responses[0].payload.components[0].toJSON().components.length, 2);
 });
 
 test("Youtiful edit panel persists details, timezone, type, and channel independently", async () => {
@@ -876,9 +899,57 @@ test("Youtiful Other / Custom remains a one-off title", async () => {
   await handleEventSchedulerInteraction(timezone);
   const channel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["community-room"] });
   await handleEventSchedulerInteraction(channel);
+  const recurrence = fakeInteraction({ customId: "harmony-manager:community:ysrecurrence", kind: "select", guildId, values: ["none"] });
+  await handleEventSchedulerInteraction(recurrence);
   const save = fakeInteraction({ customId: "harmony-manager:community:ysnative:no", kind: "button", guildId });
   await handleEventSchedulerInteraction(save);
   assert.equal(store.listCalendarEventTitles(guildId, "community").some((row) => row.title === "One-off community night"), false);
+});
+
+test("Youtiful recurring Add Event stores a bounded series of occurrences", async () => {
+  const guildId = `youtiful-recurring-add-${Date.now()}`;
+  const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["kdrama"] });
+  await handleEventSchedulerInteraction(type);
+  const title = fakeInteraction({ customId: "harmony-manager:community:ystitle", kind: "select", guildId, values: ["title:K-Drama With Us"] });
+  await handleEventSchedulerInteraction(title);
+  const details = fakeInteraction({ customId: "harmony-manager:community:ysdetails", kind: "modal", guildId, fields: { "event-date": "2099-10-02", "event-time": "20:00", description: "Weekly watch" } });
+  await handleEventSchedulerInteraction(details);
+  const timezone = fakeInteraction({ customId: "harmony-manager:community:ystimezone", kind: "select", guildId, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const channel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["cinema"] });
+  await handleEventSchedulerInteraction(channel);
+  const recurrence = fakeInteraction({ customId: "harmony-manager:community:ysrecurrence", kind: "select", guildId, values: ["weekly"] });
+  await handleEventSchedulerInteraction(recurrence);
+  const config = fakeInteraction({ customId: "harmony-manager:community:ysrecurrenceconfig", kind: "modal", guildId, fields: { "recurrence-end-date": "2099-10-30", "recurrence-end-count": "" } });
+  await handleEventSchedulerInteraction(config);
+  const save = fakeInteraction({ customId: "harmony-manager:community:ysnative:no", kind: "button", guildId });
+  await handleEventSchedulerInteraction(save);
+  const rows = store.listCalendarEvents(guildId, "community", "2099-10-01T00:00:00.000Z", "2099-11-01T00:00:00.000Z");
+  assert.equal(rows.length, 5);
+  assert.equal(new Set(rows.map((row) => row.recurrence_series_id)).size, 1);
+  assert.deepEqual(rows.map((row) => row.event_date), ["2099-10-02", "2099-10-09", "2099-10-16", "2099-10-23", "2099-10-30"]);
+});
+
+test("Youtiful recurring edits support this, future, and entire-series scopes", () => {
+  const guildId = `youtiful-recurring-edit-${Date.now()}`;
+  const seriesId = `series-${Date.now()}`;
+  const ids = ["2099-10-02", "2099-10-09", "2099-10-16"].map((date, index) => store.createCalendarEvent({
+    guildId, calendarChannelId: "community-calendar", title: "Weekly", eventDate: date,
+    eventAt: localToUtc(date, "20:00", "America/New_York").toISOString(), eventTimezone: "America/New_York",
+    timezone: "America/New_York", calendarType: "community", category: "kdrama", calendarEventType: "kdrama",
+    recurrenceSeriesId: seriesId, recurrenceRule: JSON.stringify({ type: "weekly", count: 3 }), recurrenceIndex: index, createdBy: "admin",
+  }));
+  const first = store.getEvent(guildId, ids[0]);
+  applyRecurringChanges(guildId, first, "this", { title: "Only first" });
+  assert.equal(store.getEvent(guildId, ids[0]).title, "Only first");
+  assert.equal(store.getEvent(guildId, ids[1]).title, "Weekly");
+  applyRecurringChanges(guildId, first, "future", { description: "Future description" });
+  assert.equal(store.getEvent(guildId, ids[0]).description, "Future description");
+  assert.equal(store.getEvent(guildId, ids[2]).description, "Future description");
+  applyRecurringChanges(guildId, first, "series", { calendar_event_type: "games", category: "games" });
+  assert.deepEqual(ids.map((id) => store.getEvent(guildId, id).calendar_event_type), ["games", "games", "games"]);
 });
 
 test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
