@@ -67,6 +67,17 @@ const YOUTIFUL_EVENT_TYPE_LABELS = {
   kdrama: "K-Dramas", chans_room: "Chan's Room", skz_code: "SKZ CODE", chat_only: "Chat Only",
   concert_stream: "Concert Stream", games: "Games", birthday: "Birthday", other: "Other / Custom",
 };
+const YOUTIFUL_TIMEZONE_OPTIONS = [
+  { label: "Eastern Time", value: "America/New_York" },
+  { label: "Central Time", value: "America/Chicago" },
+  { label: "Mountain Time", value: "America/Denver" },
+  { label: "Pacific Time", value: "America/Los_Angeles" },
+  { label: "Alaska Time", value: "America/Anchorage" },
+  { label: "Hawaii Time", value: "Pacific/Honolulu" },
+  { label: "Korea Time", value: "Asia/Seoul" },
+  { label: "Japan Time", value: "Asia/Tokyo" },
+  { label: "No timezone (all-day)", value: "none" },
+];
 
 function calendarLabel(calendarType) {
   return calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
@@ -104,14 +115,27 @@ function parseManagerDraft(fields, calendarType) {
   const endTime = String(fields.endTime || "").trim();
   const location = String(fields.location || "").trim();
   const legacyTimezone = String(fields.timezone || "").trim();
-  const timezone = resolveLocationTimezone(location) || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null) || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null);
+  const hasExplicitTimezone = Object.prototype.hasOwnProperty.call(fields, "timezone");
+  const timezone = calendarType === "community"
+    ? (hasExplicitTimezone
+      ? (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+      : ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+        || (resolveLocationTimezone(location))
+        || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null)))
+    : (resolveLocationTimezone(location)
+      || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+      || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null));
   const parsedDescription = splitDescriptionAndLink(fields.description || "");
   const legacyLinkField = Object.prototype.hasOwnProperty.call(fields, "link");
   const link = legacyLinkField ? String(fields.link || "").trim() : parsedDescription.link;
   const description = legacyLinkField ? String(fields.description || "").trim() || null : parsedDescription.description;
   if (!title || title.length > 120) throw new Error("Event name is required and must be 120 characters or fewer.");
   if (!parseManagerDate(eventDate) || !isValidDateOnly(eventDate)) throw new Error("Use a valid event date in YYYY-MM-DD format.");
-  if (eventTime && !timezone) throw new Error("I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`.");
+  if (eventTime && !timezone) {
+    throw new Error(calendarType === "community"
+      ? "Choose a valid time zone for a timed Youtiful Stays event."
+      : "I couldn't resolve that location. Please enter a more specific city and country, such as `Fukuoka, Japan`." );
+  }
   if (eventTime && !localToUtc(eventDate, eventTime, timezone)) throw new Error("Use a valid event time in HH:MM format.");
   if (endTime && !eventTime) throw new Error("End Time requires a Start Time.");
   let eventEndAt = null;
@@ -252,7 +276,6 @@ function youtifulEditFields(event = {}) {
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
-    { id: "location", label: "Location (city, country)", maxLength: 100, value: event.event_location || "" },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
 }
@@ -308,6 +331,15 @@ function youtifulTitleMenu(titles) {
 
 function youtifulChannelMenu() {
   const menu = new ChannelSelectMenuBuilder().setCustomId("harmony-manager:community:yschannel").setPlaceholder("Choose the Discord channel").setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+function youtifulTimezoneMenu(action, eventId = "new", selected = null) {
+  const suffix = eventId === "new" ? "" : ":" + eventId;
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId("harmony-manager:community:" + action + suffix)
+    .setPlaceholder("Choose the event time zone")
+    .addOptions(YOUTIFUL_TIMEZONE_OPTIONS.map((option) => ({ label: option.label, value: option.value, default: selected === option.value })));
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
@@ -875,7 +907,6 @@ async function handleManagerInteraction(interaction) {
       ...(selected === "other" ? [{ id: "title", label: "Custom event title", required: true, maxLength: 120 }] : []),
       { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10 },
       { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5 },
-      { id: "location", label: "Location (city, country)", maxLength: 100 },
       { id: "description", label: "Description (optional)", maxLength: 1000, paragraph: true },
     ];
     await interaction.showModal(managerModal("harmony-manager:community:ysdetails", "Add Youtiful Stays event", fields));
@@ -884,12 +915,28 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "ysdetails" && interaction.isModalSubmit()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
+    const title = draft.title || interaction.fields.getTextInputValue("title");
+    managerDrafts.set(draftKey(interaction, calendarType), {
+      ...draft,
+      title,
+      eventDate: interaction.fields.getTextInputValue("event-date"),
+      eventTime: interaction.fields.getTextInputValue("event-time"),
+      description: interaction.fields.getTextInputValue("description"),
+    });
+    await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: youtifulTimezoneMenu("ystimezone"), flags: 64 });
+    return;
+  }
+  if (calendarType === "community" && action === "ystimezone" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
     try {
-      const title = draft.title || interaction.fields.getTextInputValue("title");
-      const parsed = parseManagerDraft({ title, eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: interaction.fields.getTextInputValue("location"), description: interaction.fields.getTextInputValue("description") }, calendarType);
-      managerDrafts.set(draftKey(interaction, calendarType), { ...draft, ...parsed, title });
-      await interaction.reply({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu(), flags: 64 });
-    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+      const timezone = interaction.values[0] === "none" ? "" : interaction.values[0];
+      const parsed = parseManagerDraft({ title: draft.title, eventDate: draft.eventDate, eventTime: draft.eventTime, timezone, description: draft.description }, calendarType);
+      managerDrafts.set(draftKey(interaction, calendarType), { ...draft, ...parsed, title: draft.title });
+      await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu() });
+    } catch (error) {
+      await interaction.update({ content: error.message, components: youtifulTimezoneMenu("ystimezone", "new", interaction.values[0]) });
+    }
     return;
   }
   if (calendarType === "community" && action === "yschannel" && interaction.isChannelSelectMenu()) {
@@ -995,29 +1042,41 @@ async function handleManagerInteraction(interaction) {
   if (action === "editmodal" && interaction.isModalSubmit()) {
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    if (calendarType !== "community") {
+      try {
+        const draft = parseManagerDraft({ title: interaction.fields.getTextInputValue("title"), eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: interaction.fields.getTextInputValue("location"), description: interaction.fields.getTextInputValue("description"), fallbackTimezone: existing.event_timezone || existing.timezone }, calendarType);
+        managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
+        await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
+      } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+      return;
+    }
+    managerDrafts.set(draftKey(interaction, calendarType, eventId), {
+      eventId,
+      existing,
+      title: interaction.fields.getTextInputValue("title"),
+      eventDate: interaction.fields.getTextInputValue("event-date"),
+      eventTime: interaction.fields.getTextInputValue("event-time"),
+      description: interaction.fields.getTextInputValue("description"),
+    });
+    const legacyTimezone = existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location);
+    await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: youtifulTimezoneMenu("edittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
+    return;
+  }
+  if (calendarType === "community" && action === "edittimezone" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
     try {
-      const draft = parseManagerDraft({
-        title: interaction.fields.getTextInputValue("title"),
-        eventDate: interaction.fields.getTextInputValue("event-date"),
-        eventTime: interaction.fields.getTextInputValue("event-time"),
-        location: interaction.fields.getTextInputValue("location"),
-        description: interaction.fields.getTextInputValue("description"),
-        fallbackTimezone: existing.event_timezone || existing.timezone,
-      }, calendarType);
-      managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
-      await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
-      // Persist all modal fields immediately. The category/member controls are
-      // follow-up metadata, not a gate that can silently discard the edit.
-      const saved = store.updateEvent(interaction.guildId, Number(eventId), {
-        title: draft.title, event_date: draft.eventDate, event_at: draft.eventAt,
-        event_timezone: draft.eventTimezone, event_location: draft.eventLocation, timezone: draft.timezone,
-        link: draft.link, description: draft.description, all_day: draft.allDay ? 1 : 0,
-        member: existing.member || null,
-        ...(calendarType === "community" ? { event_end_at: draft.eventEndAt } : {}),
-      });
+      const timezone = interaction.values[0] === "none" ? "" : interaction.values[0];
+      const parsed = parseManagerDraft({ title: draft.title, eventDate: draft.eventDate, eventTime: draft.eventTime, timezone, description: draft.description, fallbackTimezone: existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location) }, calendarType);
+      managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, ...parsed, existing, eventId });
+      const saved = store.updateEvent(interaction.guildId, Number(eventId), { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
+      await interaction.update({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other") });
       if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
-    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    } catch (error) {
+      await interaction.update({ content: error.message, components: youtifulTimezoneMenu("edittimezone", eventId, interaction.values[0]) });
+    }
     return;
   }
   if (action === "editcategory" && interaction.isStringSelectMenu()) {
@@ -1342,6 +1401,7 @@ module.exports = {
   YOUTIFUL_EVENT_TYPES,
   YOUTIFUL_EVENT_TYPE_ICONS,
   YOUTIFUL_EVENT_TYPE_LABELS,
+  YOUTIFUL_TIMEZONE_OPTIONS,
   buildYoutifulCalendarMessages,
   youtifulBirthdayEvents,
   interestedStateSupport,

@@ -5,7 +5,7 @@ const {
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
-  buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS,
+  buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS, YOUTIFUL_TIMEZONE_OPTIONS,
   interestedStateSupport,
   handleReminderInteraction,
   nativeEventEndTime,
@@ -201,30 +201,24 @@ test("calendar-only all-day events with blank location save without a timezone",
   assert.equal(saved.event_location, null);
 });
 
-test("manager drafts resolve locations and separate description plus link", () => {
-  const draft = parseManagerDraft({
-    title: "Concert",
-    eventDate: "2099-07-14",
-    eventTime: "20:00",
-    location: "Fukuoka, Japan",
-    description: "Live show\nhttps://example.com/concert",
-  }, "community");
+test("manager drafts use explicit Youtiful timezones and separate description plus link", () => {
+  const draft = parseManagerDraft({ title: "Concert", eventDate: "2099-07-14", eventTime: "20:00", timezone: "Asia/Tokyo", description: "Live show\nhttps://example.com/concert" }, "community");
   assert.equal(draft.allDay, false);
   assert.equal(draft.eventTimezone, "Asia/Tokyo");
   assert.equal(draft.link, "https://example.com/concert");
   assert.equal(draft.description, "Live show");
-  const allDayWithoutLocation = parseManagerDraft({ title: "Birthday", eventDate: "2099-01-01", eventTime: "", location: "", description: "" }, "community");
-  assert.equal(allDayWithoutLocation.allDay, true);
-  assert.equal(allDayWithoutLocation.eventAt, null);
-  assert.equal(allDayWithoutLocation.eventTimezone, null);
-  assert.equal(allDayWithoutLocation.eventLocation, "");
-  assert.throws(() => parseManagerDraft({ title: "Timed", eventDate: "2099-01-01", eventTime: "18:00", location: "", description: "" }, "community"), /resolve/);
+  const allDayWithoutTimezone = parseManagerDraft({ title: "Birthday", eventDate: "2099-01-01", eventTime: "", timezone: "", description: "" }, "community");
+  assert.equal(allDayWithoutTimezone.allDay, true);
+  assert.equal(allDayWithoutTimezone.eventAt, null);
+  assert.equal(allDayWithoutTimezone.eventTimezone, null);
+  assert.equal(allDayWithoutTimezone.eventLocation, "");
+  assert.throws(() => parseManagerDraft({ title: "Timed", eventDate: "2099-01-01", eventTime: "18:00", timezone: "", description: "" }, "community"), /time zone/);
 });
 
 test("Youtiful timed drafts persist an explicit end time", () => {
   const draft = parseManagerDraft({
     title: "Fukuoka concert", eventDate: "2026-10-24", eventTime: "18:30", endTime: "21:30",
-    location: "Fukuoka, Japan", description: "",
+    timezone: "Asia/Tokyo", description: "",
   }, "community");
   assert.equal(draft.eventAt, "2026-10-24T09:30:00.000Z");
   assert.equal(draft.eventEndAt, "2026-10-24T12:30:00.000Z");
@@ -244,7 +238,7 @@ test("explicit end time survives scheduled event storage", () => {
 test("blank end time retains the safe one-hour native default", () => {
   const draft = parseManagerDraft({
     title: "Seoul stream", eventDate: "2026-10-03", eventTime: "18:00", endTime: "",
-    location: "Seoul, South Korea", description: "",
+    timezone: "Asia/Seoul", description: "",
   }, "community");
   assert.equal(draft.eventEndAt, null);
   assert.equal(nativeEventEndTime(draft).toISOString(), "2026-10-03T10:00:00.000Z");
@@ -253,7 +247,7 @@ test("blank end time retains the safe one-hour native default", () => {
 test("end times crossing midnight use the following local calendar date", () => {
   const draft = parseManagerDraft({
     title: "Late event", eventDate: "2026-10-24", eventTime: "23:30", endTime: "01:00",
-    location: "New York, USA", description: "",
+    timezone: "America/New_York", description: "",
   }, "community");
   assert.equal(draft.eventAt, "2026-10-25T03:30:00.000Z");
   assert.equal(draft.eventEndAt, "2026-10-25T05:00:00.000Z");
@@ -263,7 +257,7 @@ test("end times crossing midnight use the following local calendar date", () => 
 test("an end time cannot be supplied for an all-day event", () => {
   assert.throws(() => parseManagerDraft({
     title: "Birthday", eventDate: "2026-10-03", eventTime: "", endTime: "01:00",
-    location: "Seoul, South Korea", description: "",
+    timezone: "Asia/Seoul", description: "",
   }, "community"), /requires a Start Time/);
 });
 
@@ -729,8 +723,8 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
 });
 
 
-test("Youtiful create and edit modals expose Location instead of End Time", async () => {
-  const guildId = `youtiful-location-ui-${Date.now()}`;
+test("Youtiful create and edit modals use a timezone step instead of Location or End Time", async () => {
+  const guildId = "youtiful-timezone-ui-" + Date.now();
   const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
   await handleEventSchedulerInteraction(add);
   const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["kdrama"] });
@@ -739,29 +733,71 @@ test("Youtiful create and edit modals expose Location instead of End Time", asyn
   await handleEventSchedulerInteraction(title);
   const addModal = title.responses[0].modal.toJSON();
   const addIds = addModal.components.map((row) => row.components[0].custom_id);
-  assert.deepEqual(addIds, ["event-date", "event-time", "location", "description"]);
+  assert.deepEqual(addIds, ["event-date", "event-time", "description"]);
+  assert.equal(addIds.includes("location"), false);
   assert.equal(addIds.includes("event-end-time"), false);
 
   const eventDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const eventId = store.createCalendarEvent({
-    guildId,
-    calendarChannelId: "calendar-community",
-    title: "K-Drama With Us",
-    eventDate,
-    allDay: true,
-    eventTimezone: null,
-    timezone: null,
-    calendarType: "community",
-    category: "kdrama",
-    calendarEventType: "kdrama",
-    createdBy: "admin",
-  });
+  const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar-community", title: "K-Drama With Us", eventDate, allDay: true, eventTimezone: null, timezone: null, calendarType: "community", category: "kdrama", calendarEventType: "kdrama", createdBy: "admin" });
   const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
   await handleEventSchedulerInteraction(edit);
   const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
   await handleEventSchedulerInteraction(select);
   const editModal = select.responses[0].modal.toJSON();
   const editIds = editModal.components.map((row) => row.components[0].custom_id);
-  assert.deepEqual(editIds, ["title", "event-date", "event-time", "location", "description"]);
+  assert.deepEqual(editIds, ["title", "event-date", "event-time", "description"]);
+  assert.equal(editIds.includes("location"), false);
   assert.equal(editIds.includes("event-end-time"), false);
+});
+
+test("Youtiful timezone choices store IANA zones and enforce timed/all-day rules", () => {
+  assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Eastern Time").value, "America/New_York");
+  assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Korea Time").value, "Asia/Seoul");
+  assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Japan Time").value, "Asia/Tokyo");
+  const timed = parseManagerDraft({ title: "Community event", eventDate: "2026-10-24", eventTime: "18:30", timezone: "America/New_York", description: "" }, "community");
+  assert.equal(timed.eventTimezone, "America/New_York");
+  assert.equal(timed.eventLocation, "");
+  assert.throws(() => parseManagerDraft({ title: "Missing timezone", eventDate: "2026-10-24", eventTime: "18:30", timezone: "", description: "" }, "community"), /time zone/i);
+  const allDay = parseManagerDraft({ title: "Birthday", eventDate: "2026-10-03", eventTime: "", timezone: "", description: "" }, "community");
+  assert.equal(allDay.allDay, true);
+  assert.equal(allDay.eventAt, null);
+  assert.equal(allDay.eventTimezone, null);
+});
+
+test("explicit Youtiful edit timezone cannot fall back to legacy data", () => {
+  assert.throws(() => parseManagerDraft({
+    title: "Edited timed event",
+    eventDate: "2026-10-24",
+    eventTime: "18:30",
+    timezone: "",
+    fallbackTimezone: "America/New_York",
+    description: "",
+  }, "community"), /time zone/i);
+
+  assert.throws(() => parseManagerDraft({
+    title: "Edited timed event",
+    eventDate: "2026-10-24",
+    eventTime: "18:30",
+    timezone: "not-an-iana-zone",
+    fallbackTimezone: "Asia/Seoul",
+    description: "",
+  }, "community"), /time zone/i);
+
+  const explicitAllDay = parseManagerDraft({
+    title: "Edited all-day event",
+    eventDate: "2026-10-03",
+    eventTime: "",
+    timezone: "",
+    fallbackTimezone: "Asia/Seoul",
+    description: "",
+  }, "community");
+  assert.equal(explicitAllDay.allDay, true);
+  assert.equal(explicitAllDay.eventTimezone, null);
+});
+
+test("legacy Youtiful location/timezone data remains editable without changing Stray Kids location behavior", () => {
+  const legacy = parseManagerDraft({ title: "Legacy event", eventDate: "2026-10-24", eventTime: "18:30", location: "Fukuoka, Japan", fallbackTimezone: "Asia/Tokyo", description: "" }, "community");
+  assert.equal(legacy.eventTimezone, "Asia/Tokyo");
+  const skz = parseManagerDraft({ title: "Stray Kids event", eventDate: "2026-10-24", eventTime: "18:30", location: "Fukuoka, Japan", description: "" }, "stray_kids");
+  assert.equal(skz.eventTimezone, "Asia/Tokyo");
 });
