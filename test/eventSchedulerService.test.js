@@ -323,7 +323,7 @@ test("manager modals allow blank optional fields", () => {
   assert.equal(json.components[1].components[0].value, undefined);
 });
 
-function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {}, client = {} }) {
+function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {}, client = {}, failUpdate = false }) {
   const interaction = {
     customId,
     guildId,
@@ -335,13 +335,14 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
     responses: [],
     isButton: () => kind === "button",
     isStringSelectMenu: () => kind === "select",
+    isChannelSelectMenu: () => kind === "channel",
     isModalSubmit: () => kind === "modal",
     reply: async (payload) => { interaction.responses.push({ type: "reply", payload }); },
     deferReply: async (payload) => { interaction.responses.push({ type: "deferReply", payload }); },
     followUp: async (payload) => { interaction.responses.push({ type: "followUp", payload }); },
     editReply: async (payload) => { interaction.responses.push({ type: "editReply", payload }); },
     showModal: async (modal) => { interaction.responses.push({ type: "modal", modal }); },
-    update: async (payload) => { interaction.responses.push({ type: "update", payload }); },
+    update: async (payload) => { if (failUpdate) throw new Error("simulated Discord update failure"); interaction.responses.push({ type: "update", payload }); },
   };
   return interaction;
 }
@@ -762,6 +763,47 @@ test("Youtiful timezone choices store IANA zones and enforce timed/all-day rules
   assert.equal(allDay.allDay, true);
   assert.equal(allDay.eventAt, null);
   assert.equal(allDay.eventTimezone, null);
+});
+
+test("Youtiful channel selection advances to native-event choice and remains acknowledged", async () => {
+  const guildId = `youtiful-channel-flow-${Date.now()}`;
+  const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["kdrama"] });
+  await handleEventSchedulerInteraction(type);
+  const title = fakeInteraction({ customId: "harmony-manager:community:ystitle", kind: "select", guildId, values: ["title:K-Drama With Us"] });
+  await handleEventSchedulerInteraction(title);
+  const details = fakeInteraction({
+    customId: "harmony-manager:community:ysdetails", kind: "modal", guildId,
+    fields: { "event-date": "2099-10-03", "event-time": "19:00", description: "Watch together" },
+  });
+  await handleEventSchedulerInteraction(details);
+  const timezone = fakeInteraction({ customId: "harmony-manager:community:ystimezone", kind: "select", guildId, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const channel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["event-channel"] });
+  await handleEventSchedulerInteraction(channel);
+  assert.equal(channel.responses.length, 1);
+  assert.equal(channel.responses[0].type, "update");
+  assert.match(channel.responses[0].payload.content, /native Discord Scheduled Event/);
+  assert.equal(channel.responses[0].payload.components[0].toJSON().components.length, 2);
+});
+
+test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
+  const guildId = `manager-error-flow-${Date.now()}`;
+  const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["kdrama"] });
+  await handleEventSchedulerInteraction(type);
+  const title = fakeInteraction({ customId: "harmony-manager:community:ystitle", kind: "select", guildId, values: ["title:K-Drama With Us"] });
+  await handleEventSchedulerInteraction(title);
+  const details = fakeInteraction({ customId: "harmony-manager:community:ysdetails", kind: "modal", guildId, fields: { "event-date": "2099-10-03", "event-time": "19:00", description: "" } });
+  await handleEventSchedulerInteraction(details);
+  const timezone = fakeInteraction({ customId: "harmony-manager:community:ystimezone", kind: "select", guildId, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const failedChannel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["event-channel"], failUpdate: true });
+  await handleEventSchedulerInteraction(failedChannel);
+  assert.equal(failedChannel.responses.some((response) => response.type === "reply"), true);
+  assert.match(failedChannel.responses.at(-1).payload.content, /could not complete/i);
 });
 
 test("explicit Youtiful edit timezone cannot fall back to legacy data", () => {
