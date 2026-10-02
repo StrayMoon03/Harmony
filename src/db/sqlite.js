@@ -311,6 +311,8 @@ function migrate(database) {
       recurrence_end_count    INTEGER,
       recurrence_exception    INTEGER NOT NULL DEFAULT 0,
       recurrence_native_enabled INTEGER NOT NULL DEFAULT 0,
+      announcement_channel_id TEXT,
+      announcement_offsets TEXT NOT NULL DEFAULT '[]',
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -386,6 +388,16 @@ function migrate(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_discord_event_reminders_due
       ON discord_event_reminders (status, remind_at);
+
+    CREATE TABLE IF NOT EXISTS discord_event_reconciliations (
+      guild_id          TEXT NOT NULL,
+      discord_event_id  TEXT NOT NULL,
+      notice_message_id TEXT,
+      status            TEXT NOT NULL DEFAULT 'open',
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL,
+      PRIMARY KEY (guild_id, discord_event_id)
+    );
   `);
 
   migrateSharesToGuildScope(database);
@@ -452,6 +464,12 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("recurrence_native_enabled")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_native_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!scheduledEventColumns.has("announcement_channel_id")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_channel_id TEXT");
+  }
+  if (!scheduledEventColumns.has("announcement_offsets")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_offsets TEXT NOT NULL DEFAULT '[]'");
   }
 
   const settingColumns = new Set(

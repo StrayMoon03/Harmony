@@ -12,6 +12,10 @@ const {
   handleReminderInteraction,
   nativeEventEndTime,
   syncNativeScheduledEvent,
+  reconciliationPayload,
+  handleGuildScheduledEventCreate,
+  markPendingNativeCreate,
+  clearPendingNativeCreate,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 const { normalizeRecurrenceRule, generateRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
@@ -32,6 +36,8 @@ test("Youtiful Stays calendar renders compact channel rows and native links", ()
   assert.match(text, /Harmony_Kdramas/);
   assert.match(text, /<#[0-9]+>/);
   assert.match(text, /View Discord Event/);
+  assert.match(text, /Oct 3/);
+  assert.doesNotMatch(text, /2026/);
   assert.equal(part.embeds[0].title, "📅 YOUTIFUL STAYS • OCTOBER 2026");
 });
 
@@ -337,12 +343,13 @@ test("manager modals allow blank optional fields", () => {
   assert.equal(json.components[1].components[0].value, undefined);
 });
 
-function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {}, client = {}, failUpdate = false }) {
+function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [], fields = {}, client = {}, guild = null, failUpdate = false }) {
   const interaction = {
     customId,
     guildId,
     user: { id: userId },
     client,
+    guild,
     memberPermissions: { has: () => true },
     values,
     fields: { getTextInputValue: (name) => fields[name] || "" },
@@ -830,8 +837,11 @@ test("Youtiful channel selection advances to native-event choice and remains ack
   assert.match(channel.responses[0].payload.content, /repeat/);
   const recurrence = fakeInteraction({ customId: "harmony-manager:community:ysrecurrence", kind: "select", guildId, values: ["none"] });
   await handleEventSchedulerInteraction(recurrence);
-  assert.match(recurrence.responses[0].payload.content, /native Discord Scheduled Event/);
-  assert.equal(recurrence.responses[0].payload.components[0].toJSON().components.length, 2);
+  assert.match(recurrence.responses[0].payload.content, /optional promotional announcements/);
+  const announcements = fakeInteraction({ customId: "harmony-manager:community:ysannouncementtiming", kind: "select", guildId, values: ["none"] });
+  await handleEventSchedulerInteraction(announcements);
+  assert.match(announcements.responses[0].payload.content, /native Discord Scheduled Event/);
+  assert.equal(announcements.responses[0].payload.components[0].toJSON().components.length, 2);
 });
 
 test("Youtiful edit panel persists details, timezone, type, and channel independently", async () => {
@@ -1014,4 +1024,72 @@ test("legacy Youtiful location/timezone data remains editable without changing S
   assert.equal(legacy.eventTimezone, "Asia/Tokyo");
   const skz = parseManagerDraft({ title: "Stray Kids event", eventDate: "2026-10-24", eventTime: "18:30", location: "Fukuoka, Japan", description: "" }, "stray_kids");
   assert.equal(skz.eventTimezone, "Asia/Tokyo");
+});
+
+test("Harmony-created native events are ignored by inbound reconciliation", async () => {
+  const guildId = `native-race-${Date.now()}`;
+  const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Harmony-created", eventDate: "2099-10-03", eventAt: "2099-10-03T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", discordEventId: "native-race-event", createdBy: "admin" });
+  assert.ok(eventId);
+  const sent = [];
+  const channel = { isTextBased: () => true, send: async (payload) => { sent.push(payload); return { id: "notice" }; } };
+  const client = { guilds: { cache: new Map([[guildId, { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } }]]) } };
+  store.setManagerChannel(guildId, "control");
+  await handleGuildScheduledEventCreate(client, { guildId, id: "native-race-event", name: "Harmony-created", scheduledStartAt: new Date("2099-10-03T23:00:00Z") });
+  assert.equal(sent.length, 0);
+
+  const pendingId = markPendingNativeCreate(guildId, "Pending event", new Date("2099-10-04T23:00:00Z"));
+  assert.equal(pendingId, `${guildId}:Pending event:${Date.parse("2099-10-04T23:00:00Z")}`);
+  await handleGuildScheduledEventCreate(client, { guildId, id: "native-pending-event", name: "Pending event", scheduledStartAt: new Date("2099-10-04T23:00:00Z") });
+  assert.equal(sent.length, 0);
+  clearPendingNativeCreate(guildId, "Pending event", new Date("2099-10-04T23:00:00Z"));
+});
+
+test("Discord-first reconciliation is informative, deduplicated, and distinguishes repeated titles", async () => {
+  const guildId = `native-first-${Date.now()}`;
+  const first = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Bang Chan & Chaos", eventDate: "2099-10-18", eventAt: "2099-10-18T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin" });
+  const second = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Bang Chan & Chaos", eventDate: "2099-10-25", eventAt: "2099-10-25T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin" });
+  const sent = [];
+  const channel = { isTextBased: () => true, send: async (payload) => { sent.push(payload); return { id: `notice-${sent.length}` }; } };
+  const client = { guilds: { cache: new Map([[guildId, { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } }]]) } };
+  store.setManagerChannel(guildId, "control");
+  const native = { guildId, id: "discord-first-event", name: "Bang Chan & Chaos", creator: { tag: "creator#1234" }, scheduledStartAt: new Date("2099-10-18T23:00:00Z") };
+  await handleGuildScheduledEventCreate(client, native);
+  await handleGuildScheduledEventCreate(client, native);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /creator#1234/);
+  assert.match(sent[0].content, /When: <t:/);
+  const json = reconciliationPayload(native, [store.getEvent(guildId, first), store.getEvent(guildId, second)]);
+  const options = json.components[0].toJSON().components[0].options.map((option) => option.label);
+  assert.equal(options.length, 2);
+  assert.notEqual(options[0], options[1]);
+});
+
+test("Youtiful announcement schedules are independent, multi-selectable, and cancelled safely", () => {
+  const guildId = `calendar-announcements-${Date.now()}`;
+  const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Watch party", eventDate: "2099-10-18", eventAt: "2099-10-18T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "community", eventChannelId: "cinema", createdBy: "admin" });
+  const event = store.getEvent(guildId, eventId);
+  const items = [604800, 259200, 0].map((offset) => ({ scheduledFor: new Date(new Date(event.event_at).getTime() - offset * 1000).toISOString(), message: `Reminder ${offset}` }));
+  const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", [604800, 259200, 0], items);
+  assert.equal(saved.announcement_channel_id, "announcements");
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 0]);
+  assert.equal(store.dueAnnouncements("2099-01-01T00:00:00.000Z").length, 0);
+  assert.equal(store.cancelEvent(guildId, eventId, "admin"), true);
+  assert.equal(store.dueAnnouncements("2100-01-01T00:00:00.000Z").some((item) => item.event_id === eventId), false);
+});
+
+test("Add to Calendar links the existing Discord event without creating another native event", async () => {
+  const guildId = `native-add-${Date.now()}`;
+  const native = { id: "native-existing", name: "Discord watch party", description: "From Discord", scheduledStartAt: new Date("2099-10-18T23:00:00Z"), scheduledEndAt: new Date("2099-10-19T00:00:00Z") };
+  let creates = 0;
+  const guild = { scheduledEvents: { fetch: async () => native, create: async () => { creates += 1; return { id: "should-not-create" }; } } };
+  const interaction = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild });
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  interaction.client = client;
+  store.setCalendarChannels(guildId, "skz", "community");
+  store.setManagerChannel(guildId, "control");
+  await handleEventSchedulerInteraction(interaction);
+  const linked = store.getEventByDiscordId(guildId, native.id);
+  assert.ok(linked);
+  assert.equal(creates, 0);
+  assert.match(interaction.responses[0].payload.content, /Choose optional announcements/);
 });
