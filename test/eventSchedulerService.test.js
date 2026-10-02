@@ -764,6 +764,37 @@ test("Youtiful timezone choices store IANA zones and enforce timed/all-day rules
   assert.equal(allDay.eventTimezone, null);
 });
 
+test("explicit Youtiful edit timezone cannot fall back to legacy data", () => {
+  assert.throws(() => parseManagerDraft({
+    title: "Edited timed event",
+    eventDate: "2026-10-24",
+    eventTime: "18:30",
+    timezone: "",
+    fallbackTimezone: "America/New_York",
+    description: "",
+  }, "community"), /time zone/i);
+
+  assert.throws(() => parseManagerDraft({
+    title: "Edited timed event",
+    eventDate: "2026-10-24",
+    eventTime: "18:30",
+    timezone: "not-an-iana-zone",
+    fallbackTimezone: "Asia/Seoul",
+    description: "",
+  }, "community"), /time zone/i);
+
+  const explicitAllDay = parseManagerDraft({
+    title: "Edited all-day event",
+    eventDate: "2026-10-03",
+    eventTime: "",
+    timezone: "",
+    fallbackTimezone: "Asia/Seoul",
+    description: "",
+  }, "community");
+  assert.equal(explicitAllDay.allDay, true);
+  assert.equal(explicitAllDay.eventTimezone, null);
+});
+
 test("legacy Youtiful location/timezone data remains editable without changing Stray Kids location behavior", () => {
   const legacy = parseManagerDraft({ title: "Legacy event", eventDate: "2026-10-24", eventTime: "18:30", location: "Fukuoka, Japan", fallbackTimezone: "Asia/Tokyo", description: "" }, "community");
   assert.equal(legacy.eventTimezone, "Asia/Tokyo");
