@@ -500,6 +500,31 @@ async function syncChangedNativeEvents(client, events) {
   }
 }
 
+async function syncRecurringNativeEventWindow(client) {
+  const now = new Date();
+  const until = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000);
+  const candidates = store.listRecurringNativeCandidates(now.toISOString(), until.toISOString(), 100);
+  const linkedBySeries = new Map();
+  for (const candidate of candidates) {
+    const seriesKey = `${candidate.guild_id}:${candidate.recurrence_series_id}`;
+    if (!linkedBySeries.has(seriesKey)) {
+      const existing = store.listSeriesEvents(candidate.guild_id, candidate.recurrence_series_id);
+      linkedBySeries.set(seriesKey, existing.filter((event) => event.discord_event_id).length);
+    }
+    const linked = linkedBySeries.get(seriesKey);
+    if (linked >= 12) continue;
+    const guild = client.guilds.cache.get(candidate.guild_id) || await client.guilds.fetch(candidate.guild_id).catch(() => null);
+    if (!guild) continue;
+    try {
+      const created = await createNativeScheduledEvent(guild, { ...candidate, eventAt: candidate.event_at, eventEndAt: candidate.event_end_at }, candidate.event_channel_id);
+      if (created?.id) {
+        store.updateEvent(candidate.guild_id, candidate.id, { discord_event_id: created.id });
+        linkedBySeries.set(seriesKey, linked + 1);
+      }
+    } catch (error) { console.error("Recurring native event window sync failed:", error); }
+  }
+}
+
 function applyRecurringChanges(guildId, event, scope, changes) {
   const series = event.recurrence_series_id ? store.listSeriesEvents(guildId, event.recurrence_series_id) : [event];
   const eligible = scope === "series" ? series : scope === "future" ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
@@ -1187,6 +1212,9 @@ async function handleManagerInteraction(interaction) {
       let nativeWarning = "";
       if (createdEvents.length && interaction.customId.endsWith(":yes") && !draft.allDay) {
         try {
+          if (savedSeries.seriesId) {
+            for (const event of createdEvents) store.updateEvent(interaction.guildId, event.id, { recurrence_native_enabled: 1 });
+          }
           for (const event of createdEvents.slice(0, 12)) {
             const created = await createNativeScheduledEvent(interaction.guild, { ...draft, eventAt: event.event_at, eventEndAt: event.event_end_at, title: event.title, description: event.description }, event.event_channel_id);
             if (created?.id) {
@@ -1736,10 +1764,12 @@ async function processScheduledAnnouncements(client) {
 function startEventScheduler(client) {
   processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
   processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
+  syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event startup failed:", error));
   const timer = setInterval(
     () => {
       processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
       processDiscordEventReminders(client).catch((error) => console.error("Discord event reminders failed:", error));
+      syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event window failed:", error));
     },
     CHECK_INTERVAL_MS
   );

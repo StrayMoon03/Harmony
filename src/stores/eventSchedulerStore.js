@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false }) {
   const db = getDb();
   const now = new Date().toISOString();
   // The legacy announcement column is NOT NULL, but calendar-only all-day
@@ -12,9 +12,12 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, createdBy, now);
+        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, recurrence_native_enabled, created_by, created_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, recurrenceNativeEnabled ? 1 : 0, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -32,7 +35,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
-function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false }) {
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false }) {
   return createEvent({
     guildId,
     sourceChannelId: calendarChannelId || "",
@@ -59,6 +62,7 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     recurrenceEndDate,
     recurrenceEndCount,
     recurrenceException,
+    recurrenceNativeEnabled,
     createdBy,
     announcements: [],
   });
@@ -125,6 +129,10 @@ function listUnlinkedCommunityEvents(guildId) {
 
 function listSeriesEvents(guildId, seriesId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND recurrence_series_id = ? ORDER BY recurrence_index, event_date, id").all(guildId, seriesId);
+}
+
+function listRecurringNativeCandidates(nowIso, untilIso, limit = 100) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE calendar_type = 'community' AND recurrence_series_id IS NOT NULL AND recurrence_native_enabled = 1 AND discord_event_id IS NULL AND cancelled_at IS NULL AND event_at >= ? AND event_at < ? ORDER BY event_at LIMIT ?").all(nowIso, untilIso, limit);
 }
 
 function listAnnouncements(eventId) {
@@ -276,7 +284,7 @@ function cancelSeriesEvents(guildId, seriesId, cancelledBy, fromIndex = null) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception"];
+  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");
@@ -342,6 +350,7 @@ module.exports = {
   getEventByDiscordId,
   listUnlinkedCommunityEvents,
   listSeriesEvents,
+  listRecurringNativeCandidates,
   listAnnouncements,
   addAnnouncement,
   listEvents,

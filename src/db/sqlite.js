@@ -310,6 +310,7 @@ function migrate(database) {
       recurrence_end_date     TEXT,
       recurrence_end_count    INTEGER,
       recurrence_exception    INTEGER NOT NULL DEFAULT 0,
+      recurrence_native_enabled INTEGER NOT NULL DEFAULT 0,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -448,6 +449,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("recurrence_exception")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_exception INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!scheduledEventColumns.has("recurrence_native_enabled")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_native_enabled INTEGER NOT NULL DEFAULT 0");
   }
 
   const settingColumns = new Set(
