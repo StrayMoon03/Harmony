@@ -922,7 +922,15 @@ test("Youtiful recurring Add Event stores a bounded series of occurrences", asyn
   await handleEventSchedulerInteraction(channel);
   const recurrence = fakeInteraction({ customId: "harmony-manager:community:ysrecurrence", kind: "select", guildId, values: ["weekly"] });
   await handleEventSchedulerInteraction(recurrence);
-  const config = fakeInteraction({ customId: "harmony-manager:community:ysrecurrenceconfig", kind: "modal", guildId, fields: { "recurrence-end-date": "2099-10-30", "recurrence-end-count": "" } });
+  const configValues = { "recurrence-end-date": "2099-10-30", "recurrence-end-count": "" };
+  const config = fakeInteraction({ customId: "harmony-manager:community:ysrecurrenceconfig", kind: "modal", guildId, fields: configValues });
+  config.fields = {
+    fields: new Set(Object.keys(configValues)),
+    getTextInputValue: (name) => {
+      if (!Object.prototype.hasOwnProperty.call(configValues, name)) throw new Error(`Required field with custom id "${name}" not found.`);
+      return configValues[name];
+    },
+  };
   await handleEventSchedulerInteraction(config);
   const save = fakeInteraction({ customId: "harmony-manager:community:ysnative:no", kind: "button", guildId });
   await handleEventSchedulerInteraction(save);
