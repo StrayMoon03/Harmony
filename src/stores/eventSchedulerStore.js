@@ -1,6 +1,6 @@
 const { getDb } = require("../db/sqlite");
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, announcementChannelId = null, announcementOffsets = [] }) {
   const db = getDb();
   const now = new Date().toISOString();
   // The legacy announcement column is NOT NULL, but calendar-only all-day
@@ -12,12 +12,12 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, recurrence_native_enabled, created_by, created_at
+        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, recurrence_native_enabled, announcement_channel_id, announcement_offsets, created_by, created_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, recurrenceNativeEnabled ? 1 : 0, createdBy, now);
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, recurrenceNativeEnabled ? 1 : 0, announcementChannelId, JSON.stringify(announcementOffsets || []), createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -35,7 +35,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
-function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false }) {
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, announcementChannelId = null, announcementOffsets = [] }) {
   return createEvent({
     guildId,
     sourceChannelId: calendarChannelId || "",
@@ -63,6 +63,8 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     recurrenceEndCount,
     recurrenceException,
     recurrenceNativeEnabled,
+    announcementChannelId,
+    announcementOffsets,
     createdBy,
     announcements: [],
   });
@@ -284,7 +286,7 @@ function cancelSeriesEvents(guildId, seriesId, cancelledBy, fromIndex = null) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled"];
+  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "announcement_channel_id", "announcement_offsets"];
   const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");
@@ -306,9 +308,40 @@ function saveManagerPanel(guildId, calendarType, channelId, messageId) {
   `).run(guildId, calendarType, channelId, messageId, new Date().toISOString());
 }
 
+function saveEventAnnouncements(guildId, eventId, channelId, offsets, items) {
+  const db = getDb();
+  const event = getEvent(guildId, eventId);
+  if (!event) return null;
+  const normalized = [...new Set((offsets || []).map(Number).filter((value) => [0, 259200, 604800].includes(value)))].sort((a, b) => b - a);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE scheduled_events SET announcement_channel_id = ?, announcement_offsets = ? WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL")
+      .run(channelId || null, JSON.stringify(normalized), guildId, eventId);
+    db.prepare("DELETE FROM scheduled_announcements WHERE event_id = ? AND status IN ('pending', 'sending')").run(eventId);
+    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)");
+    const now = new Date().toISOString();
+    for (const item of items || []) insert.run(eventId, item.scheduledFor, item.message, now);
+    db.exec("COMMIT");
+    return getEvent(guildId, eventId);
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+function getDiscordEventReconciliation(guildId, discordEventId) {
+  return getDb().prepare("SELECT * FROM discord_event_reconciliations WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId) || null;
+}
+
+function saveDiscordEventReconciliation(guildId, discordEventId, noticeMessageId, status = "open") {
+  const now = new Date().toISOString();
+  getDb().prepare(`INSERT INTO discord_event_reconciliations (guild_id, discord_event_id, notice_message_id, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, discord_event_id) DO UPDATE SET notice_message_id = excluded.notice_message_id, status = excluded.status, updated_at = excluded.updated_at`)
+    .run(guildId, discordEventId, noticeMessageId || null, status, now, now);
+  return getDiscordEventReconciliation(guildId, discordEventId);
+}
+
 function dueAnnouncements(nowIso, limit = 25) {
   return getDb().prepare(`
-    SELECT a.*, e.guild_id, e.destination_channel_id, e.title, e.link
+    SELECT a.*, e.guild_id, COALESCE(e.announcement_channel_id, e.destination_channel_id) AS destination_channel_id, e.title, e.link
     FROM scheduled_announcements a
     JOIN scheduled_events e ON e.id = a.event_id
     WHERE a.status = 'pending'
@@ -363,6 +396,9 @@ module.exports = {
   markSending,
   markSent,
   markFailed,
+  saveEventAnnouncements,
+  getDiscordEventReconciliation,
+  saveDiscordEventReconciliation,
   setCalendarChannels,
   getCalendarChannels,
   setManagerChannel,
