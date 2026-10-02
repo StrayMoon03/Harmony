@@ -36,7 +36,10 @@ function normalizeRecurrenceRule(input = {}, startDate) {
   const interval = type === "biweekly" ? 2 : Number(input.interval || 1);
   if (!Number.isInteger(interval) || interval < 1 || interval > 52) throw new Error("Recurrence interval must be a whole number from 1 to 52.");
   let weekdays = input.weekdays;
-  if (typeof weekdays === "string") weekdays = weekdays.split(/[\s,]+/).filter(Boolean).map(Number);
+  if (typeof weekdays === "string") weekdays = weekdays.split(/[\s,+]+/).filter(Boolean).map((value) => {
+    const names = { sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2, wednesday: 3, wed: 3, thursday: 4, thu: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6 };
+    return Object.prototype.hasOwnProperty.call(names, value.toLowerCase()) ? names[value.toLowerCase()] : Number(value);
+  });
   if (type === "custom" && (!Array.isArray(weekdays) || !weekdays.length)) throw new Error("Custom recurrence needs at least one weekday.");
   weekdays = Array.isArray(weekdays) && weekdays.length ? [...new Set(weekdays.map(Number))].sort((a, b) => a - b) : [start.getUTCDay()];
   if (weekdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) throw new Error("Choose weekdays using values from 0 (Sunday) through 6 (Saturday).");
