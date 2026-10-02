@@ -1189,12 +1189,17 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
     try {
+      const readOptionalField = (id) => {
+        const modalFields = interaction.fields?.fields;
+        if (modalFields && typeof modalFields.has === "function" && !modalFields.has(id)) return "";
+        return interaction.fields.getTextInputValue(id);
+      };
       const recurrenceRule = normalizeRecurrenceRule({
         type: draft.recurrenceType,
-        interval: interaction.fields.getTextInputValue("recurrence-interval"),
-        weekdays: interaction.fields.getTextInputValue("recurrence-weekdays"),
-        endDate: interaction.fields.getTextInputValue("recurrence-end-date"),
-        count: interaction.fields.getTextInputValue("recurrence-end-count"),
+        interval: draft.recurrenceType === "custom" ? readOptionalField("recurrence-interval") : "",
+        weekdays: draft.recurrenceType === "custom" ? readOptionalField("recurrence-weekdays") : "",
+        endDate: readOptionalField("recurrence-end-date"),
+        count: readOptionalField("recurrence-end-count"),
       }, draft.eventDate);
       generateRecurringOccurrences({ startDate: draft.eventDate, startTime: draft.eventTime, timezone: draft.eventTimezone, rule: recurrenceRule, localToUtc });
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceRule });
