@@ -74,6 +74,7 @@ const YOUTIFUL_TIMEZONE_OPTIONS = [
   { label: "Pacific Time", value: "America/Los_Angeles" },
   { label: "Alaska Time", value: "America/Anchorage" },
   { label: "Hawaii Time", value: "Pacific/Honolulu" },
+  { label: "Mexico City Time", value: "America/Mexico_City" },
   { label: "Korea Time", value: "Asia/Seoul" },
   { label: "Japan Time", value: "Asia/Tokyo" },
   { label: "No timezone (all-day)", value: "none" },
@@ -329,8 +330,53 @@ function youtifulTitleMenu(titles) {
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
-function youtifulChannelMenu() {
-  const menu = new ChannelSelectMenuBuilder().setCustomId("harmony-manager:community:yschannel").setPlaceholder("Choose the Discord channel").setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+function youtifulChannelMenu(action = "yschannel", eventId = "new") {
+  const suffix = eventId === "new" ? "" : ":" + eventId;
+  const menu = new ChannelSelectMenuBuilder()
+    .setCustomId("harmony-manager:community:" + action + suffix)
+    .setPlaceholder("Choose the Discord channel")
+    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice, ChannelType.GuildStageVoice);
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+function youtifulEditPanel(event) {
+  const timezoneValue = event.event_timezone || event.timezone;
+  const timezone = YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.value === timezoneValue)?.label || timezoneValue || "No timezone";
+  const channel = event.event_channel_id ? `<#${event.event_channel_id}>` : "No channel";
+  const type = YOUTIFUL_EVENT_TYPE_LABELS[event.calendar_event_type] || "Other / Custom";
+  const content = [
+    `✏️ **EDIT EVENT**`,
+    `**${event.title}**`,
+    `${event.event_date || "Date pending"}${event.all_day ? " • All Day" : ` • ${eventLocalTime(event)}`}`,
+    `Time zone: ${timezone}`,
+    `Type: ${type}`,
+    `Channel: ${channel}`,
+    event.description ? `Description: ${event.description}` : null,
+  ].filter(Boolean).join("\n");
+  return {
+    content,
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`harmony-manager:community:editdetails:${event.id}`).setLabel("📝 Details").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`harmony-manager:community:edittzpick:${event.id}`).setLabel("🕐 Time Zone").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`harmony-manager:community:edittypepick:${event.id}`).setLabel("🎨 Icon / Type").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`harmony-manager:community:editchannelpick:${event.id}`).setLabel("📍 Channel").setStyle(ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`harmony-manager:community:done:${event.id}`).setLabel("Done").setStyle(ButtonStyle.Success)
+      ),
+    ],
+  };
+}
+
+function youtifulEditTypeMenu(eventId, selected) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:community:edittype:${eventId}`)
+    .setPlaceholder("Choose the event icon / type")
+    .addOptions(YOUTIFUL_EVENT_TYPES.map((value) => {
+      const match = /^<:([^:>]+):(\d+)>$/.exec(YOUTIFUL_EVENT_TYPE_ICONS[value]);
+      return { label: YOUTIFUL_EVENT_TYPE_LABELS[value], value, default: value === selected, emoji: match ? { name: match[1], id: match[2] } : undefined };
+    }));
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
@@ -452,7 +498,7 @@ function youtifulBirthdayEvents(guildId, monthKey) {
     .map((profile) => ({
       id: `birthday-${profile.id}`,
       title: `Happy Birthday, ${profile.birthday_name || "Youtiful STAY"}!`,
-      description: profile.user_id ? `<@${profile.user_id}>` : null,
+      description: null,
       event_date: `${year}-${profile.birthday_mmdd}`,
       event_at: null,
       event_timezone: null,
@@ -644,12 +690,17 @@ async function syncNativeScheduledEvent(client, event) {
   const guild = client.guilds.cache.get(event.guild_id) || await client.guilds.fetch(event.guild_id).catch(() => null);
   const native = guild?.scheduledEvents?.cache?.get(event.discord_event_id) || await guild?.scheduledEvents?.fetch(event.discord_event_id).catch(() => null);
   if (!native) return false;
-  await native.edit({
+  const payload = {
     name: event.title,
     scheduledStartTime: new Date(event.event_at),
     scheduledEndTime: nativeEventEndTime(event),
     description: event.description || undefined,
-  });
+  };
+  if (event.event_channel_id) {
+    const channel = guild?.channels?.cache?.get(event.event_channel_id) || await guild?.channels?.fetch(event.event_channel_id).catch(() => null);
+    payload.entityMetadata = { location: channel ? `#${channel.name}` : "Harmony calendar" };
+  }
+  await native.edit(payload);
   return true;
 }
 
@@ -1043,7 +1094,75 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(interaction.values[0]));
     if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
     managerDrafts.set(draftKey(interaction, calendarType, event.id), { eventId: event.id, existing: event });
-    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:editmodal:${event.id}`, "Edit calendar event", calendarType === "community" ? youtifulEditFields(event) : editManagerFields(event)));
+    if (calendarType === "community") {
+      await interaction.update(youtifulEditPanel(event));
+    } else {
+      await interaction.showModal(managerModal(`harmony-manager:${calendarType}:editmodal:${event.id}`, "Edit calendar event", editManagerFields(event)));
+    }
+    return;
+  }
+  if (calendarType === "community" && action === "editdetails" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    await interaction.showModal(managerModal(`harmony-manager:community:editdetailsmodal:${event.id}`, "Edit event details", youtifulEditFields(event)));
+    return;
+  }
+  if (calendarType === "community" && action === "editdetailsmodal" && interaction.isModalSubmit()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    try {
+      const timezone = existing.all_day ? "" : (existing.event_timezone || existing.timezone);
+      const parsed = parseManagerDraft({
+        title: interaction.fields.getTextInputValue("title"),
+        eventDate: interaction.fields.getTextInputValue("event-date"),
+        eventTime: interaction.fields.getTextInputValue("event-time"),
+        timezone,
+        description: interaction.fields.getTextInputValue("description"),
+      }, calendarType);
+      const saved = store.updateEvent(interaction.guildId, Number(eventId), {
+        title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt,
+        event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link,
+        description: parsed.description, all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
+      });
+      await interaction.reply({ ...youtifulEditPanel(saved), flags: 64 });
+      if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
+      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((error) => console.error("Calendar refresh after details edit failed:", error));
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    return;
+  }
+  if (calendarType === "community" && action === "edittzpick" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", eventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
+    return;
+  }
+  if (calendarType === "community" && action === "edittypepick" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(eventId, event.calendar_event_type || "other") });
+    return;
+  }
+  if (calendarType === "community" && action === "edittype" && interaction.isStringSelectMenu()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
+    const saved = store.updateEvent(interaction.guildId, Number(eventId), { calendar_event_type: interaction.values[0], category: interaction.values[0] });
+    await interaction.update(youtifulEditPanel(saved));
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, saved.event_date).catch((error) => console.error("Calendar refresh after type edit failed:", error));
+    return;
+  }
+  if (calendarType === "community" && action === "editchannelpick" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
+    await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", eventId) });
+    return;
+  }
+  if (calendarType === "community" && action === "editchannel" && interaction.isChannelSelectMenu()) {
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!existing) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
+    const saved = store.updateEvent(interaction.guildId, Number(eventId), { event_channel_id: interaction.values[0] });
+    await interaction.update(youtifulEditPanel(saved));
+    if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event channel sync failed:", error));
+    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, saved.event_date).catch((error) => console.error("Calendar refresh after channel edit failed:", error));
     return;
   }
   if (action === "editmodal" && interaction.isModalSubmit()) {
@@ -1089,10 +1208,16 @@ async function handleManagerInteraction(interaction) {
     if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
     try {
       const timezone = interaction.values[0] === "none" ? "" : interaction.values[0];
-      const parsed = parseManagerDraft({ title: draft.title, eventDate: draft.eventDate, eventTime: draft.eventTime, timezone, description: draft.description, fallbackTimezone: existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location) }, calendarType);
+      const parsed = parseManagerDraft({
+        title: draft.title || existing.title,
+        eventDate: draft.eventDate || existing.event_date,
+        eventTime: draft.eventTime ?? (existing.all_day ? "" : eventLocalTime(existing)),
+        timezone,
+        description: draft.description ?? existing.description ?? "",
+      }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, ...parsed, existing, eventId });
       const saved = store.updateEvent(interaction.guildId, Number(eventId), { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
-      await interaction.update({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other") });
+      await interaction.update(youtifulEditPanel(saved));
       if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) {
@@ -1154,7 +1279,7 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   if (action === "done" && interaction.isButton()) {
-    await interaction.update({ content: "Calendar event changes saved.", components: [] });
+    await interaction.update({ content: "✅ Calendar event changes saved.", components: [] });
     return;
   }
   if (action === "cancelselect" && interaction.isStringSelectMenu()) {

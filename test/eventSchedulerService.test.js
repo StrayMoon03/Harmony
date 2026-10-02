@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { ChannelType } = require("discord.js");
 const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
@@ -30,6 +31,17 @@ test("Youtiful Stays calendar renders compact channel rows and native links", ()
   assert.match(text, /<#[0-9]+>/);
   assert.match(text, /View Discord Event/);
   assert.equal(part.embeds[0].title, "📅 YOUTIFUL STAYS • OCTOBER 2026");
+});
+
+test("Youtiful birthday calendar entries are informational and never mention members", () => {
+  const [part] = buildYoutifulCalendarMessages("2026-10", [{
+    category: "birthday", calendar_event_type: "birthday", event_date: "2026-10-08", all_day: 1,
+    title: "Happy Birthday, Mina!", description: null, event_at: null,
+  }], Date.parse("2026-10-01T00:00:00Z"));
+  const payload = part.embeds[0].description;
+  assert.match(payload, /Happy Birthday, Mina/);
+  assert.doesNotMatch(payload, /<@\d+>/);
+  assert.deepEqual(part.allowedMentions, { parse: [] });
 });
 
 test("Interested state uses Discord Scheduled Event subscriber capabilities", () => {
@@ -744,17 +756,23 @@ test("Youtiful create and edit modals use a timezone step instead of Location or
   await handleEventSchedulerInteraction(edit);
   const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
   await handleEventSchedulerInteraction(select);
-  const editModal = select.responses[0].modal.toJSON();
+  assert.equal(select.responses[0].type, "update");
+  const panelButtons = select.responses[0].payload.components.flatMap((row) => row.toJSON().components);
+  const details = fakeInteraction({ customId: `harmony-manager:community:editdetails:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(details);
+  const editModal = details.responses[0].modal.toJSON();
   const editIds = editModal.components.map((row) => row.components[0].custom_id);
   assert.deepEqual(editIds, ["title", "event-date", "event-time", "description"]);
   assert.equal(editIds.includes("location"), false);
   assert.equal(editIds.includes("event-end-time"), false);
+  assert.ok(panelButtons.some((button) => button.custom_id === `harmony-manager:community:edittzpick:${eventId}`));
 });
 
 test("Youtiful timezone choices store IANA zones and enforce timed/all-day rules", () => {
   assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Eastern Time").value, "America/New_York");
   assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Korea Time").value, "Asia/Seoul");
   assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Japan Time").value, "Asia/Tokyo");
+  assert.equal(YOUTIFUL_TIMEZONE_OPTIONS.find((option) => option.label === "Mexico City Time").value, "America/Mexico_City");
   const timed = parseManagerDraft({ title: "Community event", eventDate: "2026-10-24", eventTime: "18:30", timezone: "America/New_York", description: "" }, "community");
   assert.equal(timed.eventTimezone, "America/New_York");
   assert.equal(timed.eventLocation, "");
@@ -780,12 +798,87 @@ test("Youtiful channel selection advances to native-event choice and remains ack
   await handleEventSchedulerInteraction(details);
   const timezone = fakeInteraction({ customId: "harmony-manager:community:ystimezone", kind: "select", guildId, values: ["America/New_York"] });
   await handleEventSchedulerInteraction(timezone);
+  const channelTypes = timezone.responses[0].payload.components[0].toJSON().components[0].channel_types;
+  assert.ok(channelTypes.includes(ChannelType.GuildText));
+  assert.ok(channelTypes.includes(ChannelType.GuildAnnouncement));
+  assert.ok(channelTypes.includes(ChannelType.GuildVoice));
+  assert.ok(channelTypes.includes(ChannelType.GuildStageVoice));
   const channel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["event-channel"] });
   await handleEventSchedulerInteraction(channel);
   assert.equal(channel.responses.length, 1);
   assert.equal(channel.responses[0].type, "update");
   assert.match(channel.responses[0].payload.content, /native Discord Scheduled Event/);
   assert.equal(channel.responses[0].payload.components[0].toJSON().components.length, 2);
+});
+
+test("Youtiful edit panel persists details, timezone, type, and channel independently", async () => {
+  const guildId = `youtiful-edit-panel-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "community-calendar", title: "Original title",
+    eventDate: "2099-10-03", eventAt: localToUtc("2099-10-03", "11:00", "Asia/Seoul").toISOString(),
+    eventTimezone: "Asia/Seoul", timezone: "Asia/Seoul", calendarType: "community", category: "kdrama",
+    calendarEventType: "kdrama", eventChannelId: "old-channel", description: "Original description", createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  const detailsButton = fakeInteraction({ customId: `harmony-manager:community:editdetails:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(detailsButton);
+  const details = fakeInteraction({
+    customId: `harmony-manager:community:editdetailsmodal:${eventId}`, kind: "modal", guildId,
+    fields: { title: "Updated title", "event-date": "2099-11-04", "event-time": "20:30", description: "Updated description" },
+  });
+  await handleEventSchedulerInteraction(details);
+  let saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.title, "Updated title");
+  assert.equal(saved.event_date, "2099-11-04");
+  assert.equal(saved.description, "Updated description");
+  assert.equal(details.responses[0].type, "reply");
+
+  const timezoneButton = fakeInteraction({ customId: `harmony-manager:community:edittzpick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(timezoneButton);
+  const timezone = fakeInteraction({ customId: `harmony-manager:community:edittimezone:${eventId}`, kind: "select", guildId, values: ["America/Mexico_City"] });
+  await handleEventSchedulerInteraction(timezone);
+  saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.event_timezone, "America/Mexico_City");
+  assert.equal(saved.event_at, localToUtc("2099-11-04", "20:30", "America/Mexico_City").toISOString());
+
+  const typeButton = fakeInteraction({ customId: `harmony-manager:community:edittypepick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(typeButton);
+  const type = fakeInteraction({ customId: `harmony-manager:community:edittype:${eventId}`, kind: "select", guildId, values: ["games"] });
+  await handleEventSchedulerInteraction(type);
+  assert.equal(store.getEvent(guildId, eventId).calendar_event_type, "games");
+
+  const channelButton = fakeInteraction({ customId: `harmony-manager:community:editchannelpick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(channelButton);
+  const channel = fakeInteraction({ customId: `harmony-manager:community:editchannel:${eventId}`, kind: "channel", guildId, values: ["new-voice-channel"] });
+  await handleEventSchedulerInteraction(channel);
+  assert.equal(store.getEvent(guildId, eventId).event_channel_id, "new-voice-channel");
+  assert.equal(channel.responses[0].type, "update");
+});
+
+test("Youtiful Other / Custom remains a one-off title", async () => {
+  const guildId = `youtiful-custom-title-${Date.now()}`;
+  const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
+  await handleEventSchedulerInteraction(add);
+  const type = fakeInteraction({ customId: "harmony-manager:community:ystype", kind: "select", guildId, values: ["other"] });
+  await handleEventSchedulerInteraction(type);
+  const title = fakeInteraction({ customId: "harmony-manager:community:ystitle", kind: "select", guildId, values: ["other"] });
+  await handleEventSchedulerInteraction(title);
+  assert.equal(title.responses[0].modal.toJSON().components[0].components[0].custom_id, "title");
+  const details = fakeInteraction({
+    customId: "harmony-manager:community:ysdetails", kind: "modal", guildId,
+    fields: { title: "One-off community night", "event-date": "2099-12-01", "event-time": "", description: "" },
+  });
+  await handleEventSchedulerInteraction(details);
+  const timezone = fakeInteraction({ customId: "harmony-manager:community:ystimezone", kind: "select", guildId, values: ["none"] });
+  await handleEventSchedulerInteraction(timezone);
+  const channel = fakeInteraction({ customId: "harmony-manager:community:yschannel", kind: "channel", guildId, values: ["community-room"] });
+  await handleEventSchedulerInteraction(channel);
+  const save = fakeInteraction({ customId: "harmony-manager:community:ysnative:no", kind: "button", guildId });
+  await handleEventSchedulerInteraction(save);
+  assert.equal(store.listCalendarEventTitles(guildId, "community").some((row) => row.title === "One-off community night"), false);
 });
 
 test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
