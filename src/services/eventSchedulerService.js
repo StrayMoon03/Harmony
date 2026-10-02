@@ -120,6 +120,7 @@ function parseManagerDraft(fields, calendarType) {
     ? (hasExplicitTimezone
       ? (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
       : ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+        || (resolveLocationTimezone(location))
         || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null)))
     : (resolveLocationTimezone(location)
       || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
