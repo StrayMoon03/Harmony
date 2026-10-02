@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("./formatter");
+const { formatMediaCard, extractOriginalDate, formatXTextPost, buttonUrlForPlatform } = require("./formatter");
 
 test("all successful media cards keep only platform identification above media", () => {
   const emojiEnvironment = {
@@ -80,6 +80,26 @@ test("member comment uses a bold quoted attribution without repeating the mentio
   assert.doesNotMatch(card.footer, /MEMBER COMMENT|said:/);
   assert.equal(card.buttonLabel, "View on TikTok");
   assert.equal(card.buttonUrl, "https://www.tiktok.com/@creator/video/123");
+});
+
+test("TikTok link buttons remove oversized tracking parameters", () => {
+  const canonical = "https://www.tiktok.com/@creator/video/7692078890688318752";
+  const tracked = `${canonical}?${new URLSearchParams({
+    share_link_id: "x".repeat(600),
+    panel_source_v2: "share_panel",
+  })}`;
+
+  assert.ok(tracked.length > 512);
+  assert.equal(buttonUrlForPlatform("TikTok", tracked), canonical);
+
+  const card = formatMediaCard({
+    platform: "TikTok",
+    creator: "creator",
+    originalUrl: tracked,
+    sharedById: "123",
+  });
+  assert.equal(card.buttonUrl, canonical);
+  assert.ok(card.buttonUrl.length <= 512);
 });
 
 test("no member comment produces no comment section", () => {

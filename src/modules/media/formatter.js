@@ -1,5 +1,25 @@
 const { platformIcon } = require("./emojiConfig");
 
+function buttonUrlForPlatform(platform, originalUrl) {
+  if (!originalUrl) return null;
+  const value = String(originalUrl);
+
+  if (String(platform).toLowerCase() === "tiktok") {
+    try {
+      const parsed = new URL(value);
+      if (["tiktok.com", "www.tiktok.com"].includes(parsed.hostname.toLowerCase())) {
+        parsed.search = "";
+        parsed.hash = "";
+        return parsed.toString();
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return value.length <= 512 ? value : null;
+}
+
 /**
  * Builds Harmony's media card.
  *
@@ -48,7 +68,7 @@ function formatMediaCard({
       memberComment ? `> ${memberComment}` : null,
     ].filter((line) => line !== null).join("\n"),
     buttonLabel: `View on ${platform}`,
-    buttonUrl: originalUrl || null,
+    buttonUrl: buttonUrlForPlatform(platform, originalUrl),
   };
 }
 
@@ -104,4 +124,5 @@ module.exports = {
   formatMediaCard,
   extractOriginalDate,
   formatXTextPost,
+  buttonUrlForPlatform,
 };
