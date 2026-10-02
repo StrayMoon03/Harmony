@@ -115,9 +115,12 @@ function parseManagerDraft(fields, calendarType) {
   const endTime = String(fields.endTime || "").trim();
   const location = String(fields.location || "").trim();
   const legacyTimezone = String(fields.timezone || "").trim();
+  const hasExplicitTimezone = Object.prototype.hasOwnProperty.call(fields, "timezone");
   const timezone = calendarType === "community"
-    ? ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
-      || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null))
+    ? (hasExplicitTimezone
+      ? (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+      : ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+        || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null)))
     : (resolveLocationTimezone(location)
       || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
       || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null));
