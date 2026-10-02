@@ -481,7 +481,11 @@ function announcementOffsetsFromEvent(event) {
 }
 
 function calendarAnnouncementItems(event, offsets) {
-  const start = event?.event_at ? new Date(event.event_at) : null;
+  const start = event?.event_at
+    ? new Date(event.event_at)
+    : event?.event_date && /^\d{4}-\d{2}-\d{2}$/.test(event.event_date)
+      ? new Date(`${event.event_date}T09:00:00.000Z`)
+      : null;
   if (!start || Number.isNaN(start.getTime())) return [];
   const now = Date.now();
   return [...new Set(offsets || [])].map(Number).filter((offset) => [0, 259200, 604800].includes(offset)).map((offset) => ({
