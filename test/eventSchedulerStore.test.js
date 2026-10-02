@@ -23,3 +23,18 @@ test("calendar-only events do not require an announcement or link", () => {
   assert.equal(store.updateEvent(guildId, eventId, { link: "https://example.com/skz" }).link, "https://example.com/skz");
   assert.equal(store.cancelEvent(guildId, eventId, "admin"), true);
 });
+
+test("recurring series cancellation can stop this-and-future without touching another series", () => {
+  const guildId = `recurrence-cancel-${Date.now()}`;
+  const make = (seriesId, index) => store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-channel", title: seriesId, eventDate: `2099-01-${String(4 + index * 7).padStart(2, "0")}`,
+    allDay: true, eventTimezone: null, calendarType: "community", category: "other", recurrenceSeriesId: seriesId,
+    recurrenceRule: JSON.stringify({ type: "weekly", count: 3 }), recurrenceIndex: index, createdBy: "admin",
+  });
+  const firstSeries = [0, 1, 2].map((index) => make("series-a", index));
+  const secondSeries = [0, 1].map((index) => make("series-b", index));
+  assert.equal(store.cancelSeriesEvents(guildId, "series-a", "admin", 1), 2);
+  assert.equal(store.getEvent(guildId, firstSeries[0]).cancelled_at, null);
+  assert.equal(store.getEvent(guildId, firstSeries[1]), undefined);
+  assert.ok(store.getEvent(guildId, secondSeries[0]));
+});

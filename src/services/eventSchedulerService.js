@@ -17,6 +17,8 @@ const {
 const store = require("../stores/eventSchedulerStore");
 const birthdayStore = require("../stores/birthdayStore");
 const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
+const { randomUUID } = require("node:crypto");
+const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences } = require("./recurrenceService");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
@@ -396,7 +398,147 @@ function nativeEventMenu() {
   )];
 }
 
+function recurrenceMenu() {
+  return [new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder().setCustomId("harmony-manager:community:ysrecurrence").setPlaceholder("Choose recurrence").addOptions(
+      { label: "Doesn't repeat", value: "none" },
+      { label: "Weekly", value: "weekly" },
+      { label: "Every 2 weeks", value: "biweekly" },
+      { label: "Monthly", value: "monthly" },
+      { label: "Custom", value: "custom" },
+    )
+  )];
+}
+
+function recurrenceConfigFields(type) {
+  const fields = [];
+  if (type === "custom") {
+    fields.push({ id: "recurrence-interval", label: "Every how many weeks?", required: true, maxLength: 2 });
+    fields.push({ id: "recurrence-weekdays", label: "Weekdays (0 Sun - 6 Sat)", required: true, maxLength: 20 });
+  }
+  fields.push({ id: "recurrence-end-date", label: "End date YYYY-MM-DD (or blank)", maxLength: 10 });
+  fields.push({ id: "recurrence-end-count", label: "End after occurrences (or blank)", maxLength: 3 });
+  return fields;
+}
+
+function recurrenceNativeMenu() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-manager:community:ysnative:yes").setLabel("Create Discord Scheduled Event(s)").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId("harmony-manager:community:ysnative:no").setLabel("Harmony calendar only").setStyle(ButtonStyle.Secondary)
+  )];
+}
+
+function recurrenceScopeMenu(action, eventId) {
+  return [new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder().setCustomId(`harmony-manager:community:recurrencescope:${action}:${eventId}`).setPlaceholder("Apply changes to...").addOptions(
+      { label: "This event", value: "this" },
+      { label: "This and future events", value: "future" },
+      { label: "Entire series", value: "series" },
+    )
+  )];
+}
+
+function recurrenceCancelButtons(eventId) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:community:cancelscope:this:${eventId}`).setLabel("This event").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`harmony-manager:community:cancelscope:future:${eventId}`).setLabel("This and future events").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`harmony-manager:community:cancelscope:series:${eventId}`).setLabel("Entire series").setStyle(ButtonStyle.Danger),
+  )];
+}
+
 const managerDrafts = new Map();
+
+function recurrenceOccurrences(draft) {
+  const rule = draft.recurrenceRule || { type: "none" };
+  return generateRecurringOccurrences({
+    startDate: draft.eventDate,
+    startTime: draft.eventTime,
+    timezone: draft.eventTimezone,
+    rule,
+    localToUtc,
+  });
+}
+
+function createYoutifulOccurrences(guildId, calendarChannelId, draft, createdBy) {
+  const occurrences = recurrenceOccurrences(draft);
+  const seriesId = draft.recurrenceRule?.type && draft.recurrenceRule.type !== "none" ? randomUUID() : null;
+  const created = occurrences.map((occurrence) => store.createCalendarEvent({
+    guildId,
+    calendarChannelId,
+    title: draft.title,
+    link: draft.link,
+    timezone: draft.timezone,
+    eventAt: occurrence.eventAt,
+    eventEndAt: draft.eventEndAt && occurrence.eventAt ? new Date(new Date(occurrence.eventAt).getTime() + (new Date(draft.eventEndAt).getTime() - new Date(draft.eventAt).getTime())).toISOString() : null,
+    eventDate: occurrence.eventDate,
+    eventTimezone: draft.eventTimezone,
+    eventLocation: draft.eventLocation,
+    calendarType: "community",
+    category: draft.calendarEventType,
+    allDay: draft.allDay,
+    description: draft.description,
+    createdBy,
+    calendarEventType: draft.calendarEventType,
+    eventChannelId: draft.eventChannelId,
+    recurrenceSeriesId: seriesId,
+    recurrenceRule: seriesId ? JSON.stringify(draft.recurrenceRule) : null,
+    recurrenceIndex: seriesId ? occurrence.occurrenceIndex : null,
+    recurrenceEndDate: seriesId ? draft.recurrenceRule.endDate : null,
+    recurrenceEndCount: seriesId ? draft.recurrenceRule.count : null,
+  }));
+  return { seriesId, occurrences: created.map((id) => store.getEvent(guildId, id)) };
+}
+
+async function refreshRecurringMonths(client, guildId, events) {
+  const months = [...new Set(events.map((event) => monthKeyFromDate(event.event_date)).filter(Boolean))];
+  for (const month of months) await refreshPublishedCalendar(client, guildId, "community", month);
+}
+
+async function syncChangedNativeEvents(client, events) {
+  for (const event of events) {
+    if (event.discord_event_id && !event.all_day) await syncNativeScheduledEvent(client, event).catch((error) => console.error("Linked recurring Discord event sync failed:", error));
+  }
+}
+
+function applyRecurringChanges(guildId, event, scope, changes) {
+  const series = event.recurrence_series_id ? store.listSeriesEvents(guildId, event.recurrence_series_id) : [event];
+  const eligible = scope === "series" ? series : scope === "future" ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
+  const updated = [];
+  for (const item of eligible) {
+    const next = { ...changes };
+    if (scope !== "this" && item.id !== event.id) {
+      delete next.event_date;
+      delete next.event_at;
+      delete next.event_end_at;
+    }
+    if (next.event_timezone && next.event_at && item.id !== event.id) {
+      const localTime = eventLocalTime(event);
+      const at = localToUtc(item.event_date, localTime, next.event_timezone);
+      next.event_at = at ? at.toISOString() : item.event_at;
+    }
+    if (scope === "this" && item.recurrence_series_id) next.recurrence_exception = 1;
+    updated.push(store.updateEvent(guildId, item.id, next));
+  }
+  return updated.filter(Boolean);
+}
+
+async function cancelRecurringEvents(interaction, event, scope) {
+  const events = event.recurrence_series_id ? store.listSeriesEvents(interaction.guildId, event.recurrence_series_id) : [event];
+  const targets = scope === "series" ? events : scope === "future" ? events.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
+  for (const item of targets) {
+    if (item.recurrence_series_id) store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
+    else store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
+  }
+  return targets;
+}
+
+async function cancelLinkedNativeEvents(interaction, events) {
+  for (const item of events) {
+    if (!item.discord_event_id) continue;
+    const native = interaction.guild?.scheduledEvents?.cache?.get(item.discord_event_id) || await interaction.guild?.scheduledEvents?.fetch(item.discord_event_id).catch(() => null);
+    if (native) await native.edit({ status: GuildScheduledEventStatus.Canceled }).catch((error) => console.error("Linked Discord event cancellation failed:", error));
+  }
+}
 
 function draftKey(interaction, calendarType, eventId = "new") {
   return `${interaction.guildId}:${interaction.user.id}:${calendarType}:${eventId}`;
@@ -1001,26 +1143,63 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
     managerDrafts.set(draftKey(interaction, calendarType), { ...draft, eventChannelId: interaction.values[0] });
-    await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
+    await interaction.update({ content: "Does this event repeat?", components: recurrenceMenu() });
+    return;
+  }
+  if (calendarType === "community" && action === "ysrecurrence" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
+    const type = interaction.values[0];
+    if (!RECURRENCE_TYPES.includes(type)) { await interaction.update({ content: "That recurrence option is no longer available.", components: [] }); return; }
+    if (type === "none") {
+      managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceRule: { type: "none" } });
+      await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
+    } else {
+      managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceType: type });
+      await interaction.showModal(managerModal("harmony-manager:community:ysrecurrenceconfig", "Recurring event", recurrenceConfigFields(type)));
+    }
+    return;
+  }
+  if (calendarType === "community" && action === "ysrecurrenceconfig" && interaction.isModalSubmit()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 }); return; }
+    try {
+      const recurrenceRule = normalizeRecurrenceRule({
+        type: draft.recurrenceType,
+        interval: interaction.fields.getTextInputValue("recurrence-interval"),
+        weekdays: interaction.fields.getTextInputValue("recurrence-weekdays"),
+        endDate: interaction.fields.getTextInputValue("recurrence-end-date"),
+        count: interaction.fields.getTextInputValue("recurrence-end-count"),
+      }, draft.eventDate);
+      generateRecurringOccurrences({ startDate: draft.eventDate, startTime: draft.eventTime, timezone: draft.eventTimezone, rule: recurrenceRule, localToUtc });
+      managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceRule });
+      await interaction.reply({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu(), flags: 64 });
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
   }
   if (calendarType === "community" && action === "ysnative" && interaction.isButton()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
     try {
-      const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link, timezone: draft.timezone, eventAt: draft.eventAt, eventEndAt: draft.eventEndAt, eventDate: draft.eventDate, eventTimezone: draft.eventTimezone, calendarType, category: draft.calendarEventType, allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id, calendarEventType: draft.calendarEventType, eventChannelId: draft.eventChannelId });
+      const savedSeries = createYoutifulOccurrences(interaction.guildId, calendarChannelId, draft, interaction.user.id);
+      const createdEvents = savedSeries.occurrences;
       let nativeId = null;
       let nativeWarning = "";
-      if (eventId && interaction.customId.endsWith(":yes") && !draft.allDay) {
+      if (createdEvents.length && interaction.customId.endsWith(":yes") && !draft.allDay) {
         try {
-          const created = await createNativeScheduledEvent(interaction.guild, draft, draft.eventChannelId);
-          nativeId = created?.id || null;
-          if (nativeId) store.updateEvent(interaction.guildId, eventId, { discord_event_id: nativeId });
+          for (const event of createdEvents.slice(0, 12)) {
+            const created = await createNativeScheduledEvent(interaction.guild, { ...draft, eventAt: event.event_at, eventEndAt: event.event_end_at, title: event.title, description: event.description }, event.event_channel_id);
+            if (created?.id) {
+              nativeId = nativeId || created.id;
+              store.updateEvent(interaction.guildId, event.id, { discord_event_id: created.id });
+            }
+          }
+          if (createdEvents.length > 12) nativeWarning = " Native events were created for the first 12 upcoming occurrences; Harmony still owns the complete series.";
         } catch (error) { nativeWarning = ` Native event not created: ${error.message}`; }
-      } else if (interaction.customId.endsWith(":yes")) nativeWarning = " All-day events remain Harmony-only.";
+      } else if (interaction.customId.endsWith(":yes") && draft.allDay) nativeWarning = " All-day events remain Harmony-only.";
       managerDrafts.delete(draftKey(interaction, calendarType));
       await interaction.update({ content: `✅ Event saved: **${draft.title}**${nativeId ? " (Discord event linked)" : ""}${nativeWarning}`, components: [] });
-      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate).catch((error) => console.error("Youtiful calendar refresh failed:", error));
+      await refreshRecurringMonths(interaction.client, interaction.guildId, createdEvents).catch((error) => console.error("Youtiful calendar refresh failed:", error));
     } catch (error) { await interaction.update({ content: `Event saved failed: ${error.message}`, components: [] }); }
     return;
   }
@@ -1101,10 +1280,24 @@ async function handleManagerInteraction(interaction) {
     }
     return;
   }
+  if (calendarType === "community" && action === "recurrencescope" && interaction.isStringSelectMenu()) {
+    const target = parts[3];
+    const scopedEventId = parts[4];
+    const event = store.getEvent(interaction.guildId, Number(scopedEventId));
+    if (!event) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, scopedEventId)) || { eventId: event.id, existing: event };
+    managerDrafts.set(draftKey(interaction, calendarType, scopedEventId), { ...draft, scope: interaction.values[0], existing: event, eventId: event.id });
+    if (target === "details") await interaction.showModal(managerModal(`harmony-manager:community:editdetailsmodal:${event.id}`, "Edit event details", youtifulEditFields(event)));
+    else if (target === "timezone") await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", scopedEventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
+    else if (target === "type") await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(scopedEventId, event.calendar_event_type || "other") });
+    else if (target === "channel") await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", scopedEventId) });
+    return;
+  }
   if (calendarType === "community" && action === "editdetails" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    await interaction.showModal(managerModal(`harmony-manager:community:editdetailsmodal:${event.id}`, "Edit event details", youtifulEditFields(event)));
+    if (event.recurrence_series_id) await interaction.update({ content: "Apply Details changes to:", components: recurrenceScopeMenu("details", event.id) });
+    else await interaction.showModal(managerModal(`harmony-manager:community:editdetailsmodal:${event.id}`, "Edit event details", youtifulEditFields(event)));
     return;
   }
   if (calendarType === "community" && action === "editdetailsmodal" && interaction.isModalSubmit()) {
@@ -1119,50 +1312,60 @@ async function handleManagerInteraction(interaction) {
         timezone,
         description: interaction.fields.getTextInputValue("description"),
       }, calendarType);
-      const saved = store.updateEvent(interaction.guildId, Number(eventId), {
+      const draftState = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+      const changed = applyRecurringChanges(interaction.guildId, existing, draftState?.scope || "this", {
         title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt,
         event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link,
         description: parsed.description, all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
       });
+      const saved = changed.find((item) => item.id === existing.id) || changed[0];
       await interaction.reply({ ...youtifulEditPanel(saved), flags: 64 });
-      if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
-      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((error) => console.error("Calendar refresh after details edit failed:", error));
+      await syncChangedNativeEvents(interaction.client, changed);
+      await refreshRecurringMonths(interaction.client, interaction.guildId, changed).catch((error) => console.error("Calendar refresh after details edit failed:", error));
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
   }
   if (calendarType === "community" && action === "edittzpick" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", eventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
+    if (event.recurrence_series_id) await interaction.update({ content: "Apply Time Zone changes to:", components: recurrenceScopeMenu("timezone", event.id) });
+    else await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", eventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
     return;
   }
   if (calendarType === "community" && action === "edittypepick" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(eventId, event.calendar_event_type || "other") });
+    if (event.recurrence_series_id) await interaction.update({ content: "Apply Icon / Type changes to:", components: recurrenceScopeMenu("type", event.id) });
+    else await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(eventId, event.calendar_event_type || "other") });
     return;
   }
   if (calendarType === "community" && action === "edittype" && interaction.isStringSelectMenu()) {
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!existing) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
-    const saved = store.updateEvent(interaction.guildId, Number(eventId), { calendar_event_type: interaction.values[0], category: interaction.values[0] });
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const changed = applyRecurringChanges(interaction.guildId, existing, draft?.scope || "this", { calendar_event_type: interaction.values[0], category: interaction.values[0] });
+    const saved = changed.find((item) => item.id === existing.id) || changed[0];
     await interaction.update(youtifulEditPanel(saved));
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, saved.event_date).catch((error) => console.error("Calendar refresh after type edit failed:", error));
+    await syncChangedNativeEvents(interaction.client, changed);
+    await refreshRecurringMonths(interaction.client, interaction.guildId, changed).catch((error) => console.error("Calendar refresh after type edit failed:", error));
     return;
   }
   if (calendarType === "community" && action === "editchannelpick" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", eventId) });
+    if (event.recurrence_series_id) await interaction.update({ content: "Apply Channel changes to:", components: recurrenceScopeMenu("channel", event.id) });
+    else await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", eventId) });
     return;
   }
   if (calendarType === "community" && action === "editchannel" && interaction.isChannelSelectMenu()) {
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!existing) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
-    const saved = store.updateEvent(interaction.guildId, Number(eventId), { event_channel_id: interaction.values[0] });
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const changed = applyRecurringChanges(interaction.guildId, existing, draft?.scope || "this", { event_channel_id: interaction.values[0] });
+    const saved = changed.find((item) => item.id === existing.id) || changed[0];
     await interaction.update(youtifulEditPanel(saved));
-    if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event channel sync failed:", error));
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, saved.event_date).catch((error) => console.error("Calendar refresh after channel edit failed:", error));
+    await syncChangedNativeEvents(interaction.client, changed);
+    await refreshRecurringMonths(interaction.client, interaction.guildId, changed).catch((error) => console.error("Calendar refresh after channel edit failed:", error));
     return;
   }
   if (action === "editmodal" && interaction.isModalSubmit()) {
@@ -1216,10 +1419,11 @@ async function handleManagerInteraction(interaction) {
         description: draft.description ?? existing.description ?? "",
       }, calendarType);
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, ...parsed, existing, eventId });
-      const saved = store.updateEvent(interaction.guildId, Number(eventId), { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
+      const savedChanges = applyRecurringChanges(interaction.guildId, existing, draft.scope || "this", { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
+      const saved = savedChanges.find((item) => item.id === existing.id) || savedChanges[0];
       await interaction.update(youtifulEditPanel(saved));
-      if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync failed:", error));
-      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
+      await syncChangedNativeEvents(interaction.client, savedChanges);
+      await refreshRecurringMonths(interaction.client, interaction.guildId, savedChanges).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) {
       await interaction.update({ content: error.message, components: youtifulTimezoneMenu("edittimezone", eventId, interaction.values[0]) });
     }
@@ -1286,10 +1490,20 @@ async function handleManagerInteraction(interaction) {
     const selected = Number(interaction.values[0]);
     const event = store.getEvent(interaction.guildId, selected);
     if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
-    await interaction.update({ content: `Cancel **${event.title}**?`, components: [new ActionRowBuilder().addComponents(
+    if (event.recurrence_series_id) await interaction.update({ content: `Cancel **${event.title}** — choose the scope:`, components: recurrenceCancelButtons(selected) });
+    else await interaction.update({ content: `Cancel **${event.title}**?`, components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelconfirm:${selected}`).setLabel("Confirm cancellation").setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelno`).setLabel("Keep event").setStyle(ButtonStyle.Secondary)
     )] });
+    return;
+  }
+  if (action === "cancelscope" && interaction.isButton()) {
+    const event = store.getEvent(interaction.guildId, Number(parts[4]));
+    if (!event) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
+    const targets = await cancelRecurringEvents(interaction, event, parts[3]);
+    await interaction.update({ content: `Cancelled ${parts[3] === "series" ? "the entire series" : parts[3] === "future" ? "this and future occurrences" : "this occurrence"}.`, components: [] });
+    await cancelLinkedNativeEvents(interaction, targets);
+    await refreshRecurringMonths(interaction.client, interaction.guildId, targets).catch((error) => console.error("Calendar refresh after recurring cancellation failed:", error));
     return;
   }
   if (action === "cancelconfirm" && interaction.isButton()) {
@@ -1562,6 +1776,12 @@ module.exports = {
   YOUTIFUL_EVENT_TYPE_LABELS,
   YOUTIFUL_TIMEZONE_OPTIONS,
   buildYoutifulCalendarMessages,
+  recurrenceOccurrences,
+  createYoutifulOccurrences,
+  applyRecurringChanges,
+  cancelRecurringEvents,
+  MAX_RECURRENCE_OCCURRENCES,
+  RECURRENCE_TYPES,
   youtifulBirthdayEvents,
   interestedStateSupport,
   fetchInterestedMembers,
