@@ -367,8 +367,18 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) {
-    if (await handleEventSchedulerInteraction(interaction)) return;
+  if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isChannelSelectMenu?.() || interaction.isModalSubmit()) {
+    try {
+      if (await handleEventSchedulerInteraction(interaction)) return;
+    } catch (error) {
+      console.error("Event scheduler interaction failed:", error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "Harmony could not complete that scheduler action. Please try again.", flags: 64 }).catch((replyError) => console.error("Could not acknowledge scheduler interaction failure:", replyError));
+      } else {
+        await interaction.followUp({ content: "Harmony could not complete that scheduler action. Please try again.", flags: 64 }).catch((followUpError) => console.error("Could not report scheduler interaction failure:", followUpError));
+      }
+      return;
+    }
   }
 
   if (interaction.isButton() || interaction.isStringSelectMenu()) {

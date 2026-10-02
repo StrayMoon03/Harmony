@@ -771,7 +771,14 @@ async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
   if (customId.startsWith("harmony-reminder:")) return handleReminderInteraction(interaction);
   if (customId.startsWith("harmony-manager:")) {
-    await handleManagerInteraction(interaction);
+    try {
+      await handleManagerInteraction(interaction);
+    } catch (error) {
+      console.error("Schedule Manager interaction failed:", error);
+      const payload = { content: "Harmony could not complete that scheduler action. Please try again.", flags: 64 };
+      if (!interaction.replied && !interaction.deferred) await interaction.reply(payload).catch((replyError) => console.error("Could not acknowledge Schedule Manager failure:", replyError));
+      else await interaction.followUp(payload).catch((followUpError) => console.error("Could not report Schedule Manager failure:", followUpError));
+    }
     return true;
   }
   if (!customId.startsWith("harmony-schedule:")) return false;
@@ -1045,8 +1052,22 @@ async function handleManagerInteraction(interaction) {
     if (calendarType !== "community") {
       try {
         const draft = parseManagerDraft({ title: interaction.fields.getTextInputValue("title"), eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: interaction.fields.getTextInputValue("location"), description: interaction.fields.getTextInputValue("description"), fallbackTimezone: existing.event_timezone || existing.timezone }, calendarType);
-        managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
+        const saved = store.updateEvent(interaction.guildId, Number(eventId), {
+          title: draft.title,
+          event_date: draft.eventDate,
+          event_at: draft.eventAt,
+          event_timezone: draft.eventTimezone,
+          timezone: draft.timezone,
+          event_location: draft.eventLocation,
+          link: draft.link,
+          description: draft.description,
+          all_day: draft.allDay ? 1 : 0,
+          event_end_at: draft.eventEndAt,
+        });
+        managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, eventId, existing: saved });
         await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
+        if (saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+        await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
       } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
       return;
     }
@@ -1083,14 +1104,27 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
-    const updated = store.updateEvent(interaction.guildId, Number(eventId), { category: interaction.values[0] });
+    const updated = store.updateEvent(interaction.guildId, Number(eventId), {
+      title: draft.title,
+      event_date: draft.eventDate,
+      event_at: draft.eventAt,
+      event_timezone: draft.eventTimezone,
+      timezone: draft.timezone,
+      event_location: draft.eventLocation,
+      link: draft.link,
+      description: draft.description,
+      all_day: draft.allDay ? 1 : 0,
+      event_end_at: draft.eventEndAt,
+      category: interaction.values[0],
+    });
+    if (updated.discord_event_id && !updated.all_day) await syncNativeScheduledEvent(interaction.client, updated).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
     if (calendarType === "stray_kids") {
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, existing, member: updated.member || null });
-      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
+      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
       await interaction.update({ content: "Choose an optional Stray Kids member.", components: memberMenu(calendarType, "editmember", eventId, updated.member) });
     } else {
       managerDrafts.delete(draftKey(interaction, calendarType, eventId));
-      await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
+      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
       await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
     }
     return;
