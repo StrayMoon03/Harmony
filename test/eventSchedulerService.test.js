@@ -801,4 +801,3 @@ test("legacy Youtiful location/timezone data remains editable without changing S
   const skz = parseManagerDraft({ title: "Stray Kids event", eventDate: "2026-10-24", eventTime: "18:30", location: "Fukuoka, Japan", description: "" }, "stray_kids");
   assert.equal(skz.eventTimezone, "Asia/Tokyo");
 });
-
