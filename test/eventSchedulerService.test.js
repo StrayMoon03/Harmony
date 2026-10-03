@@ -1201,13 +1201,28 @@ test("Youtiful announcement schedules are independent, multi-selectable, and can
   const guildId = `calendar-announcements-${Date.now()}`;
   const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Watch party", eventDate: "2099-10-18", eventAt: "2099-10-18T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "community", eventChannelId: "cinema", createdBy: "admin" });
   const event = store.getEvent(guildId, eventId);
-  const items = [604800, 259200, 0].map((offset) => ({ scheduledFor: new Date(new Date(event.event_at).getTime() - offset * 1000).toISOString(), message: `Reminder ${offset}` }));
-  const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", [604800, 259200, 0], items);
+  const items = [604800, 259200, 86400, 3600, 0].filter((offset) => offset > 0).map((offset) => ({ scheduledFor: new Date(new Date(event.event_at).getTime() - offset * 1000).toISOString(), message: `Reminder ${offset}` }));
+  const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", [604800, 259200, 86400, 3600, 0], items, "Custom reminder copy");
   assert.equal(saved.announcement_channel_id, "announcements");
-  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 0]);
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 86400, 3600]);
+  assert.equal(saved.announcement_message, "Custom reminder copy");
   assert.equal(store.dueAnnouncements("2099-01-01T00:00:00.000Z").length, 0);
   assert.equal(store.cancelEvent(guildId, eventId, "admin"), true);
   assert.equal(store.dueAnnouncements("2100-01-01T00:00:00.000Z").some((item) => item.event_id === eventId), false);
+});
+
+test("legacy offset zero never becomes an automatic starting-now announcement and custom copy survives rebuild", () => {
+  const guildId = `announcement-legacy-${Date.now()}`;
+  const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Watch party", eventDate: "2099-10-18", eventAt: "2099-10-18T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "community", createdBy: "admin" });
+  store.updateEvent(guildId, eventId, { announcement_offsets: JSON.stringify([0, 86400]), announcement_message: "Come watch together!", announcement_channel_id: "announcements" });
+  const legacy = store.getEvent(guildId, eventId);
+  const future = [86400, 0].map((offset) => ({ scheduledFor: new Date(new Date(legacy.event_at).getTime() - offset * 1000).toISOString(), message: "Come watch together!" }));
+  store.saveEventAnnouncements(guildId, eventId, "announcements", [0, 86400], future, legacy.announcement_message);
+  const saved = store.getEvent(guildId, eventId);
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [86400]);
+  assert.equal(saved.announcement_message, "Come watch together!");
+  const dueAtStart = store.dueAnnouncements("2099-10-18T23:00:00.000Z").filter((item) => item.event_id === eventId);
+  assert.equal(dueAtStart.some((item) => item.scheduled_for === legacy.event_at), false);
 });
 
 test("Add to Calendar links the existing Discord event without creating another native event", async () => {
