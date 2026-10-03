@@ -313,6 +313,7 @@ function migrate(database) {
       recurrence_native_enabled INTEGER NOT NULL DEFAULT 0,
       announcement_channel_id TEXT,
       announcement_offsets TEXT NOT NULL DEFAULT '[]',
+      announcement_message TEXT,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -491,6 +492,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("announcement_offsets")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_offsets TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!scheduledEventColumns.has("announcement_message")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_message TEXT");
   }
 
   const settingColumns = new Set(
