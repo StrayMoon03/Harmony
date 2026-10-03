@@ -388,6 +388,38 @@ function youtifulEditTypeMenu(eventId, selected) {
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
+function keepCurrentButton(calendarType, step, eventId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`harmony-manager:${calendarType}:editkeep:${step}:${eventId}`)
+      .setLabel("Keep Current & Continue")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function editTimezoneComponents(calendarType, action, eventId, selected) {
+  const menu = calendarType === "stray_kids"
+    ? skzTimezoneMenu(action, eventId, selected)
+    : youtifulTimezoneMenu(action, eventId, selected);
+  return [...menu, keepCurrentButton(calendarType, "timezone", eventId)];
+}
+
+function editTypeComponents(eventId, selected) {
+  return [...youtifulEditTypeMenu(eventId, selected), keepCurrentButton("community", "type", eventId)];
+}
+
+function editCategoryComponents(eventId, selected) {
+  return [...categoryMenu("stray_kids", "editcategory", eventId, selected), keepCurrentButton("stray_kids", "category", eventId)];
+}
+
+function editMemberComponents(eventId, selected) {
+  return [...memberMenu("stray_kids", "editmember", eventId, selected), keepCurrentButton("stray_kids", "member", eventId)];
+}
+
+function editChannelComponents(eventId) {
+  return [...youtifulChannelMenu("editchannel", eventId), keepCurrentButton("community", "channel", eventId)];
+}
+
 function youtifulTimezoneMenu(action, eventId = "new", selected = null) {
   const suffix = eventId === "new" ? "" : ":" + eventId;
   const menu = new StringSelectMenuBuilder()
@@ -1538,10 +1570,52 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, scopedEventId)) || { eventId: event.id, existing: event };
     managerDrafts.set(draftKey(interaction, calendarType, scopedEventId), { ...draft, scope: interaction.values[0], existing: event, eventId: event.id });
     if (target === "details") await interaction.showModal(managerModal(`harmony-manager:community:editdetailsmodal:${event.id}`, "Edit event details", youtifulEditFields(event)));
-    else if (target === "timezone") await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", scopedEventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
-    else if (target === "type") await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(scopedEventId, event.calendar_event_type || "other") });
-    else if (target === "channel") await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", scopedEventId) });
+    else if (target === "timezone") await interaction.update({ content: "Choose the event time zone, or keep the current one.", components: editTimezoneComponents("community", "edittimezone", scopedEventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
+    else if (target === "type") await interaction.update({ content: "Choose the event icon / type, or keep the current one.", components: editTypeComponents(scopedEventId, event.calendar_event_type || "other") });
+    else if (target === "channel") await interaction.update({ content: "Choose the Discord channel associated with this event, or keep the current one.", components: editChannelComponents(scopedEventId) });
     else if (target === "announcements") await interaction.update({ content: "Choose optional promotional announcements.", components: announcementTimingMenu("editannouncementtiming", scopedEventId, announcementOffsetsFromEvent(event)) });
+    return;
+  }
+  if (action === "editkeep" && interaction.isButton()) {
+    const step = parts[3];
+    const selectedEventId = parts[4];
+    const existing = store.getEvent(interaction.guildId, Number(selectedEventId));
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, selectedEventId));
+    if (!existing || !draft || existing.calendar_type !== calendarType) {
+      await interaction.update({ content: "That event edit expired. Please start again.", components: [] });
+      return;
+    }
+    if (calendarType === "community") {
+      await interaction.update(youtifulEditPanel(existing));
+      return;
+    }
+    if (step === "timezone") {
+      try {
+        const timezone = existing.all_day ? "" : (existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location));
+        const parsed = parseManagerDraft({ ...draft, timezone }, calendarType);
+        const saved = store.updateEvent(interaction.guildId, Number(selectedEventId), {
+          title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt,
+          event_timezone: parsed.eventTimezone, timezone: parsed.timezone,
+          event_location: parsed.eventLocation, link: parsed.link, description: parsed.description,
+          all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
+        });
+        managerDrafts.set(draftKey(interaction, calendarType, selectedEventId), { ...parsed, eventId: Number(selectedEventId), existing: saved });
+        if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+        await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((error) => console.error("Published calendar refresh after Edit Event failed:", error));
+        await interaction.update({ content: "Choose a category for this event, or keep the current one.", components: editCategoryComponents(selectedEventId, saved.category || existing.category || "other") });
+      } catch (error) {
+        await interaction.update({ content: error.message, components: editTimezoneComponents(calendarType, "skzedittimezone", selectedEventId, existing.event_timezone || existing.timezone || (existing.all_day ? "none" : null)) });
+      }
+      return;
+    }
+    if (step === "category") {
+      await interaction.update({ content: "Choose an optional Stray Kids member, or keep the current one.", components: editMemberComponents(selectedEventId, existing.member) });
+      return;
+    }
+    if (step === "member") {
+      managerDrafts.delete(draftKey(interaction, calendarType, selectedEventId));
+      await interaction.update({ content: `✅ Updated calendar event **${existing.title}**.`, components: [] });
+    }
     return;
   }
   if (calendarType === "community" && action === "editannouncementpick" && interaction.isButton()) {
@@ -1612,14 +1686,14 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
     if (event.recurrence_series_id) await interaction.update({ content: "Apply Time Zone changes to:", components: recurrenceScopeMenu("timezone", event.id) });
-    else await interaction.update({ content: "Choose the event time zone.", components: youtifulTimezoneMenu("edittimezone", eventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
+    else await interaction.update({ content: "Choose the event time zone, or keep the current one.", components: editTimezoneComponents("community", "edittimezone", eventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
     return;
   }
   if (calendarType === "community" && action === "edittypepick" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
     if (event.recurrence_series_id) await interaction.update({ content: "Apply Icon / Type changes to:", components: recurrenceScopeMenu("type", event.id) });
-    else await interaction.update({ content: "Choose the event icon / type.", components: youtifulEditTypeMenu(eventId, event.calendar_event_type || "other") });
+    else await interaction.update({ content: "Choose the event icon / type, or keep the current one.", components: editTypeComponents(eventId, event.calendar_event_type || "other") });
     return;
   }
   if (calendarType === "community" && action === "edittype" && interaction.isStringSelectMenu()) {
@@ -1638,7 +1712,7 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
     if (event.recurrence_series_id) await interaction.update({ content: "Apply Channel changes to:", components: recurrenceScopeMenu("channel", event.id) });
-    else await interaction.update({ content: "Choose the Discord channel associated with this event.", components: youtifulChannelMenu("editchannel", eventId) });
+    else await interaction.update({ content: "Choose the Discord channel associated with this event, or keep the current one.", components: editChannelComponents(eventId) });
     return;
   }
   if (calendarType === "community" && action === "editchannel" && interaction.isChannelSelectMenu()) {
@@ -1669,7 +1743,7 @@ async function handleManagerInteraction(interaction) {
         };
         managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
         const legacyTimezone = existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location);
-        await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: skzTimezoneMenu("skzedittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
+        await interaction.reply({ content: "Choose the event time zone, or keep the current one. For an all-day event, choose No timezone.", components: editTimezoneComponents("stray_kids", "skzedittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
       } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
       return;
     }
@@ -1682,7 +1756,7 @@ async function handleManagerInteraction(interaction) {
       description: interaction.fields.getTextInputValue("description"),
     });
     const legacyTimezone = existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location);
-    await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: youtifulTimezoneMenu("edittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
+    await interaction.reply({ content: "Choose the event time zone, or keep the current one. For an all-day event, choose No timezone.", components: editTimezoneComponents("community", "edittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
     return;
   }
   if (calendarType === "community" && action === "edittimezone" && interaction.isStringSelectMenu()) {
@@ -1706,7 +1780,7 @@ async function handleManagerInteraction(interaction) {
       refreshEventAnnouncementSchedules(interaction.guildId, savedChanges);
       await refreshRecurringMonths(interaction.client, interaction.guildId, savedChanges).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) {
-      await interaction.update({ content: error.message, components: youtifulTimezoneMenu("edittimezone", eventId, interaction.values[0]) });
+      await interaction.update({ content: error.message, components: editTimezoneComponents("community", "edittimezone", eventId, interaction.values[0]) });
     }
     return;
   }
@@ -1732,9 +1806,9 @@ async function handleManagerInteraction(interaction) {
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...parsed, eventId, existing: saved });
       if (saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
-      await interaction.update({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, saved.category || existing.category || "other") });
+      await interaction.update({ content: "Choose a category for this event, or keep the current one.", components: editCategoryComponents(eventId, saved.category || existing.category || "other") });
     } catch (error) {
-      await interaction.update({ content: error.message, components: skzTimezoneMenu("skzedittimezone", eventId, interaction.values[0]) });
+      await interaction.update({ content: error.message, components: editTimezoneComponents("stray_kids", "skzedittimezone", eventId, interaction.values[0]) });
     }
     return;
   }
@@ -1759,7 +1833,7 @@ async function handleManagerInteraction(interaction) {
     if (calendarType === "stray_kids") {
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, existing, member: updated.member || null });
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
-      await interaction.update({ content: "Choose an optional Stray Kids member.", components: memberMenu(calendarType, "editmember", eventId, updated.member) });
+      await interaction.update({ content: "Choose an optional Stray Kids member, or keep the current one.", components: editMemberComponents(eventId, updated.member) });
     } else {
       managerDrafts.delete(draftKey(interaction, calendarType, eventId));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
