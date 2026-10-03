@@ -87,6 +87,27 @@ test("reminder selection persists and removal cancels it", async () => {
   assert.equal(store.dueDiscordEventReminders(new Date(Date.now() + 7200000).toISOString(), 100).some((row) => row.discord_event_id === id), false);
 });
 
+test("Interested reminder selection supports multiple offsets without duplicates", async () => {
+  const guildId = `multi-reminder-${Date.now()}`;
+  const id = `native-${Date.now()}`;
+  const userId = `user-${Date.now()}`;
+  const start = new Date(Date.now() + 10 * 86400000);
+  const guild = { scheduledEvents: { cache: new Map([[id, { scheduledStartAt: start, guildId }]]) } };
+  const interaction = fakeInteraction({
+    customId: `harmony-reminders:${id}`, kind: "select", guildId, userId,
+    values: ["259200", "86400"],
+    client: { guilds: { cache: new Map([[guildId, guild]]) } },
+  });
+  await handleReminderInteraction(interaction);
+  const due = store.dueDiscordEventReminders(new Date(start.getTime()).toISOString(), 20).filter((row) => row.discord_event_id === id && row.user_id === userId);
+  assert.equal(due.length, 2);
+  assert.deepEqual(due.map((row) => row.reminder_offset_seconds).sort((a, b) => a - b), [86400, 259200]);
+  await handleReminderInteraction(fakeInteraction({ customId: `harmony-reminders:${id}`, kind: "select", guildId, userId, values: ["259200", "86400"], client: { guilds: { cache: new Map([[guildId, guild]]) } } }));
+  assert.equal(store.dueDiscordEventReminders(new Date(start.getTime()).toISOString(), 20).filter((row) => row.discord_event_id === id && row.user_id === userId).length, 2);
+  await handleReminderInteraction(fakeInteraction({ customId: `harmony-reminders:${id}`, kind: "select", guildId, userId, values: ["none"], client: { guilds: { cache: new Map([[guildId, guild]]) } } }));
+  assert.equal(store.dueDiscordEventReminders(new Date(start.getTime()).toISOString(), 20).some((row) => row.discord_event_id === id && row.user_id === userId), false);
+});
+
 test("parses several announcements for one event and one link", () => {
   const event = parseEvent([
     "Harmony event",
