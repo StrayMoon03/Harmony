@@ -445,6 +445,13 @@ function nativeEventMenu() {
   )];
 }
 
+function announcementPrompt(eventId) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:community:ysannounce:${eventId}`).setLabel("📣 Schedule Announcements").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`harmony-manager:community:ysannounce-no:${eventId}`).setLabel("No Thanks").setStyle(ButtonStyle.Secondary),
+  )];
+}
+
 function recurrenceMenu() {
   return [new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder().setCustomId("harmony-manager:community:ysrecurrence").setPlaceholder("Choose recurrence").addOptions(
@@ -517,9 +524,11 @@ function clearPendingNativeCreate(guildId, name, start) {
 }
 
 const CALENDAR_ANNOUNCEMENT_OPTIONS = [
+  { label: "Announce now", value: "now" },
   { label: "1 week before", value: "604800" },
   { label: "3 days before", value: "259200" },
-  { label: "Day of", value: "0" },
+  { label: "1 day before", value: "86400" },
+  { label: "1 hour before", value: "3600" },
 ];
 
 function announcementOffsetsFromEvent(event) {
@@ -527,6 +536,7 @@ function announcementOffsetsFromEvent(event) {
 }
 
 function calendarAnnouncementItems(event, offsets) {
+  if (event?.all_day) return [];
   const start = event?.event_at
     ? new Date(event.event_at)
     : event?.event_date && /^\d{4}-\d{2}-\d{2}$/.test(event.event_date)
@@ -534,9 +544,9 @@ function calendarAnnouncementItems(event, offsets) {
       : null;
   if (!start || Number.isNaN(start.getTime())) return [];
   const now = Date.now();
-  return [...new Set(offsets || [])].map(Number).filter((offset) => [0, 259200, 604800].includes(offset)).map((offset) => ({
+  return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
-    message: `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`,
+    message: event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`,
   })).filter((item) => new Date(item.scheduledFor).getTime() > now);
 }
 
@@ -545,7 +555,7 @@ function announcementTimingMenu(action, eventId = "new", selected = []) {
   return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`harmony-manager:community:${action}:${eventId}`)
     .setPlaceholder("Choose optional announcements")
-    .setMinValues(1).setMaxValues(3)
+    .setMinValues(1).setMaxValues(CALENDAR_ANNOUNCEMENT_OPTIONS.length)
     .addOptions(CALENDAR_ANNOUNCEMENT_OPTIONS.map((option) => ({ ...option, default: values.includes(option.value) })), { label: "No announcements", value: "none", default: values.length === 0 }))];
 }
 
@@ -557,7 +567,7 @@ function announcementChannelMenu(action, eventId = "new") {
 }
 
 function persistCalendarAnnouncements(guildId, event, offsets, channelId) {
-  return store.saveEventAnnouncements(guildId, event.id, channelId, offsets, calendarAnnouncementItems(event, offsets));
+  return store.saveEventAnnouncements(guildId, event.id, channelId, offsets, calendarAnnouncementItems(event, offsets), event.announcement_message);
 }
 
 function refreshEventAnnouncementSchedules(guildId, events) {
@@ -1052,29 +1062,36 @@ async function offerEventReminder(client, event, user) {
   if (!event?.guildId || !store.getEventByDiscordId(event.guildId, event.id)) return;
   try {
     const dm = await user.createDM();
-    await dm.send({ content: `Would you like a Harmony reminder for **${event.name}**?`, components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:86400`).setLabel("1 day before").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:3600`).setLabel("1 hour before").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`harmony-reminder:${event.id}:0`).setLabel("No thanks").setStyle(ButtonStyle.Secondary)
+    await dm.send({ content: `Would you like Harmony reminders for **${event.name}**? Choose any combination, or No reminders.`, components: [new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`harmony-reminders:${event.id}`).setPlaceholder("Choose personal reminders").setMinValues(1).setMaxValues(3).addOptions(
+        { label: "3 days before", value: "259200" },
+        { label: "1 day before", value: "86400" },
+        { label: "1 hour before", value: "3600" },
+        { label: "No reminders", value: "none" },
+      )
     )] });
   } catch { /* DMs are optional and must fail quietly. */ }
 }
 
 async function handleReminderInteraction(interaction) {
-  const [, discordEventId, rawOffset] = interaction.customId.split(":");
-  const offset = Number(rawOffset);
-  if (![0, 3600, 86400].includes(offset)) return false;
-  if (offset === 0) store.cancelDiscordEventReminder(discordEventId, interaction.user.id);
+  const parts = interaction.customId.split(":");
+  const discordEventId = parts[1];
+  const selected = interaction.isStringSelectMenu?.() && parts[0] === "harmony-reminders"
+    ? interaction.values
+    : [parts[2]];
+  const offsets = selected.includes("none") ? [] : selected.map(Number).filter((value) => [3600, 86400, 259200].includes(value));
+  if (parts[0] === "harmony-reminder" && ![0, 3600, 86400].includes(Number(parts[2]))) return false;
+  if (!offsets.length) store.cancelDiscordEventReminder(discordEventId, interaction.user.id);
   else {
     const event = Array.from(interaction.client.guilds.cache.values())
       .map((guild) => guild.scheduledEvents.cache.get(discordEventId))
       .find(Boolean);
     if (!event?.scheduledStartAt) { await interaction.update({ content: "That Discord event is no longer available.", components: [] }); return true; }
-    const remindAt = new Date(event.scheduledStartAt.getTime() - offset * 1000);
-    if (remindAt <= new Date()) { await interaction.update({ content: "That reminder time has already passed.", components: [] }); return true; }
-    store.saveDiscordEventReminder(event.guildId, discordEventId, interaction.user.id, offset, remindAt.toISOString());
+    const reminderTimes = offsets.map((offset) => ({ offset, remindAt: new Date(event.scheduledStartAt.getTime() - offset * 1000).toISOString() })).filter((item) => new Date(item.remindAt) > new Date());
+    if (!reminderTimes.length) { await interaction.update({ content: "All selected reminder times have already passed.", components: [] }); return true; }
+    store.saveDiscordEventReminder(event.guildId, discordEventId, interaction.user.id, reminderTimes.map((item) => item.offset), reminderTimes);
   }
-  await interaction.update({ content: offset === 0 ? "No Harmony reminder will be sent." : `Saved your Harmony reminder for ${offset === 86400 ? "1 day" : "1 hour"} before the event.`, components: [] });
+  await interaction.update({ content: offsets.length ? `Saved ${offsets.length} personal Harmony reminder${offsets.length === 1 ? "" : "s"}.` : "No Harmony reminders will be sent.", components: [] });
   return true;
 }
 
@@ -1083,8 +1100,8 @@ async function processDiscordEventReminders(client) {
     try {
       const user = await client.users.fetch(reminder.user_id);
       await user.send(`⏰ Harmony reminder: your Discord event starts soon. <https://discord.com/events/${reminder.guild_id}/${reminder.discord_event_id}>`);
-      store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id);
-    } catch { store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id); }
+      store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id, reminder.reminder_offset_seconds);
+    } catch { store.markDiscordEventReminderSent(reminder.discord_event_id, reminder.user_id, reminder.reminder_offset_seconds); }
   }
 }
 
@@ -1179,7 +1196,7 @@ async function addNativeEventToCalendar(interaction, discordEventId) {
 
 async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
-  if (customId.startsWith("harmony-reminder:")) return handleReminderInteraction(interaction);
+  if (customId.startsWith("harmony-reminder:") || customId.startsWith("harmony-reminders:")) return handleReminderInteraction(interaction);
   if (customId.startsWith("harmony-manager:")) {
     try {
       await handleManagerInteraction(interaction);
@@ -1296,7 +1313,7 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "nativeaddtiming" && interaction.isStringSelectMenu()) {
     const added = store.getEvent(interaction.guildId, Number(eventId));
     if (!added) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.map(Number);
+    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     if (!offsets.length) {
       persistCalendarAnnouncements(interaction.guildId, added, [], null);
       managerDrafts.delete(draftKey(interaction, calendarType, `native-${added.id}`));
@@ -1435,7 +1452,7 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "ysannouncementtiming" && interaction.isStringSelectMenu()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.map(Number);
+    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     managerDrafts.set(draftKey(interaction, calendarType), { ...draft, announcementOffsets: offsets });
     if (!offsets.length) {
       await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
@@ -1475,11 +1492,70 @@ async function handleManagerInteraction(interaction) {
           if (createdEvents.length > 12) nativeWarning = " Native events were created for the first 12 upcoming occurrences; Harmony still owns the complete series.";
         } catch (error) { nativeWarning = ` Native event not created: ${error.message}`; }
       } else if (interaction.customId.endsWith(":yes") && draft.allDay) nativeWarning = " All-day events remain Harmony-only.";
-      managerDrafts.delete(draftKey(interaction, calendarType));
-      await interaction.update({ content: `✅ Event saved: **${draft.title}**${nativeId ? " (Discord event linked)" : ""}${nativeWarning}`, components: [] });
-      for (const event of createdEvents) persistCalendarAnnouncements(interaction.guildId, event, draft.announcementOffsets || [], draft.announcementChannelId || null);
+      managerDrafts.set(draftKey(interaction, calendarType, `announce-${createdEvents[0]?.id || "none"}`), {
+        eventIds: createdEvents.map((event) => event.id),
+        linked: Boolean(nativeId),
+        nativeWarning,
+        title: draft.title,
+      });
+      const firstEvent = createdEvents[0];
+      await interaction.update({ content: `✅ Event created: **${draft.title}**${nativeId ? " (Discord event linked)" : ""}${nativeWarning}\n\nWould you like to schedule announcements for this event?`, components: firstEvent ? announcementPrompt(firstEvent.id) : [] });
       await refreshRecurringMonths(interaction.client, interaction.guildId, createdEvents).catch((error) => console.error("Youtiful calendar refresh failed:", error));
     } catch (error) { await interaction.update({ content: `Event saved failed: ${error.message}`, components: [] }); }
+    return;
+  }
+  if (calendarType === "community" && action === "ysannounce" && interaction.isButton()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
+    if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
+    const modal = new ModalBuilder().setCustomId(`harmony-manager:community:ysannouncemodal:${eventId}`).setTitle("Schedule event announcements");
+    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("announcement-message").setLabel("Announcement message").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1800)));
+    await interaction.showModal(modal);
+    return;
+  }
+  if (calendarType === "community" && action === "ysannounce-no" && interaction.isButton()) {
+    managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
+    await interaction.update({ content: "✅ Event created. No public announcements scheduled.", components: [] });
+    return;
+  }
+  if (calendarType === "community" && action === "ysannouncemodal" && interaction.isModalSubmit()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
+    if (!draft) { await interaction.reply({ content: "That announcement setup expired. The event was saved successfully.", flags: 64 }); return; }
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementMessage: interaction.fields.getTextInputValue("announcement-message").trim() });
+    await interaction.reply({ content: "Choose the separate announcement channel.", components: announcementChannelMenu("ysannouncechannel", eventId), flags: 64 });
+    return;
+  }
+  if (calendarType === "community" && action === "ysannouncechannel" && interaction.isChannelSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
+    if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementChannelId: interaction.values[0] });
+    await interaction.update({ content: "Choose one or more announcement timings.", components: announcementTimingMenu("ysannouncetiming", eventId) });
+    return;
+  }
+  if (calendarType === "community" && action === "ysannouncetiming" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
+    if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
+    const eventIds = draft.eventIds || [Number(eventId)];
+    const selected = interaction.values.includes("none") ? [] : interaction.values;
+    const first = store.getEvent(interaction.guildId, eventIds[0]);
+    if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
+    const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
+    let immediatePosted = false;
+    for (const id of eventIds) {
+      const event = store.getEvent(interaction.guildId, id);
+      if (!event) continue;
+      const items = calendarAnnouncementItems({ ...event, announcement_message: draft.announcementMessage }, offsets);
+      store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, draft.announcementMessage);
+      if (selected.includes("now") && !immediatePosted) {
+        const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
+        if (channel?.isTextBased()) {
+          const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${interaction.guildId}/${event.discord_event_id}`))] : [];
+          await channel.send({ content: [draft.announcementMessage, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"), components, allowedMentions: { parse: [] } }).catch(() => {});
+          immediatePosted = true;
+        }
+      }
+    }
+    managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
+    await interaction.update({ content: "✅ Event created and announcements scheduled.", components: [] });
     return;
   }
 
@@ -1629,7 +1705,7 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
     const scope = managerDrafts.get(draftKey(interaction, calendarType, eventId))?.scope || "this";
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.map(Number);
+    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     if (!offsets.length) {
       applyAnnouncementConfig(interaction.guildId, event, scope, [], null);
       managerDrafts.delete(draftKey(interaction, calendarType, eventId));
@@ -2104,9 +2180,13 @@ async function processScheduledAnnouncements(client) {
       const channel = guild && (guild.channels.cache.get(item.destination_channel_id) ||
         await guild.channels.fetch(item.destination_channel_id).catch(() => null));
       if (!channel?.isTextBased()) throw new Error("Destination channel is unavailable.");
+      const components = item.discord_event_id ? [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${item.guild_id}/${item.discord_event_id}`)
+      )] : [];
       const sent = await channel.send({
-        content: `${item.message}\n\n${item.link}`,
-        allowedMentions: { parse: ["everyone", "roles", "users"] },
+        content: [item.message, item.event_channel_id ? `Event channel: <#${item.event_channel_id}>` : null, item.link || null].filter(Boolean).join("\n"),
+        components,
+        allowedMentions: { parse: [] },
       });
       store.markSent(item.id, sent.id);
     } catch (error) {
