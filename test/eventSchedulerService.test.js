@@ -1223,6 +1223,8 @@ test("legacy offset zero never becomes an automatic starting-now announcement an
   assert.equal(saved.announcement_message, "Come watch together!");
   const dueAtStart = store.dueAnnouncements("2099-10-18T23:00:00.000Z").filter((item) => item.event_id === eventId);
   assert.equal(dueAtStart.some((item) => item.scheduled_for === legacy.event_at), false);
+  const legacyPendingId = store.createEvent({ guildId, sourceChannelId: "calendar", destinationChannelId: "calendar", title: "Legacy starting-now", link: "", timezone: "UTC", eventAt: legacy.event_at, eventDate: legacy.event_date, eventTimezone: "UTC", calendarType: "community", category: "community", createdBy: "admin", announcements: [{ scheduledFor: legacy.event_at, message: "Legacy start notice" }] });
+  assert.equal(store.dueAnnouncements(legacy.event_at).some((item) => item.event_id === legacyPendingId), false);
 });
 
 test("Add to Calendar links the existing Discord event without creating another native event", async () => {
