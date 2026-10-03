@@ -376,6 +376,7 @@ function dueAnnouncements(nowIso, limit = 25) {
     WHERE a.status = 'pending'
       AND a.scheduled_for <= ?
       AND e.cancelled_at IS NULL
+      AND (e.event_at IS NULL OR a.scheduled_for <> e.event_at)
     ORDER BY a.scheduled_for, a.id
     LIMIT ?
   `).all(nowIso, limit);
