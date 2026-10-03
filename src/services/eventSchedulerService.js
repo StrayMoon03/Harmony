@@ -544,9 +544,9 @@ function calendarAnnouncementItems(event, offsets) {
       : null;
   if (!start || Number.isNaN(start.getTime())) return [];
   const now = Date.now();
-  return [...new Set(offsets || [])].map((offset) => offset === "now" ? 0 : Number(offset)).filter((offset) => [0, 3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
+  return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
-    message: `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`,
+    message: event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`,
   })).filter((item) => new Date(item.scheduledFor).getTime() > now);
 }
 
@@ -567,7 +567,7 @@ function announcementChannelMenu(action, eventId = "new") {
 }
 
 function persistCalendarAnnouncements(guildId, event, offsets, channelId) {
-  return store.saveEventAnnouncements(guildId, event.id, channelId, offsets, calendarAnnouncementItems(event, offsets));
+  return store.saveEventAnnouncements(guildId, event.id, channelId, offsets, calendarAnnouncementItems(event, offsets), event.announcement_message);
 }
 
 function refreshEventAnnouncementSchedules(guildId, events) {
@@ -1539,19 +1539,20 @@ async function handleManagerInteraction(interaction) {
     const first = store.getEvent(interaction.guildId, eventIds[0]);
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
+    let immediatePosted = false;
     for (const id of eventIds) {
       const event = store.getEvent(interaction.guildId, id);
       if (!event) continue;
-      const items = calendarAnnouncementItems(event, offsets).map((item) => ({ ...item, message: draft.announcementMessage }));
-      persistCalendarAnnouncements(interaction.guildId, event, offsets, draft.announcementChannelId);
-      if (selected.includes("now")) {
+      const items = calendarAnnouncementItems({ ...event, announcement_message: draft.announcementMessage }, offsets);
+      store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, draft.announcementMessage);
+      if (selected.includes("now") && !immediatePosted) {
         const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
         if (channel?.isTextBased()) {
           const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${interaction.guildId}/${event.discord_event_id}`))] : [];
           await channel.send({ content: [draft.announcementMessage, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"), components, allowedMentions: { parse: [] } }).catch(() => {});
+          immediatePosted = true;
         }
       }
-      if (items.length) store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items);
     }
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
     await interaction.update({ content: "✅ Event created and announcements scheduled.", components: [] });
