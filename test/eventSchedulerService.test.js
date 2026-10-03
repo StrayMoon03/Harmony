@@ -7,6 +7,7 @@ const {
   managerModal, handleEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS, YOUTIFUL_TIMEZONE_OPTIONS,
+  SKZ_TIMEZONE_OPTIONS,
   applyRecurringChanges,
   interestedStateSupport,
   handleReminderInteraction,
@@ -137,10 +138,9 @@ test("renders categorized timed and all-day events without fake midnight times",
   ], 0);
   assert.equal(parts.length, 1);
   const embed = parts[0].embeds[0];
-  assert.match(embed.description, /🎬 \*\*SKZ CODE\*\*/);
-  assert.match(embed.description, /<t:4071240000:D>/);
+  assert.match(embed.description, /🎬 Jan 4 • <t:4071240000:t> • \*\*SKZ CODE\*\*/);
   assert.match(embed.description, /<t:4071240000:t>/);
-  assert.match(embed.description, /🎂 \*\*Birthday\*\* • All Day/);
+  assert.match(embed.description, /🎂 Jan 5 • All Day • \*\*Birthday\*\*/);
   assert.doesNotMatch(embed.description, /🎂 \*\*Birthday\*\* • All Day\n<t:/);
   assert.equal(embed.color, 0xE53935);
   assert.match(embed.footer.text, /Times display in your local timezone/);
@@ -166,8 +166,8 @@ test("calendar cards keep title primary, optional metadata secondary, and add Sh
     description: "Limited goods", event_location: "Fukuoka, Japan", link: "https://example.com/popup",
   }], 0);
   const embed = parts[0].embeds[0];
-  assert.match(embed.description, /Friday, October 16, 2026/);
-  assert.match(embed.description, /🛍️ \*\*RUN IT JAPAN Pop-Up\*\* • All Day/);
+  assert.match(embed.description, /Oct 16 • All Day/);
+  assert.match(embed.description, /🛍️ Oct 16 • All Day • \*\*RUN IT JAPAN Pop-Up\*\*/);
   assert.ok(embed.description.indexOf("**RUN IT JAPAN Pop-Up**") < embed.description.indexOf("Limited goods"));
   assert.match(embed.description, /📍 Fukuoka, Japan/);
   assert.match(embed.description, /\[Open event link\]\(https:\/\/example\.com\/popup\)/);
@@ -178,10 +178,9 @@ test("timed calendar cards use one localized date token and a time-only token", 
     title: "SKZ CODE", category: "content", event_date: "2026-10-01", event_at: "2026-10-01T11:00:00.000Z", all_day: 0,
   }], 0);
   const description = parts[0].embeds[0].description;
-  assert.match(description, /<t:1790852400:D>/);
-  assert.match(description, /<t:1790852400:t> • 🎬 \*\*SKZ CODE\*\*/);
-  assert.doesNotMatch(description, /<t:1790852400:F>/);
-  assert.equal((description.match(/<t:1790852400:D>/g) || []).length, 1);
+  assert.match(description, /🎬 Oct 1 • <t:1790852400:t> • \*\*SKZ CODE\*\*/);
+  assert.doesNotMatch(description, /<t:1790852400:[DFf]> /);
+  assert.equal((description.match(/Oct 1/g) || []).length, 1);
 });
 
 test("manager drafts support optional links and all-day events without midnight", () => {
@@ -197,6 +196,24 @@ test("manager drafts support optional links and all-day events without midnight"
   assert.equal(draft.allDay, true);
   assert.equal(draft.eventAt, null);
   assert.equal(draft.eventTimezone, "Asia/Seoul");
+});
+
+test("Stray Kids uses explicit IANA timezone choices, optional location, and preserves all-day compatibility", () => {
+  assert.equal(SKZ_TIMEZONE_OPTIONS.find((option) => option.label.includes("China"))?.value, "Asia/Shanghai");
+  const timed = parseManagerDraft({
+    title: "SKZ Video Call", eventDate: "2026-10-30", eventTime: "20:00",
+    timezone: "Asia/Seoul", location: "", description: "",
+  }, "stray_kids");
+  assert.equal(timed.eventTimezone, "Asia/Seoul");
+  assert.equal(timed.eventLocation, "");
+  assert.equal(timed.eventAt, "2026-10-30T11:00:00.000Z");
+  const allDay = parseManagerDraft({
+    title: "SKZ Birthday", eventDate: "2026-10-25", eventTime: "",
+    timezone: "", location: "", description: "",
+  }, "stray_kids");
+  assert.equal(allDay.allDay, true);
+  assert.equal(allDay.eventAt, null);
+  assert.equal(allDay.eventTimezone, null);
 });
 
 test("calendar-only all-day events with blank location save without a timezone", () => {
@@ -389,7 +406,7 @@ test("timed calendar dates preserve the entered year through storage and renderi
   const upcoming = store.listCalendarEvents(guildId, "stray_kids", "2026-10-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z");
   assert.equal(upcoming.some((event) => event.id === eventId), true);
   const rendered = buildCalendarMessages("stray_kids", "2026-10", [saved])[0].embeds[0].description;
-  assert.match(rendered, /<t:1790852400:D>/);
+  assert.match(rendered, /Oct 1 • <t:1790852400:t>/);
   assert.match(rendered, /<t:1790852400:t>/);
   assert.doesNotMatch(rendered, /2006/);
 });
@@ -431,8 +448,11 @@ test("add event follows category-first interaction flow and saves without a seco
   });
   await handleEventSchedulerInteraction(details);
   assert.equal(details.responses[0].type, "reply");
-  assert.match(details.responses[0].payload.content, /Event saved/);
-  assert.deepEqual(details.responses[0].payload.components, []);
+  assert.match(details.responses[0].payload.content, /Choose the event time zone/);
+  const timezone = fakeInteraction({ customId: "harmony-manager:stray_kids:sktimezone", kind: "select", guildId, values: ["none"] });
+  await handleEventSchedulerInteraction(timezone);
+  assert.equal(timezone.responses[0].type, "update");
+  assert.match(timezone.responses[0].payload.content, /Event saved/);
   const eventId = store.listCalendarEvents(guildId, "stray_kids", "2099-01-01T00:00:00.000Z", "2099-02-01T00:00:00.000Z")[0].id;
   const saved = store.getEvent(guildId, eventId);
   assert.equal(saved.category, "content");
@@ -459,10 +479,10 @@ test("Stray Kids member selection persists and renders exact Harmony emoji, whil
   ];
   for (const [member, emoji] of members) {
     const description = buildCalendarMessages("stray_kids", "2099-01", [{ title: "Event", category: "content", member, event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
-    assert.match(description, new RegExp(`${emoji} 🎬 \\*\\*Event\\*\\*`));
+    assert.match(description, new RegExp(`${emoji} 🎬 Jan 1 • All Day • \\*\\*Event\\*\\*`));
   }
   const ot8 = buildCalendarMessages("stray_kids", "2099-01", [{ title: "OT8", category: "content", member: null, event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
-  assert.match(ot8, /🎬 \*\*OT8\*\*/);
+  assert.match(ot8, /🎬 Jan 1 • All Day • \*\*OT8\*\*/);
   assert.doesNotMatch(ot8, /Harmony_/);
   const community = buildCalendarMessages("community", "2099-01", [{ title: "Community", category: "content", member: "felix", event_date: "2099-01-01", all_day: 1 }], 0)[0].embeds[0].description;
   assert.doesNotMatch(community, /Harmony_bbokari/);
@@ -503,12 +523,14 @@ test("edit event keeps friendly category changes and editable links", async () =
     },
   });
   await handleEventSchedulerInteraction(editDetails);
-  // Modal submission itself persists the editable fields; category/member are
-  // metadata follow-ups and must not gate the core edit.
+  assert.equal(editDetails.responses[0].type, "reply");
+  assert.match(editDetails.responses[0].payload.content, /Choose the event time zone/);
+  const editTimezone = fakeInteraction({ customId: `harmony-manager:stray_kids:skzedittimezone:${eventId}`, kind: "select", guildId, values: ["Asia/Tokyo"] });
+  await handleEventSchedulerInteraction(editTimezone);
   const immediatelySaved = store.getEvent(guildId, eventId);
   assert.equal(immediatelySaved.title, "Updated Concert");
   assert.equal(immediatelySaved.event_date, "2099-08-14");
-  const editCategoryMenu = editDetails.responses[0].payload.components[0].toJSON().components[0];
+  const editCategoryMenu = editTimezone.responses[0].payload.components[0].toJSON().components[0];
   assert.ok(editCategoryMenu.options.some((option) => option.label === "🎤 Concert" && option.default));
   assert.equal(editCategoryMenu.options.some((option) => option.label === "concert"), false);
 
@@ -553,6 +575,8 @@ test("edit event keeps friendly category changes and editable links", async () =
     },
   });
   await handleEventSchedulerInteraction(clearMemberModal);
+  const clearTimezone = fakeInteraction({ customId: `harmony-manager:stray_kids:skzedittimezone:${eventId}`, kind: "select", guildId, values: ["Asia/Tokyo"] });
+  await handleEventSchedulerInteraction(clearTimezone);
   const keepCategory = fakeInteraction({
     customId: `harmony-manager:stray_kids:editcategory:${eventId}`, kind: "select", guildId, values: ["content"],
   });
@@ -697,7 +721,9 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
   });
   await handleEventSchedulerInteraction(details);
   assert.equal(details.responses[0].type, "reply");
-  assert.equal(details.responses.some((response) => response.type === "editReply"), false);
+  const birthdayTimezone = fakeInteraction({ customId: "harmony-manager:stray_kids:sktimezone", kind: "select", guildId, client, values: ["none"] });
+  await handleEventSchedulerInteraction(birthdayTimezone);
+  assert.equal(birthdayTimezone.responses[0].type, "update");
   assert.equal(strayKids.messageCount(), 1);
   assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.embeds[0].description, /Bang Chan's 29th Birthday/);
 
@@ -710,6 +736,8 @@ test("manager Add Event refreshes publication and View Preview uses one acknowle
     fields: { title: "SKZ CODE EP. 104", "event-date": "2026-10-01", "event-time": "07:00", location: "New York, USA", description: "" },
   });
   await handleEventSchedulerInteraction(timedDetails);
+  const timedTimezone = fakeInteraction({ customId: "harmony-manager:stray_kids:sktimezone", kind: "select", guildId, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timedTimezone);
   assert.equal(timedDetails.responses[0].type, "reply");
   assert.match((await strayKids.messages.fetch(originalMessage.id)).payload.embeds[0].description, /SKZ CODE EP\. 104/);
 

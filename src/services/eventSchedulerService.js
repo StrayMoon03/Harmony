@@ -81,6 +81,11 @@ const YOUTIFUL_TIMEZONE_OPTIONS = [
   { label: "Japan Time", value: "Asia/Tokyo" },
   { label: "No timezone (all-day)", value: "none" },
 ];
+const SKZ_TIMEZONE_OPTIONS = [
+  ...YOUTIFUL_TIMEZONE_OPTIONS.slice(0, -1),
+  { label: "China / Beijing Time", value: "Asia/Shanghai" },
+  YOUTIFUL_TIMEZONE_OPTIONS.at(-1),
+];
 
 function calendarLabel(calendarType) {
   return calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
@@ -119,15 +124,15 @@ function parseManagerDraft(fields, calendarType) {
   const location = String(fields.location || "").trim();
   const legacyTimezone = String(fields.timezone || "").trim();
   const hasExplicitTimezone = Object.prototype.hasOwnProperty.call(fields, "timezone");
-  const timezone = calendarType === "community"
-    ? (hasExplicitTimezone
-      ? (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
-      : ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+  const timezone = hasExplicitTimezone
+    ? (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+    : calendarType === "community"
+      ? ((legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
         || (resolveLocationTimezone(location))
-        || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null)))
-    : (resolveLocationTimezone(location)
-      || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
-      || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null));
+        || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null))
+      : (resolveLocationTimezone(location)
+        || (legacyTimezone && validTimezone(legacyTimezone) ? legacyTimezone : null)
+        || (fields.fallbackTimezone && validTimezone(fields.fallbackTimezone) ? fields.fallbackTimezone : null));
   const parsedDescription = splitDescriptionAndLink(fields.description || "");
   const legacyLinkField = Object.prototype.hasOwnProperty.call(fields, "link");
   const link = legacyLinkField ? String(fields.link || "").trim() : parsedDescription.link;
@@ -392,6 +397,15 @@ function youtifulTimezoneMenu(action, eventId = "new", selected = null) {
   return [new ActionRowBuilder().addComponents(menu)];
 }
 
+function skzTimezoneMenu(action, eventId = "new", selected = null) {
+  const suffix = eventId === "new" ? "" : ":" + eventId;
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId("harmony-manager:stray_kids:" + action + suffix)
+    .setPlaceholder("Choose the event time zone")
+    .addOptions(SKZ_TIMEZONE_OPTIONS.map((option) => ({ label: option.label, value: option.value, default: selected === option.value })));
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
 function nativeEventMenu() {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-manager:community:ysnative:yes").setLabel("Create Discord Scheduled Event").setStyle(ButtonStyle.Primary),
@@ -578,6 +592,39 @@ async function refreshRecurringMonths(client, guildId, events) {
   for (const month of months) await refreshPublishedCalendar(client, guildId, "community", month);
 }
 
+async function saveManagerEvent(interaction, calendarType, draft, metadata = {}, responseMethod = "reply") {
+  const id = store.createCalendarEvent({
+    guildId: interaction.guildId,
+    calendarChannelId: metadata.calendarChannelId || store.getCalendarChannels(interaction.guildId)?.[calendarType === "stray_kids" ? "stray_kids_channel_id" : "community_channel_id"] || null,
+    title: draft.title,
+    link: draft.link,
+    timezone: draft.timezone,
+    eventAt: draft.eventAt,
+    eventDate: draft.eventDate,
+    eventTimezone: draft.eventTimezone,
+    eventLocation: draft.eventLocation,
+    calendarType,
+    category: metadata.category || "other",
+    member: metadata.member || null,
+    allDay: draft.allDay,
+    description: draft.description,
+    createdBy: interaction.user.id,
+  });
+  managerDrafts.delete(draftKey(interaction, calendarType));
+  const savedResponse = { content: `✅ Event saved: **${draft.title}**`, components: [] };
+  await interaction[responseMethod](responseMethod === "reply" ? { ...savedResponse, flags: 64 } : savedResponse);
+  try {
+    const refreshed = await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate);
+    if (!refreshed && responseMethod === "reply") {
+      await interaction.editReply({ ...savedResponse, content: "Event saved! This month has not been published yet, so the public calendar was not changed." });
+    }
+  } catch (refreshError) {
+    console.error("Published calendar refresh after Add Event failed:", refreshError);
+    if (responseMethod === "reply") await interaction.editReply({ ...savedResponse, content: "Event saved, but the published calendar could not be refreshed. Please use View / Preview to retry." });
+  }
+  return store.getEvent(interaction.guildId, id);
+}
+
 async function syncChangedNativeEvents(client, events) {
   for (const event of events) {
     if (event.discord_event_id && !event.all_day) await syncNativeScheduledEvent(client, event).catch((error) => console.error("Linked recurring Discord event sync failed:", error));
@@ -731,12 +778,12 @@ function eventCalendarBlock(event, calendarType) {
   const date = event.event_date || (event.event_at || "").slice(0, 10);
   const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
   const allDay = !timestamp;
-  const dateLine = timestamp ? `<t:${timestamp}:D>` : allDayDateHeading(date);
-  const timePrefix = timestamp ? `<t:${timestamp}:t> • ` : "";
+  const dateLine = compactCalendarDate(date);
+  const timeLabel = timestamp ? `<t:${timestamp}:t>` : "All Day";
   const icon = CALENDAR_CATEGORY_ICONS[event.category] || CALENDAR_CATEGORY_ICONS.other;
   const memberEmoji = calendarType === "stray_kids" ? (SKZOO_MEMBER_EMOJIS[event.member] || "") : "";
   const eventPrefix = memberEmoji ? `${memberEmoji} ` : "";
-  const lines = [dateLine, `${timePrefix}${eventPrefix}${icon} **${event.title}**${allDay ? " • All Day" : ""}`];
+  const lines = [`${eventPrefix}${icon} ${dateLine} • ${timeLabel} • **${event.title}**`];
   if (event.description) lines.push(event.description);
   if (event.event_location) lines.push(`📍 ${event.event_location}`);
   if (event.link) lines.push(`[Open event link](${event.link})`);
@@ -767,7 +814,7 @@ function youtifulEventBlock(event) {
   const icon = YOUTIFUL_EVENT_TYPE_ICONS[event.calendar_event_type] || YOUTIFUL_EVENT_TYPE_ICONS.other;
   const date = event.event_date || (event.event_at || "").slice(0, 10);
   const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
-  const datePart = timestamp ? `<t:${timestamp}:D>` : compactCalendarDate(date);
+  const datePart = compactCalendarDate(date);
   const timePart = timestamp ? ` • <t:${timestamp}:t>` : " • All Day";
   const channelPart = event.event_channel_id ? ` • <#${event.event_channel_id}>` : "";
   const lines = [`${icon} ${datePart}${timePart} • **${event.title}**${channelPart}`];
@@ -1431,35 +1478,38 @@ async function handleManagerInteraction(interaction) {
         await interaction.reply({ content: "That event draft expired. Please start again.", flags: 64 });
         return;
       }
-      const draft = parseManagerDraft({
+      const fields = {
         title: interaction.fields.getTextInputValue("title"),
         eventDate: interaction.fields.getTextInputValue("event-date"),
         eventTime: interaction.fields.getTextInputValue("event-time"),
         location: interaction.fields.getTextInputValue("location"),
         description: interaction.fields.getTextInputValue("description"),
-      }, calendarType);
-      const id = store.createCalendarEvent({
-        guildId: interaction.guildId, calendarChannelId, title: draft.title, link: draft.link,
-        timezone: draft.timezone, eventAt: draft.eventAt, eventDate: draft.eventDate,
-        eventTimezone: draft.eventTimezone, eventLocation: draft.eventLocation, calendarType, category: categoryDraft.category, member: categoryDraft.member || null,
-        allDay: draft.allDay, description: draft.description, createdBy: interaction.user.id,
-      });
-      managerDrafts.delete(draftKey(interaction, calendarType));
-      const savedResponse = { content: `✅ Event saved: **${draft.title}**`, components: [], flags: 64 };
-      // A calendar edit can require a Discord API round trip. Acknowledge the
-      // modal first so that refresh latency cannot expire the interaction.
-      await interaction.reply(savedResponse);
-      try {
-        const refreshed = await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, draft.eventDate);
-        if (!refreshed) {
-          await interaction.editReply({ ...savedResponse, content: "Event saved! This month has not been published yet, so the public calendar was not changed." });
-        }
-      } catch (refreshError) {
-        console.error("Published calendar refresh after Add Event failed:", refreshError);
-        await interaction.editReply({ ...savedResponse, content: "Event saved, but the published calendar could not be refreshed. Please use View / Preview to retry." });
+      };
+      if (calendarType === "stray_kids") {
+        managerDrafts.set(draftKey(interaction, calendarType), { ...categoryDraft, ...fields });
+        await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: skzTimezoneMenu("sktimezone"), flags: 64 });
+        return;
       }
+      const draft = parseManagerDraft(fields, calendarType);
+      await saveManagerEvent(interaction, calendarType, draft, categoryDraft);
     } catch (error) {
       await interaction.reply({ content: error.message, flags: 64 });
+    }
+    return;
+  }
+  if (calendarType === "stray_kids" && action === "sktimezone" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType));
+    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
+    const timezone = interaction.values[0] === "none" ? "" : interaction.values[0];
+    try {
+      const parsed = parseManagerDraft({ ...draft, timezone }, calendarType);
+      await saveManagerEvent(interaction, calendarType, parsed, {
+        category: draft.category,
+        member: draft.member,
+        calendarChannelId,
+      }, "update");
+    } catch (error) {
+      await interaction.update({ content: error.message, components: skzTimezoneMenu("sktimezone", "new", interaction.values[0]) });
     }
     return;
   }
@@ -1608,23 +1658,18 @@ async function handleManagerInteraction(interaction) {
     if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
     if (calendarType !== "community") {
       try {
-        const draft = parseManagerDraft({ title: interaction.fields.getTextInputValue("title"), eventDate: interaction.fields.getTextInputValue("event-date"), eventTime: interaction.fields.getTextInputValue("event-time"), location: interaction.fields.getTextInputValue("location"), description: interaction.fields.getTextInputValue("description"), fallbackTimezone: existing.event_timezone || existing.timezone }, calendarType);
-        const saved = store.updateEvent(interaction.guildId, Number(eventId), {
-          title: draft.title,
-          event_date: draft.eventDate,
-          event_at: draft.eventAt,
-          event_timezone: draft.eventTimezone,
-          timezone: draft.timezone,
-          event_location: draft.eventLocation,
-          link: draft.link,
-          description: draft.description,
-          all_day: draft.allDay ? 1 : 0,
-          event_end_at: draft.eventEndAt,
-        });
-        managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, eventId, existing: saved });
-        await interaction.reply({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, existing.category || "other"), flags: 64 });
-        if (saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
-        await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
+        const draft = {
+          eventId: Number(eventId),
+          existing,
+          title: interaction.fields.getTextInputValue("title"),
+          eventDate: interaction.fields.getTextInputValue("event-date"),
+          eventTime: interaction.fields.getTextInputValue("event-time"),
+          location: interaction.fields.getTextInputValue("location"),
+          description: interaction.fields.getTextInputValue("description"),
+        };
+        managerDrafts.set(draftKey(interaction, calendarType, eventId), draft);
+        const legacyTimezone = existing.event_timezone || existing.timezone || resolveLocationTimezone(existing.event_location);
+        await interaction.reply({ content: "Choose the event time zone. For an all-day event, choose No timezone.", components: skzTimezoneMenu("skzedittimezone", eventId, legacyTimezone || (existing.all_day ? "none" : null)), flags: 64 });
       } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
       return;
     }
@@ -1662,6 +1707,34 @@ async function handleManagerInteraction(interaction) {
       await refreshRecurringMonths(interaction.client, interaction.guildId, savedChanges).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) {
       await interaction.update({ content: error.message, components: youtifulTimezoneMenu("edittimezone", eventId, interaction.values[0]) });
+    }
+    return;
+  }
+  if (calendarType === "stray_kids" && action === "skzedittimezone" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
+    const existing = store.getEvent(interaction.guildId, Number(eventId));
+    if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
+    try {
+      const timezone = interaction.values[0] === "none" ? "" : interaction.values[0];
+      const parsed = parseManagerDraft({ ...draft, timezone }, calendarType);
+      const saved = store.updateEvent(interaction.guildId, Number(eventId), {
+        title: parsed.title,
+        event_date: parsed.eventDate,
+        event_at: parsed.eventAt,
+        event_timezone: parsed.eventTimezone,
+        timezone: parsed.timezone,
+        event_location: parsed.eventLocation,
+        link: parsed.link,
+        description: parsed.description,
+        all_day: parsed.allDay ? 1 : 0,
+        event_end_at: parsed.eventEndAt,
+      });
+      managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...parsed, eventId, existing: saved });
+      if (saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
+      await interaction.update({ content: "Choose a category for this event.", components: categoryMenu(calendarType, "editcategory", eventId, saved.category || existing.category || "other") });
+    } catch (error) {
+      await interaction.update({ content: error.message, components: skzTimezoneMenu("skzedittimezone", eventId, interaction.values[0]) });
     }
     return;
   }
@@ -2013,6 +2086,7 @@ module.exports = {
   YOUTIFUL_EVENT_TYPE_ICONS,
   YOUTIFUL_EVENT_TYPE_LABELS,
   YOUTIFUL_TIMEZONE_OPTIONS,
+  SKZ_TIMEZONE_OPTIONS,
   buildYoutifulCalendarMessages,
   recurrenceOccurrences,
   createYoutifulOccurrences,
