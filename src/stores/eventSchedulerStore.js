@@ -99,17 +99,35 @@ function removeCalendarEventTitle(guildId, calendarType, title) {
   return getDb().prepare("DELETE FROM calendar_event_titles WHERE guild_id = ? AND calendar_type = ? AND title = ?").run(guildId, calendarType, title).changes > 0;
 }
 function saveDiscordEventReminder(guildId, discordEventId, userId, offsetSeconds, remindAt) {
-  getDb().prepare(`INSERT INTO discord_event_reminders (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
-    VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(discord_event_id, user_id) DO UPDATE SET reminder_offset_seconds = excluded.reminder_offset_seconds, remind_at = excluded.remind_at, status = 'pending'`).run(guildId, discordEventId, userId, offsetSeconds, remindAt, new Date().toISOString());
+  const offsets = Array.isArray(offsetSeconds) ? offsetSeconds : [offsetSeconds];
+  const valid = [...new Set(offsets.map(Number).filter((value) => [259200, 86400, 3600].includes(value)))];
+  const db = getDb();
+  db.prepare("UPDATE discord_event_reminder_schedules SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
+  const insert = db.prepare(`INSERT INTO discord_event_reminder_schedules (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(discord_event_id, user_id, reminder_offset_seconds) DO UPDATE SET remind_at = excluded.remind_at, status = 'pending'`);
+  const now = new Date().toISOString();
+  for (const offset of valid) {
+    const at = Array.isArray(remindAt) ? remindAt.find((item) => Number(item.offset) === offset)?.remindAt : remindAt;
+    if (at) insert.run(guildId, discordEventId, userId, offset, at, now);
+  }
+  // Keep the legacy row populated for older tooling and migrations.
+  if (valid.length && !Array.isArray(remindAt)) getDb().prepare(`INSERT INTO discord_event_reminders (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', ?) ON CONFLICT(discord_event_id, user_id) DO UPDATE SET reminder_offset_seconds = excluded.reminder_offset_seconds, remind_at = excluded.remind_at, status = 'pending'`).run(guildId, discordEventId, userId, valid[0], remindAt, now);
 }
 function cancelDiscordEventReminder(discordEventId, userId) {
-  return getDb().prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId).changes > 0;
+  const db = getDb();
+  const a = db.prepare("UPDATE discord_event_reminder_schedules SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId).changes;
+  const b = db.prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId).changes;
+  return a + b > 0;
 }
 function dueDiscordEventReminders(nowIso, limit = 50) {
-  return getDb().prepare("SELECT * FROM discord_event_reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT ?").all(nowIso, limit);
+  return getDb().prepare("SELECT * FROM discord_event_reminder_schedules WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT ?").all(nowIso, limit);
 }
-function markDiscordEventReminderSent(discordEventId, userId) {
-  getDb().prepare("UPDATE discord_event_reminders SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
+function markDiscordEventReminderSent(discordEventId, userId, offsetSeconds = null) {
+  const db = getDb();
+  if (offsetSeconds == null) db.prepare("UPDATE discord_event_reminder_schedules SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
+  else db.prepare("UPDATE discord_event_reminder_schedules SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND reminder_offset_seconds = ? AND status = 'pending'").run(discordEventId, userId, offsetSeconds);
+  db.prepare("UPDATE discord_event_reminders SET status = 'sent' WHERE discord_event_id = ? AND user_id = ? AND status = 'pending'").run(discordEventId, userId);
 }
 
 function getEvent(guildId, eventId) {
@@ -341,7 +359,7 @@ function saveDiscordEventReconciliation(guildId, discordEventId, noticeMessageId
 
 function dueAnnouncements(nowIso, limit = 25) {
   return getDb().prepare(`
-    SELECT a.*, e.guild_id, COALESCE(e.announcement_channel_id, e.destination_channel_id) AS destination_channel_id, e.title, e.link
+    SELECT a.*, e.guild_id, COALESCE(e.announcement_channel_id, e.destination_channel_id) AS destination_channel_id, e.title, e.link, e.discord_event_id, e.event_channel_id
     FROM scheduled_announcements a
     JOIN scheduled_events e ON e.id = a.event_id
     WHERE a.status = 'pending'
