@@ -730,8 +730,13 @@ async function downloadTikTokMedia(url) {
   }
 }
 
+function shouldKeepOriginalTikTokPreview(downloadResult, isPhotoPost) {
+  return !isPhotoPost && downloadResult?.hasAudio === false;
+}
+
 module.exports = {
   downloadTikTokMedia,
+  shouldKeepOriginalTikTokPreview,
   isTikTokPhotoPost,
   fileHasAudioStream,
   isYtDlpExtractionFailure,

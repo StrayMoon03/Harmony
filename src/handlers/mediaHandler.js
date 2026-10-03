@@ -14,6 +14,7 @@ const {
 } = require("../modules/media/facebookDownloader");
 const {
   downloadTikTokMedia,
+  shouldKeepOriginalTikTokPreview,
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("../modules/media/formatter");
@@ -690,12 +691,16 @@ async function processMediaMessage(message, lifecycle) {
       // Photo-mode downloads intentionally have no video audio stream.
       // Keep their downloaded images and send them through the carousel
       // uploader instead of replacing them with a link-only video card.
-      if (!isPhotoPost && !downloadResult.hasAudio) {
+      if (shouldKeepOriginalTikTokPreview(downloadResult, isPhotoPost)) {
         await fs.rm(downloadResult.rawDir, {
           recursive: true,
           force: true,
         }).catch(() => {});
-        throw new Error("TikTok media did not contain a safe standalone video with audio.");
+        await lifecycle.markRetrieved();
+        console.warn(
+          "TikTok download had no audio stream; preserving the original TikTok player."
+        );
+        return;
       }
 
       const classification = classify(
