@@ -606,8 +606,7 @@ test("preselected Stray Kids edit values can be kept through every selector", as
     fields: { title: "Keep Me", "event-date": "2099-06-01", "event-time": "12:00", location: "New York, USA", description: "" },
   });
   await handleEventSchedulerInteraction(details);
-  const timezone = fakeInteraction({ customId: `harmony-manager:stray_kids:skzedittimezone:${eventId}`, kind: "select", guildId, values: ["America/New_York"] });
-  await handleEventSchedulerInteraction(timezone);
+  // Reproduce the live regression: do not touch the preselected timezone menu.
   const continueTimezone = fakeInteraction({ customId: `harmony-manager:stray_kids:editkeep:timezone:${eventId}`, kind: "button", guildId });
   await handleEventSchedulerInteraction(continueTimezone);
   assert.equal(continueTimezone.responses[0].type, "update");
@@ -627,6 +626,8 @@ test("preselected Stray Kids edit values can be kept through every selector", as
   assert.equal(store.getEvent(guildId, eventId).category, "content");
   assert.equal(store.getEvent(guildId, eventId).member, "han");
   assert.equal(store.getEvent(guildId, eventId).title, "Keep Me");
+  assert.equal(store.getEvent(guildId, eventId).event_timezone, "America/New_York");
+  assert.equal(store.getEvent(guildId, eventId).timezone, "America/New_York");
 });
 
 test("preselected Youtiful edit values can be kept without changing the event", async () => {
