@@ -389,6 +389,19 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_discord_event_reminders_due
       ON discord_event_reminders (status, remind_at);
 
+    CREATE TABLE IF NOT EXISTS discord_event_reminder_schedules (
+      guild_id TEXT NOT NULL,
+      discord_event_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      reminder_offset_seconds INTEGER NOT NULL,
+      remind_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (discord_event_id, user_id, reminder_offset_seconds)
+    );
+    CREATE INDEX IF NOT EXISTS idx_discord_event_reminder_schedules_due
+      ON discord_event_reminder_schedules (status, remind_at);
+
     CREATE TABLE IF NOT EXISTS discord_event_reconciliations (
       guild_id          TEXT NOT NULL,
       discord_event_id  TEXT NOT NULL,
@@ -401,6 +414,14 @@ function migrate(database) {
   `);
 
   migrateSharesToGuildScope(database);
+
+  // Preserve reminders created before multi-select schedules were introduced.
+  database.exec(`
+    INSERT OR IGNORE INTO discord_event_reminder_schedules
+      (guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at)
+    SELECT guild_id, discord_event_id, user_id, reminder_offset_seconds, remind_at, status, created_at
+    FROM discord_event_reminders
+  `);
 
   const scheduledEventColumns = new Set(
     database.prepare("PRAGMA table_info(scheduled_events)").all().map((column) => column.name)
