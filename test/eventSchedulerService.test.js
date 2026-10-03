@@ -588,6 +588,90 @@ test("edit event keeps friendly category changes and editable links", async () =
   assert.equal(store.getEvent(guildId, eventId).member, null);
 });
 
+test("preselected Stray Kids edit values can be kept through every selector", async () => {
+  const guildId = `manager-edit-keep-${Date.now()}`;
+  store.setCalendarChannels(guildId, "calendar-stray-kids", "calendar-community");
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-stray-kids", title: "Keep Me",
+    eventDate: "2099-06-01", eventAt: "2099-06-01T16:00:00.000Z", eventTimezone: "America/New_York",
+    timezone: "America/New_York", calendarType: "stray_kids", category: "content", member: "han",
+    createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const select = fakeInteraction({ customId: "harmony-manager:stray_kids:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  const details = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
+    fields: { title: "Keep Me", "event-date": "2099-06-01", "event-time": "12:00", location: "New York, USA", description: "" },
+  });
+  await handleEventSchedulerInteraction(details);
+  const timezone = fakeInteraction({ customId: `harmony-manager:stray_kids:skzedittimezone:${eventId}`, kind: "select", guildId, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const continueTimezone = fakeInteraction({ customId: `harmony-manager:stray_kids:editkeep:timezone:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(continueTimezone);
+  assert.equal(continueTimezone.responses[0].type, "update");
+  assert.match(continueTimezone.responses[0].payload.content, /category/i);
+  const categoryOptions = continueTimezone.responses[0].payload.components[0].toJSON().components[0].options;
+  assert.equal(categoryOptions.find((option) => option.default).value, "content");
+
+  const continueCategory = fakeInteraction({ customId: `harmony-manager:stray_kids:editkeep:category:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(continueCategory);
+  assert.match(continueCategory.responses[0].payload.content, /member/i);
+  const memberOptions = continueCategory.responses[0].payload.components[0].toJSON().components[0].options;
+  assert.equal(memberOptions.find((option) => option.default).value, "han");
+
+  const continueMember = fakeInteraction({ customId: `harmony-manager:stray_kids:editkeep:member:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(continueMember);
+  assert.equal(continueMember.responses[0].type, "update");
+  assert.equal(store.getEvent(guildId, eventId).category, "content");
+  assert.equal(store.getEvent(guildId, eventId).member, "han");
+  assert.equal(store.getEvent(guildId, eventId).title, "Keep Me");
+});
+
+test("preselected Youtiful edit values can be kept without changing the event", async () => {
+  const guildId = `community-edit-keep-${Date.now()}`;
+  store.setCalendarChannels(guildId, "calendar-stray-kids", "calendar-community");
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-community", title: "Community Event", eventDate: "2099-06-02",
+    eventAt: "2099-06-02T16:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "community", calendarEventType: "kdrama", category: "community", eventChannelId: "cinema", createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  const timezoneButton = fakeInteraction({ customId: `harmony-manager:community:edittzpick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(timezoneButton);
+  const timezoneOptions = timezoneButton.responses[0].payload.components[0].toJSON().components[0].options;
+  assert.equal(timezoneOptions.find((option) => option.default).value, "America/New_York");
+  const keepTimezone = fakeInteraction({ customId: `harmony-manager:community:editkeep:timezone:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(keepTimezone);
+  assert.match(keepTimezone.responses[0].payload.content, /EDIT EVENT/);
+
+  const typeButton = fakeInteraction({ customId: `harmony-manager:community:edittypepick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(typeButton);
+  const keepType = fakeInteraction({ customId: `harmony-manager:community:editkeep:type:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(keepType);
+  assert.match(keepType.responses[0].payload.content, /EDIT EVENT/);
+
+  const channelButton = fakeInteraction({ customId: `harmony-manager:community:editchannelpick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(channelButton);
+  const keepChannel = fakeInteraction({ customId: `harmony-manager:community:editkeep:channel:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(keepChannel);
+  assert.match(keepChannel.responses[0].payload.content, /EDIT EVENT/);
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.event_timezone, "America/New_York");
+  assert.equal(saved.calendar_event_type, "kdrama");
+  assert.equal(saved.event_channel_id, "cinema");
+});
+
+test("expired Keep Current edit controls fail safely", async () => {
+  const interaction = fakeInteraction({ customId: "harmony-manager:stray_kids:editkeep:member:999999", kind: "button", guildId: `expired-edit-${Date.now()}` });
+  await handleEventSchedulerInteraction(interaction);
+  assert.match(interaction.responses[0].payload.content, /expired|available/i);
+});
+
 function fakeChannel(id) {
   const messages = new Map();
   let sequence = 0;
