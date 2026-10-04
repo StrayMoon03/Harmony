@@ -13,6 +13,7 @@ const {
   GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel,
   GuildScheduledEventStatus,
+  Events,
 } = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
 const birthdayStore = require("../stores/birthdayStore");
@@ -1157,9 +1158,36 @@ async function handleGuildScheduledEventCreate(client, event) {
   if (store.getDiscordEventReconciliation(event.guildId, event.id)) return;
   const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
   const channel = await managerControlChannel(client, event.guildId);
-  if (!channel?.isTextBased()) return;
+  if (!channel?.isTextBased()) {
+    console.warn(`Discord-first scheduled event ${event.id} could not be reconciled: Harmony control channel is unavailable for guild ${event.guildId}.`);
+    return;
+  }
   const sent = await channel.send(reconciliationPayload(event, candidates));
   store.saveDiscordEventReconciliation(event.guildId, event.id, sent?.id || null, "open");
+}
+
+/**
+ * Register native Discord Scheduled Event listeners in one place. Keeping the
+ * wiring here makes the production path and the integration test path use the
+ * same discord.js event constants and handler signatures.
+ */
+function registerScheduledEventListeners(client) {
+  client.on(Events.GuildScheduledEventCreate, (event) => {
+    return handleGuildScheduledEventCreate(client, event).catch((error) =>
+      console.error(`Scheduled event create sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  client.on(Events.GuildScheduledEventUpdate, (oldEvent, event) => {
+    return handleGuildScheduledEventUpdate(client, oldEvent, event).catch((error) =>
+      console.error(`Scheduled event update sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  client.on(Events.GuildScheduledEventDelete, (event) => {
+    return handleGuildScheduledEventDelete(client, event).catch((error) =>
+      console.error(`Scheduled event delete sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  return client;
 }
 
 async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
@@ -1420,7 +1448,7 @@ async function handleManagerInteraction(interaction) {
     if (!RECURRENCE_TYPES.includes(type)) { await interaction.update({ content: "That recurrence option is no longer available.", components: [] }); return; }
     if (type === "none") {
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceRule: { type: "none" } });
-      await interaction.update({ content: "Choose optional promotional announcements.", components: announcementTimingMenu("ysannouncementtiming") });
+      await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
     } else {
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceType: type });
       await interaction.showModal(managerModal("harmony-manager:community:ysrecurrenceconfig", "Recurring event", recurrenceConfigFields(type)));
@@ -1445,29 +1473,12 @@ async function handleManagerInteraction(interaction) {
       }, draft.eventDate);
       generateRecurringOccurrences({ startDate: draft.eventDate, startTime: draft.eventTime, timezone: draft.eventTimezone, rule: recurrenceRule, localToUtc });
       managerDrafts.set(draftKey(interaction, calendarType), { ...draft, recurrenceRule });
-      await interaction.reply({ content: "Choose optional promotional announcements.", components: announcementTimingMenu("ysannouncementtiming") , flags: 64 });
+      await interaction.reply({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu(), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
   }
-  if (calendarType === "community" && action === "ysannouncementtiming" && interaction.isStringSelectMenu()) {
-    const draft = managerDrafts.get(draftKey(interaction, calendarType));
-    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
-    managerDrafts.set(draftKey(interaction, calendarType), { ...draft, announcementOffsets: offsets });
-    if (!offsets.length) {
-      await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
-    } else {
-      await interaction.update({ content: "Choose the separate announcement channel.", components: announcementChannelMenu("ysannouncementchannel") });
-    }
-    return;
-  }
-  if (calendarType === "community" && action === "ysannouncementchannel" && interaction.isChannelSelectMenu()) {
-    const draft = managerDrafts.get(draftKey(interaction, calendarType));
-    if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
-    managerDrafts.set(draftKey(interaction, calendarType), { ...draft, announcementChannelId: interaction.values[0] });
-    await interaction.update({ content: "Create a native Discord Scheduled Event too?", components: nativeEventMenu() });
-    return;
-  }
+  // Announcement configuration is post-creation only. The native-event
+  // decision above must be the next step after recurrence configuration.
   if (calendarType === "community" && action === "ysnative" && interaction.isButton()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType));
     if (!draft) { await interaction.update({ content: "That event draft expired. Please start again.", components: [] }); return; }
@@ -2255,6 +2266,7 @@ module.exports = {
   handleGuildScheduledEventCreate,
   handleGuildScheduledEventUpdate,
   handleGuildScheduledEventDelete,
+  registerScheduledEventListeners,
   reconciliationPayload,
   markPendingNativeCreate,
   clearPendingNativeCreate,
