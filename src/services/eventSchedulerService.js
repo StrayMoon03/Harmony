@@ -1115,7 +1115,11 @@ async function fetchInterestedMembers(scheduledEvent) {
 async function managerControlChannel(client, guildId) {
   const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
   const id = store.getReconciliationChannel(guildId);
-  return id && guild ? (guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null)) : null;
+  console.log(`[scheduler-reconciliation] configured-channel guild=${guildId} channel=${id || "none"} guild-resolved=${Boolean(guild)}`);
+  if (!id || !guild) return null;
+  const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
+  console.log(`[scheduler-reconciliation] channel-resolved guild=${guildId} channel=${id} resolved=${Boolean(channel)} text-based=${Boolean(channel?.isTextBased?.())}`);
+  return channel;
 }
 
 function scheduledEventCreatorLabel(event) {
@@ -1152,18 +1156,40 @@ function reconciliationPayload(event, candidates) {
 }
 
 async function handleGuildScheduledEventCreate(client, event) {
-  if (!event?.guildId) return;
-  if (store.getEventByDiscordId(event.guildId, event.id)) return;
-  if (pendingNativeCreates.has(nativeCreateKey(event.guildId, event.name, event.scheduledStartAt))) return;
-  if (store.getDiscordEventReconciliation(event.guildId, event.id)) return;
-  const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
-  const channel = await managerControlChannel(client, event.guildId);
-  if (!channel?.isTextBased()) {
-    console.warn(`Discord-first scheduled event ${event.id} could not be reconciled: Harmony control channel is unavailable for guild ${event.guildId}.`);
+  if (!event?.guildId) {
+    console.warn("[scheduler-reconciliation] create-ignored reason=missing-guild-or-event");
     return;
   }
-  const sent = await channel.send(reconciliationPayload(event, candidates));
+  console.log(`[scheduler-reconciliation] create-received guild=${event.guildId} event=${event.id}`);
+  if (store.getEventByDiscordId(event.guildId, event.id)) {
+    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=linked`);
+    return;
+  }
+  if (pendingNativeCreates.has(nativeCreateKey(event.guildId, event.name, event.scheduledStartAt))) {
+    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=pending-harmony-create`);
+    return;
+  }
+  if (store.getDiscordEventReconciliation(event.guildId, event.id)) {
+    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=already-reconciled`);
+    return;
+  }
+  const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
+  console.log(`[scheduler-reconciliation] payload-built guild=${event.guildId} event=${event.id} candidates=${candidates.length}`);
+  const channel = await managerControlChannel(client, event.guildId);
+  if (!channel?.isTextBased()) {
+    console.warn(`[scheduler-reconciliation] create-stopped guild=${event.guildId} event=${event.id} reason=channel-unavailable`);
+    return;
+  }
+  console.log(`[scheduler-reconciliation] send-attempt guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}`);
+  let sent;
+  try {
+    sent = await channel.send(reconciliationPayload(event, candidates));
+  } catch (error) {
+    console.error(`[scheduler-reconciliation] send-failed guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}:`, error);
+    throw error;
+  }
   store.saveDiscordEventReconciliation(event.guildId, event.id, sent?.id || null, "open");
+  console.log(`[scheduler-reconciliation] send-succeeded guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)} message=${sent?.id || "unknown"}`);
 }
 
 /**
@@ -1172,6 +1198,7 @@ async function handleGuildScheduledEventCreate(client, event) {
  * same discord.js event constants and handler signatures.
  */
 function registerScheduledEventListeners(client) {
+  console.log(`[scheduler-reconciliation] listeners-registered create=${Events.GuildScheduledEventCreate} update=${Events.GuildScheduledEventUpdate} delete=${Events.GuildScheduledEventDelete} intents=${client.options?.intents?.bitfield ?? "unknown"}`);
   client.on(Events.GuildScheduledEventCreate, (event) => {
     return handleGuildScheduledEventCreate(client, event).catch((error) =>
       console.error(`Scheduled event create sync failed for ${event?.id || "unknown"}:`, error)
