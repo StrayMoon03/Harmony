@@ -1186,7 +1186,7 @@ test("Harmony-created native events are ignored by inbound reconciliation", asyn
   const sent = [];
   const channel = { isTextBased: () => true, send: async (payload) => { sent.push(payload); return { id: "notice" }; } };
   const client = { guilds: { cache: new Map([[guildId, { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } }]]) } };
-  store.setManagerChannel(guildId, "control");
+  store.setReconciliationChannel(guildId, "control");
   await handleGuildScheduledEventCreate(client, { guildId, id: "native-race-event", name: "Harmony-created", scheduledStartAt: new Date("2099-10-03T23:00:00Z") });
   assert.equal(sent.length, 0);
 
@@ -1204,7 +1204,7 @@ test("Discord-first reconciliation is informative, deduplicated, and distinguish
   const sent = [];
   const channel = { isTextBased: () => true, send: async (payload) => { sent.push(payload); return { id: `notice-${sent.length}` }; } };
   const client = { guilds: { cache: new Map([[guildId, { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } }]]) } };
-  store.setManagerChannel(guildId, "control");
+  store.setReconciliationChannel(guildId, "control");
   const native = { guildId, id: "discord-first-event", name: "Bang Chan & Chaos", creator: { tag: "creator#1234" }, scheduledStartAt: new Date("2099-10-18T23:00:00Z") };
   await handleGuildScheduledEventCreate(client, native);
   await handleGuildScheduledEventCreate(client, native);
@@ -1227,7 +1227,7 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
     listeners: new Map(),
     on(name, handler) { this.listeners.set(name, handler); return this; },
   };
-  store.setManagerChannel(guildId, "control");
+  store.setReconciliationChannel(guildId, "control");
   registerScheduledEventListeners(client);
 
   const manual = { guildId, id: "manual-native", name: "Manual watch party", scheduledStartAt: new Date("2099-10-18T23:00:00Z") };
@@ -1240,6 +1240,30 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
   assert.ok(linkedId);
   await client.listeners.get("guildScheduledEventCreate")({ guildId, id: "linked-native", name: "Harmony event", scheduledStartAt: new Date("2099-10-19T23:00:00Z") });
   assert.equal(sent.length, 1);
+});
+
+test("Discord-first reconciliation uses only the configured channel and fails closed when unset", async () => {
+  const guildId = `native-config-${Date.now()}`;
+  const firstSent = [];
+  const secondSent = [];
+  const first = { isTextBased: () => true, send: async (payload) => { firstSent.push(payload); return { id: "first-notice" }; } };
+  const second = { isTextBased: () => true, send: async (payload) => { secondSent.push(payload); return { id: "second-notice" }; } };
+  const guild = { channels: { cache: new Map([["first", first], ["second", second]]), fetch: async (id) => guild.channels.cache.get(id) } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const event = { guildId, id: "manual-config-event", name: "Configured destination", scheduledStartAt: new Date("2099-11-01T20:00:00Z") };
+
+  await handleGuildScheduledEventCreate(client, event);
+  assert.equal(firstSent.length + secondSent.length, 0);
+
+  store.setReconciliationChannel(guildId, "first");
+  await handleGuildScheduledEventCreate(client, { ...event, id: "manual-config-event-1" });
+  assert.equal(firstSent.length, 1);
+  assert.equal(secondSent.length, 0);
+
+  store.setReconciliationChannel(guildId, "second");
+  await handleGuildScheduledEventCreate(client, { ...event, id: "manual-config-event-2" });
+  assert.equal(firstSent.length, 1);
+  assert.equal(secondSent.length, 1);
 });
 
 test("Youtiful announcement schedules are independent, multi-selectable, and cancelled safely", () => {

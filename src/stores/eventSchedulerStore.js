@@ -225,6 +225,20 @@ function getManagerChannel(guildId) {
   return getDb().prepare("SELECT manager_channel_id FROM calendar_settings WHERE guild_id = ?").get(guildId)?.manager_channel_id || null;
 }
 
+function setReconciliationChannel(guildId, reconciliationChannelId) {
+  getDb().prepare(`
+    INSERT INTO calendar_settings (guild_id, reconciliation_channel_id, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      reconciliation_channel_id = excluded.reconciliation_channel_id,
+      updated_at = excluded.updated_at
+  `).run(guildId, reconciliationChannelId || null, new Date().toISOString());
+}
+
+function getReconciliationChannel(guildId) {
+  return getDb().prepare("SELECT reconciliation_channel_id FROM calendar_settings WHERE guild_id = ?").get(guildId)?.reconciliation_channel_id || null;
+}
+
 function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
   return getDb().prepare(`
     SELECT * FROM scheduled_events
@@ -433,6 +447,8 @@ module.exports = {
   getCalendarChannels,
   setManagerChannel,
   getManagerChannel,
+  setReconciliationChannel,
+  getReconciliationChannel,
   listCalendarEvents,
   listPublishedCalendars,
   savePublishedCalendar,
