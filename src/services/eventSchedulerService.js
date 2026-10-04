@@ -1114,7 +1114,7 @@ async function fetchInterestedMembers(scheduledEvent) {
 
 async function managerControlChannel(client, guildId) {
   const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
-  const id = store.getManagerChannel(guildId);
+  const id = store.getReconciliationChannel(guildId);
   return id && guild ? (guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null)) : null;
 }
 

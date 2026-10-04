@@ -2,6 +2,17 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 
+test("reconciliation channel setting persists independently from manager channel", () => {
+  const guildId = `reconciliation-setting-${Date.now()}`;
+  assert.equal(store.getReconciliationChannel(guildId), null);
+  store.setManagerChannel(guildId, "manager-channel");
+  store.setReconciliationChannel(guildId, "reconciliation-channel");
+  assert.equal(store.getManagerChannel(guildId), "manager-channel");
+  assert.equal(store.getReconciliationChannel(guildId), "reconciliation-channel");
+  store.setReconciliationChannel(guildId, "new-reconciliation-channel");
+  assert.equal(store.getReconciliationChannel(guildId), "new-reconciliation-channel");
+});
+
 test("calendar-only events do not require an announcement or link", () => {
   const guildId = `phase2b-${Date.now()}`;
   const eventId = store.createCalendarEvent({

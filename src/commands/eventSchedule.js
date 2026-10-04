@@ -72,7 +72,8 @@ data.addSubcommand((sub) => sub
 data.addSubcommand((sub) => sub
   .setName("setup-manager")
   .setDescription("Install or refresh the private calendar Schedule Managers")
-  .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
+  .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))
+  .addChannelOption((o) => o.setName("reconciliation-channel").setDescription("Where Discord-first event reconciliation prompts are posted").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
 
 data.addSubcommand((sub) => sub
   .setName("event-titles")
@@ -98,16 +99,26 @@ async function execute(interaction) {
   if (action === "setup-manager") {
     try {
       const controlChannel = interaction.options.getChannel("control-channel", true);
+      const reconciliationChannel = interaction.options.getChannel("reconciliation-channel");
       const permissions = controlChannel.permissionsFor(interaction.guild.members.me);
       if (!controlChannel.isTextBased() || !permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions?.has(PermissionFlagsBits.SendMessages)) {
         await interaction.editReply(`Harmony cannot view and send messages in <#${controlChannel.id}>.`);
         return;
       }
       store.setManagerChannel(interaction.guildId, controlChannel.id);
+      if (reconciliationChannel) {
+        const reconciliationPermissions = reconciliationChannel.permissionsFor(interaction.guild.members.me);
+        if (!reconciliationChannel.isTextBased() || !reconciliationPermissions?.has(PermissionFlagsBits.ViewChannel) || !reconciliationPermissions?.has(PermissionFlagsBits.SendMessages)) {
+          await interaction.editReply(`Harmony cannot view and send reconciliation prompts in <#${reconciliationChannel.id}>.`);
+          return;
+        }
+        store.setReconciliationChannel(interaction.guildId, reconciliationChannel.id);
+      }
+      const configuredReconciliation = store.getReconciliationChannel(interaction.guildId);
       const panels = await installScheduleManagers(interaction.guild);
       await interaction.editReply(panels.length
-        ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}.`
-        : "No manager panels could be installed in that control channel.");
+        ? `Schedule Manager panels installed/refreshed in <#${controlChannel.id}>: ${panels.map((panel) => panel.calendarType === "stray_kids" ? "Stray Kids" : "Youtiful Stays").join(", ")}. Discord Scheduled Event reconciliation: ${configuredReconciliation ? `<#${configuredReconciliation}>` : "Not configured"}.`
+        : `No manager panels could be installed in that control channel. Discord Scheduled Event reconciliation: ${configuredReconciliation ? `<#${configuredReconciliation}>` : "Not configured"}.`);
     } catch (error) { await interaction.editReply(error.message); }
     return;
   }

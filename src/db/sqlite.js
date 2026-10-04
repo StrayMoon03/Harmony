@@ -345,6 +345,7 @@ function migrate(database) {
       guild_id               TEXT PRIMARY KEY,
       stray_kids_channel_id  TEXT,
       community_channel_id   TEXT,
+      reconciliation_channel_id TEXT,
       updated_at             TEXT NOT NULL
     );
 
@@ -503,6 +504,9 @@ function migrate(database) {
   );
   if (!settingColumns.has("manager_channel_id")) {
     database.exec("ALTER TABLE calendar_settings ADD COLUMN manager_channel_id TEXT");
+  }
+  if (!settingColumns.has("reconciliation_channel_id")) {
+    database.exec("ALTER TABLE calendar_settings ADD COLUMN reconciliation_channel_id TEXT");
   }
 
   const welcomePassSettingColumns = new Set(

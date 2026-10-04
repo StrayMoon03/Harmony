@@ -7,8 +7,9 @@ test("registers the guided Harmony scheduler command", () => {
   assert.equal(json.name, "harmony-schedule");
   assert.deepEqual(json.options.map((option) => option.name), ["create", "list", "cancel", "update", "setup-calendar", "calendar", "setup-manager", "event-titles"]);
   const setupManager = json.options.find((option) => option.name === "setup-manager");
-  assert.deepEqual(setupManager.options.map((option) => option.name), ["control-channel"]);
+  assert.deepEqual(setupManager.options.map((option) => option.name), ["control-channel", "reconciliation-channel"]);
   assert.equal(setupManager.options[0].required, true);
+  assert.equal(setupManager.options[1].required, false);
 
   const create = json.options.find((option) => option.name === "create");
   assert.deepEqual(
