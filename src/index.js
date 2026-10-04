@@ -64,9 +64,7 @@ const {
   handleEventSchedulerMessage,
   handleEventSchedulerInteraction,
   startEventScheduler,
-  handleGuildScheduledEventCreate,
-  handleGuildScheduledEventUpdate,
-  handleGuildScheduledEventDelete,
+  registerScheduledEventListeners,
   offerEventReminder,
 } = require("./services/eventSchedulerService");
 
@@ -173,9 +171,7 @@ client.on("guildCreate", async (guild) => {
   }
 });
 
-client.on("guildScheduledEventCreate", (event) => handleGuildScheduledEventCreate(client, event).catch((error) => console.error("Scheduled event create sync failed:", error)));
-client.on("guildScheduledEventUpdate", (oldEvent, event) => handleGuildScheduledEventUpdate(client, oldEvent, event).catch((error) => console.error("Scheduled event update sync failed:", error)));
-client.on("guildScheduledEventDelete", (event) => handleGuildScheduledEventDelete(client, event).catch((error) => console.error("Scheduled event delete sync failed:", error)));
+registerScheduledEventListeners(client);
 client.on("guildScheduledEventUserAdd", (event, user) => offerEventReminder(client, event, user));
 client.on("guildScheduledEventUserRemove", (event, user) => {
   const reminderStore = require("./stores/eventSchedulerStore");
