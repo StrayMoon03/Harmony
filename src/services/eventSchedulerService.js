@@ -503,6 +503,8 @@ function recurrenceCancelButtons(eventId) {
 
 const managerDrafts = new Map();
 const pendingNativeCreates = new Map();
+const reconciliationInProgress = new Set();
+let reconciliationPollInProgress = false;
 
 function nativeCreateKey(guildId, name, start) {
   const instant = start instanceof Date ? start.getTime() : new Date(start || 0).getTime();
@@ -1160,36 +1162,77 @@ async function handleGuildScheduledEventCreate(client, event) {
     console.warn("[scheduler-reconciliation] create-ignored reason=missing-guild-or-event");
     return;
   }
-  console.log(`[scheduler-reconciliation] create-received guild=${event.guildId} event=${event.id}`);
-  if (store.getEventByDiscordId(event.guildId, event.id)) {
-    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=linked`);
+  const key = `${event.guildId}:${event.id}`;
+  if (reconciliationInProgress.has(key)) {
+    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=reconciliation-in-progress`);
     return;
   }
-  if (pendingNativeCreates.has(nativeCreateKey(event.guildId, event.name, event.scheduledStartAt))) {
-    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=pending-harmony-create`);
-    return;
-  }
-  if (store.getDiscordEventReconciliation(event.guildId, event.id)) {
-    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=already-reconciled`);
-    return;
-  }
-  const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
-  console.log(`[scheduler-reconciliation] payload-built guild=${event.guildId} event=${event.id} candidates=${candidates.length}`);
-  const channel = await managerControlChannel(client, event.guildId);
-  if (!channel?.isTextBased()) {
-    console.warn(`[scheduler-reconciliation] create-stopped guild=${event.guildId} event=${event.id} reason=channel-unavailable`);
-    return;
-  }
-  console.log(`[scheduler-reconciliation] send-attempt guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}`);
-  let sent;
+  reconciliationInProgress.add(key);
   try {
-    sent = await channel.send(reconciliationPayload(event, candidates));
-  } catch (error) {
-    console.error(`[scheduler-reconciliation] send-failed guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}:`, error);
-    throw error;
+    console.log(`[scheduler-reconciliation] create-received guild=${event.guildId} event=${event.id}`);
+    if (store.getEventByDiscordId(event.guildId, event.id)) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=linked`);
+      return;
+    }
+    if (pendingNativeCreates.has(nativeCreateKey(event.guildId, event.name, event.scheduledStartAt))) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=pending-harmony-create`);
+      return;
+    }
+    if (store.getDiscordEventReconciliation(event.guildId, event.id)) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=already-reconciled`);
+      return;
+    }
+    const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
+    console.log(`[scheduler-reconciliation] payload-built guild=${event.guildId} event=${event.id} candidates=${candidates.length}`);
+    const channel = await managerControlChannel(client, event.guildId);
+    if (!channel?.isTextBased()) {
+      console.warn(`[scheduler-reconciliation] create-stopped guild=${event.guildId} event=${event.id} reason=channel-unavailable`);
+      return;
+    }
+    console.log(`[scheduler-reconciliation] send-attempt guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}`);
+    let sent;
+    try {
+      sent = await channel.send(reconciliationPayload(event, candidates));
+    } catch (error) {
+      console.error(`[scheduler-reconciliation] send-failed guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}:`, error);
+      throw error;
+    }
+    store.saveDiscordEventReconciliation(event.guildId, event.id, sent?.id || null, "open");
+    console.log(`[scheduler-reconciliation] send-succeeded guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)} message=${sent?.id || "unknown"}`);
+  } finally {
+    reconciliationInProgress.delete(key);
   }
-  store.saveDiscordEventReconciliation(event.guildId, event.id, sent?.id || null, "open");
-  console.log(`[scheduler-reconciliation] send-succeeded guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)} message=${sent?.id || "unknown"}`);
+}
+
+async function reconcileScheduledEventsFallback(client, { initial = false } = {}) {
+  if (reconciliationPollInProgress) {
+    console.log("[scheduler-reconciliation] fallback-skipped reason=already-running");
+    return;
+  }
+  reconciliationPollInProgress = true;
+  if (initial) console.log("[scheduler-reconciliation] fallback-start");
+  try {
+    for (const guild of client.guilds?.cache?.values?.() || []) {
+      let events;
+      try {
+        if (initial) console.log(`[scheduler-reconciliation] fallback-fetch guild=${guild.id}`);
+        events = await guild.scheduledEvents.fetch();
+      } catch (error) {
+        console.error(`[scheduler-reconciliation] fallback-fetch-failed guild=${guild.id}:`, error);
+        continue;
+      }
+      if (initial || events.size) {
+        console.log(`[scheduler-reconciliation] fallback-fetched guild=${guild.id} events=${events.size}`);
+      }
+      for (const event of events.values()) {
+        await handleGuildScheduledEventCreate(client, event).catch((error) =>
+          console.error(`[scheduler-reconciliation] fallback-reconcile-failed guild=${guild.id} event=${event?.id || "unknown"}:`, error)
+        );
+      }
+    }
+  } finally {
+    reconciliationPollInProgress = false;
+  }
 }
 
 /**
@@ -2238,6 +2281,11 @@ function startEventScheduler(client) {
   processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
   processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
   syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event startup failed:", error));
+  const initialReconciliation = setTimeout(
+    () => reconcileScheduledEventsFallback(client, { initial: true }).catch((error) => console.error("Scheduled event fallback startup failed:", error)),
+    5_000
+  );
+  initialReconciliation.unref?.();
   const timer = setInterval(
     () => {
       processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
@@ -2247,6 +2295,11 @@ function startEventScheduler(client) {
     CHECK_INTERVAL_MS
   );
   timer.unref?.();
+  const reconciliationTimer = setInterval(
+    () => reconcileScheduledEventsFallback(client).catch((error) => console.error("Scheduled event fallback failed:", error)),
+    2 * 60 * 1000
+  );
+  reconciliationTimer.unref?.();
 }
 
 module.exports = {
@@ -2294,6 +2347,7 @@ module.exports = {
   handleGuildScheduledEventUpdate,
   handleGuildScheduledEventDelete,
   registerScheduledEventListeners,
+  reconcileScheduledEventsFallback,
   reconciliationPayload,
   markPendingNativeCreate,
   clearPendingNativeCreate,
