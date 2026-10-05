@@ -16,6 +16,7 @@ const {
   reconciliationPayload,
   handleGuildScheduledEventCreate,
   registerScheduledEventListeners,
+  reconcileScheduledEventsFallback,
   markPendingNativeCreate,
   clearPendingNativeCreate,
 } = require("../src/services/eventSchedulerService");
@@ -1240,6 +1241,36 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
   assert.ok(linkedId);
   await client.listeners.get("guildScheduledEventCreate")({ guildId, id: "linked-native", name: "Harmony event", scheduledStartAt: new Date("2099-10-19T23:00:00Z") });
   assert.equal(sent.length, 1);
+});
+
+test("Scheduled Event fallback fetches authoritative events and deduplicates with the listener path", async () => {
+  const guildId = `native-fallback-${Date.now()}`;
+  const sent = [];
+  const channel = { isTextBased: () => true, send: async (payload) => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    sent.push(payload);
+    return { id: `fallback-notice-${sent.length}` };
+  } };
+  const native = { guildId, id: "fallback-native", name: "Fallback watch party", scheduledStartAt: new Date("2099-10-20T23:00:00Z") };
+  const events = new Map([[native.id, native]]);
+  let fetches = 0;
+  const guild = {
+    id: guildId,
+    channels: { cache: new Map([["control", channel]]), fetch: async () => channel },
+    scheduledEvents: { fetch: async () => { fetches += 1; return { size: events.size, values: () => events.values() }; } },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+
+  await Promise.all([
+    reconcileScheduledEventsFallback(client, { initial: true }),
+    reconcileScheduledEventsFallback(client),
+  ]);
+  await reconcileScheduledEventsFallback(client);
+
+  assert.equal(fetches, 2);
+  assert.equal(sent.length, 1);
+  assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "open");
 });
 
 test("Discord-first reconciliation uses only the configured channel and fails closed when unset", async () => {
