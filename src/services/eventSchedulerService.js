@@ -1142,12 +1142,8 @@ function reconciliationCandidateLabel(item) {
 function reconciliationReviewComponents(event, candidates) {
   const components = [];
   if (candidates.length > 1) {
-    const linkMenu = new StringSelectMenuBuilder()
-      .setCustomId(`harmony-manager:community:nativelinkselect:${event.id}`)
-      .setPlaceholder("Link Existing")
-      .addOptions(candidates.slice(0, 25).map((item) => ({ label: reconciliationCandidateLabel(item), value: String(item.id) })));
-    components.push(new ActionRowBuilder().addComponents(linkMenu));
     components.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativechoose:${event.id}`).setLabel("Link Existing").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Ignore").setStyle(ButtonStyle.Secondary)
     ));
@@ -1164,6 +1160,13 @@ function reconciliationReviewComponents(event, candidates) {
     ));
   }
   return components;
+}
+
+function reconciliationCandidateSelector(event, candidates) {
+  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:community:nativelinkselect:${event.id}`)
+    .setPlaceholder("Choose the existing Harmony event")
+    .addOptions(candidates.slice(0, 25).map((item) => ({ label: reconciliationCandidateLabel(item), value: String(item.id) }))));
 }
 
 function reconciliationPayload(event) {
@@ -1423,6 +1426,35 @@ async function handleManagerInteraction(interaction) {
     }
     const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
     await interaction.reply(reconciliationReviewPayload(native, candidates));
+    return;
+  }
+
+  if (calendarType === "community" && action === "nativechoose" && interaction.isButton()) {
+    const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, eventId);
+    if (!reconciliation || reconciliation.status !== "open") {
+      await staleReconciliationInteraction(interaction, "update");
+      return;
+    }
+    let native;
+    try {
+      native = await interaction.guild?.scheduledEvents?.fetch(eventId);
+    } catch {
+      native = null;
+    }
+    if (!native) {
+      await interaction.update({ content: "That Discord Scheduled Event is no longer available.", components: [] });
+      return;
+    }
+    const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
+    if (candidates.length < 2) {
+      if (candidates.length === 1) {
+        await interaction.update({ content: "That event now has one available Harmony match. Choose Link Existing again to link it.", components: reconciliationReviewComponents(native, candidates) });
+      } else {
+        await interaction.update({ content: "No existing Harmony event matches this Discord event. Choose Add to Calendar or Ignore.", components: reconciliationReviewComponents(native, candidates) });
+      }
+      return;
+    }
+    await interaction.update({ content: `${reconciliationPayload(native).content}\n\nChoose the existing Harmony event to link:`, components: [reconciliationCandidateSelector(native, candidates)] });
     return;
   }
 
