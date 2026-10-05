@@ -25,10 +25,20 @@ test("keeps an upcoming live-event preview without reporting an error", () => {
   );
 });
 
-test("does not hide a genuine YouTube download failure", () => {
+test("keeps the original YouTube player when download access is unavailable", () => {
   assert.equal(
     shouldKeepOriginalYouTubePreview({
       linkOnly: true,
+      linkOnlyReason: "download-unavailable",
+    }),
+    true
+  );
+});
+
+test("does not treat a non-link-only result as an original-player fallback", () => {
+  assert.equal(
+    shouldKeepOriginalYouTubePreview({
+      linkOnly: false,
       linkOnlyReason: "download-unavailable",
     }),
     false

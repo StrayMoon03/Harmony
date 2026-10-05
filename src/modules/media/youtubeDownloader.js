@@ -278,7 +278,9 @@ async function downloadYouTubeMedia(url) {
 function shouldKeepOriginalYouTubePreview(downloadResult) {
   return Boolean(
     downloadResult?.linkOnly &&
-    ["long-video", "upcoming-live"].includes(downloadResult.linkOnlyReason)
+    ["long-video", "upcoming-live", "download-unavailable"].includes(
+      downloadResult.linkOnlyReason
+    )
   );
 }
 
