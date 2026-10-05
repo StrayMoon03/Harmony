@@ -14,9 +14,9 @@ const {
   nativeEventEndTime,
   syncNativeScheduledEvent,
   reconciliationPayload,
+  reconciliationReviewPayload,
   handleGuildScheduledEventCreate,
   registerScheduledEventListeners,
-  reconcileScheduledEventsFallback,
   markPendingNativeCreate,
   clearPendingNativeCreate,
 } = require("../src/services/eventSchedulerService");
@@ -1212,8 +1212,11 @@ test("Discord-first reconciliation is informative, deduplicated, and distinguish
   assert.equal(sent.length, 1);
   assert.match(sent[0].content, /creator#1234/);
   assert.match(sent[0].content, /When: <t:/);
-  const json = reconciliationPayload(native, [store.getEvent(guildId, first), store.getEvent(guildId, second)]);
-  const options = json.components[0].toJSON().components[0].options.map((option) => option.label);
+  const json = reconciliationPayload(native);
+  assert.equal(json.components[0].toJSON().components[0].label, "Review Event");
+  assert.equal(json.components[0].toJSON().components.length, 1);
+  const jsonReview = reconciliationReviewPayload(native, [store.getEvent(guildId, first), store.getEvent(guildId, second)]);
+  const options = jsonReview.components[0].toJSON().components[0].options.map((option) => option.label);
   assert.equal(options.length, 2);
   assert.notEqual(options[0], options[1]);
 });
@@ -1243,34 +1246,74 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
   assert.equal(sent.length, 1);
 });
 
-test("Scheduled Event fallback fetches authoritative events and deduplicates with the listener path", async () => {
-  const guildId = `native-fallback-${Date.now()}`;
+test("Review Event keeps reconciliation controls private and stale reviewers are blocked", async () => {
+  const guildId = `native-review-${Date.now()}`;
   const sent = [];
-  const channel = { isTextBased: () => true, send: async (payload) => {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    sent.push(payload);
-    return { id: `fallback-notice-${sent.length}` };
-  } };
-  const native = { guildId, id: "fallback-native", name: "Fallback watch party", scheduledStartAt: new Date("2099-10-20T23:00:00Z") };
-  const events = new Map([[native.id, native]]);
-  let fetches = 0;
+  const channel = { isTextBased: () => true, send: async (payload) => { sent.push(payload); return { id: "review-notice" }; } };
+  const candidateId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Private review", eventDate: "2099-10-20", eventAt: "2099-10-20T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin" });
+  const native = { guildId, id: "private-review-event", name: "Private review", scheduledStartAt: new Date("2099-10-20T23:00:00Z") };
   const guild = {
-    id: guildId,
     channels: { cache: new Map([["control", channel]]), fetch: async () => channel },
-    scheduledEvents: { fetch: async () => { fetches += 1; return { size: events.size, values: () => events.values() }; } },
+    scheduledEvents: { fetch: async () => native },
   };
   const client = { guilds: { cache: new Map([[guildId, guild]]) } };
   store.setReconciliationChannel(guildId, "control");
+  await handleGuildScheduledEventCreate(client, native);
+  assert.equal(sent[0].components[0].toJSON().components[0].label, "Review Event");
 
-  await Promise.all([
-    reconcileScheduledEventsFallback(client, { initial: true }),
-    reconcileScheduledEventsFallback(client),
-  ]);
-  await reconcileScheduledEventsFallback(client);
+  const review = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(review);
+  assert.equal(review.responses[0].type, "reply");
+  assert.equal(review.responses[0].payload.flags, 64);
+  const linkId = review.responses[0].payload.components[0].toJSON().components[0].custom_id;
+  assert.match(linkId, /linknative/);
 
-  assert.equal(fetches, 2);
-  assert.equal(sent.length, 1);
-  assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "open");
+  const link = fakeInteraction({ customId: linkId, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(link);
+  assert.equal(link.responses[0].type, "update");
+  assert.match(link.responses[0].payload.content, /Linked/);
+  assert.ok(store.getEvent(guildId, candidateId).discord_event_id);
+
+  const stale = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(stale);
+  assert.equal(stale.responses[0].payload.flags, 64);
+  assert.match(stale.responses[0].payload.content, /already been reviewed/);
+
+  const missingGuild = { ...guild, scheduledEvents: { fetch: async () => null } };
+  const missing = fakeInteraction({ customId: `harmony-manager:community:reviewnative:missing-event`, kind: "button", guildId, guild: missingGuild, client });
+  store.saveDiscordEventReconciliation(guildId, "missing-event", "missing-notice", "open");
+  await handleEventSchedulerInteraction(missing);
+  assert.equal(missing.responses[0].payload.flags, 64);
+  assert.match(missing.responses[0].payload.content, /no longer available/);
+});
+
+test("Review Event Add to Calendar and Ignore remain private and durable", async () => {
+  const guildId = `native-review-actions-${Date.now()}`;
+  const notices = [];
+  const channel = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
+  const native = { guildId, id: "private-add-event", name: "Unmatched event", description: "From Discord", scheduledStartAt: new Date("2099-10-21T23:00:00Z") };
+  const ignored = { guildId, id: "private-ignore-event", name: "Ignored event", scheduledStartAt: new Date("2099-10-22T23:00:00Z") };
+  const guild = { channels: { cache: new Map([["control", channel]]), fetch: async () => channel }, scheduledEvents: { fetch: async (id) => id === native.id ? native : ignored } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+
+  await handleGuildScheduledEventCreate(client, native);
+  const review = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(review);
+  const reviewLabels = review.responses[0].payload.components.flatMap((row) => row.toJSON().components.map((component) => component.label || component.placeholder));
+  assert.deepEqual(reviewLabels, ["Add to Calendar", "Ignore"]);
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  assert.equal(add.responses[0].type, "update");
+  assert.match(add.responses[0].payload.content, /Choose optional announcements/);
+  assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "added");
+
+  await handleGuildScheduledEventCreate(client, ignored);
+  const ignore = fakeInteraction({ customId: `harmony-manager:community:nativedismiss:${ignored.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(ignore);
+  assert.equal(ignore.responses[0].type, "update");
+  assert.match(ignore.responses[0].payload.content, /left unchanged/);
+  assert.equal(store.getDiscordEventReconciliation(guildId, ignored.id).status, "dismissed");
 });
 
 test("Discord-first reconciliation uses only the configured channel and fails closed when unset", async () => {
@@ -1337,6 +1380,7 @@ test("Add to Calendar links the existing Discord event without creating another 
   interaction.client = client;
   store.setCalendarChannels(guildId, "skz", "community");
   store.setManagerChannel(guildId, "control");
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   await handleEventSchedulerInteraction(interaction);
   const linked = store.getEventByDiscordId(guildId, native.id);
   assert.ok(linked);

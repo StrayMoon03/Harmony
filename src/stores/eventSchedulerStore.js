@@ -377,9 +377,15 @@ function saveDiscordEventReconciliation(guildId, discordEventId, noticeMessageId
   const now = new Date().toISOString();
   getDb().prepare(`INSERT INTO discord_event_reconciliations (guild_id, discord_event_id, notice_message_id, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(guild_id, discord_event_id) DO UPDATE SET notice_message_id = excluded.notice_message_id, status = excluded.status, updated_at = excluded.updated_at`)
+    ON CONFLICT(guild_id, discord_event_id) DO UPDATE SET notice_message_id = COALESCE(excluded.notice_message_id, discord_event_reconciliations.notice_message_id), status = excluded.status, updated_at = excluded.updated_at`)
     .run(guildId, discordEventId, noticeMessageId || null, status, now, now);
   return getDiscordEventReconciliation(guildId, discordEventId);
+}
+
+function claimDiscordEventReconciliation(guildId, discordEventId) {
+  const result = getDb().prepare("UPDATE discord_event_reconciliations SET status = 'processing', updated_at = ? WHERE guild_id = ? AND discord_event_id = ? AND status = 'open'")
+    .run(new Date().toISOString(), guildId, discordEventId);
+  return result.changes > 0;
 }
 
 function dueAnnouncements(nowIso, limit = 25) {
@@ -443,6 +449,7 @@ module.exports = {
   saveEventAnnouncements,
   getDiscordEventReconciliation,
   saveDiscordEventReconciliation,
+  claimDiscordEventReconciliation,
   setCalendarChannels,
   getCalendarChannels,
   setManagerChannel,

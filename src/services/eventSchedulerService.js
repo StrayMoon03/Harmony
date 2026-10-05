@@ -95,7 +95,7 @@ function calendarLabel(calendarType) {
 function managerPanelContent(calendarType) {
   const label = calendarLabel(calendarType);
   const icon = calendarType === "stray_kids" ? "⭐" : "❤️";
-  return `${icon} **${label} SCHEDULE MANAGER**\nUse the private controls below to manage this calendar. Calendar events do not require an announcement.`;
+  return `${icon} **${label} SCHEDULE MANAGER**\nUse the private controls below to manage this calendar. Calendar events do not require an announcement.\nDiscord Scheduled Event reconciliation also requires Harmony to have **View Channel** permission for each associated voice or stage channel.`;
 }
 
 function managerPanelComponents(calendarType) {
@@ -504,7 +504,6 @@ function recurrenceCancelButtons(eventId) {
 const managerDrafts = new Map();
 const pendingNativeCreates = new Map();
 const reconciliationInProgress = new Set();
-let reconciliationPollInProgress = false;
 
 function nativeCreateKey(guildId, name, start) {
   const instant = start instanceof Date ? start.getTime() : new Date(start || 0).getTime();
@@ -1133,28 +1132,77 @@ function scheduledEventDateLabel(event) {
   return start && !Number.isNaN(start.getTime()) ? `<t:${Math.floor(start.getTime() / 1000)}:F>` : "Date/time unavailable";
 }
 
-function reconciliationPayload(event, candidates) {
-  const content = [`A native Discord Scheduled Event **${event.name}** was found.`, `When: ${scheduledEventDateLabel(event)}`, `Created by: ${scheduledEventCreatorLabel(event)}`].join("\n");
+function reconciliationCandidateLabel(item) {
+  const when = item.event_at
+    ? new Intl.DateTimeFormat("en-US", { timeZone: item.event_timezone || item.timezone || "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(item.event_at))
+    : `${item.event_date || "date pending"} • All Day`;
+  return `${item.title} • ${when}`.slice(0, 100);
+}
+
+function reconciliationReviewComponents(event, candidates) {
   const components = [];
-  const labelFor = (item) => {
-    const when = item.event_at
-      ? new Intl.DateTimeFormat("en-US", { timeZone: item.event_timezone || item.timezone || "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(item.event_at))
-      : `${item.event_date || "date pending"} • All Day`;
-    return `${item.title} • ${when}`.slice(0, 100);
-  };
   if (candidates.length > 1) {
     const linkMenu = new StringSelectMenuBuilder()
       .setCustomId(`harmony-manager:community:nativelinkselect:${event.id}`)
       .setPlaceholder("Link Existing")
-      .addOptions(candidates.slice(0, 25).map((item) => ({ label: labelFor(item), value: String(item.id) })));
+      .addOptions(candidates.slice(0, 25).map((item) => ({ label: reconciliationCandidateLabel(item), value: String(item.id) })));
     components.push(new ActionRowBuilder().addComponents(linkMenu));
-    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary)));
+    components.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Ignore").setStyle(ButtonStyle.Secondary)
+    ));
   } else if (candidates.length === 1) {
-    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:linknative:${candidates[0].id}:${event.id}`).setLabel("Link Existing").setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary)));
+    components.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:community:linknative:${candidates[0].id}:${event.id}`).setLabel("Link Existing").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Ignore").setStyle(ButtonStyle.Secondary)
+    ));
   } else {
-    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary)));
+    components.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativeadd:${event.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`harmony-manager:community:nativedismiss:${event.id}`).setLabel("Ignore").setStyle(ButtonStyle.Secondary)
+    ));
   }
-  return { content, components, allowedMentions: { parse: [] } };
+  return components;
+}
+
+function reconciliationPayload(event) {
+  const content = [`A native Discord Scheduled Event **${event.name}** was found.`, `When: ${scheduledEventDateLabel(event)}`, `Created by: ${scheduledEventCreatorLabel(event)}`].join("\n");
+  return { content, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:reviewnative:${event.id}`).setLabel("Review Event").setStyle(ButtonStyle.Primary))], allowedMentions: { parse: [] } };
+}
+
+function reconciliationReviewPayload(event, candidates) {
+  return {
+    content: `${reconciliationPayload(event).content}\n\nChoose what Harmony should do with this event:`,
+    components: reconciliationReviewComponents(event, candidates),
+    flags: 64,
+    allowedMentions: { parse: [] },
+  };
+}
+
+async function disableReconciliationNotice(client, guildId, discordEventId) {
+  const record = store.getDiscordEventReconciliation(guildId, discordEventId);
+  if (!record?.notice_message_id) return;
+  const channel = await managerControlChannel(client, guildId);
+  if (!channel?.messages?.fetch) return;
+  const notice = await channel.messages.fetch(record.notice_message_id).catch(() => null);
+  if (notice?.edit) {
+    await notice.edit({
+      content: "✅ This Discord Scheduled Event has been reviewed.",
+      components: [],
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
+  }
+}
+
+async function staleReconciliationInteraction(interaction, mode = "reply") {
+  const payload = { content: "This Discord Scheduled Event has already been reviewed.", components: [], flags: 64 };
+  if (mode === "update") {
+    delete payload.flags;
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
 }
 
 async function handleGuildScheduledEventCreate(client, event) {
@@ -1192,7 +1240,7 @@ async function handleGuildScheduledEventCreate(client, event) {
     console.log(`[scheduler-reconciliation] send-attempt guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}`);
     let sent;
     try {
-      sent = await channel.send(reconciliationPayload(event, candidates));
+      sent = await channel.send(reconciliationPayload(event));
     } catch (error) {
       console.error(`[scheduler-reconciliation] send-failed guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}:`, error);
       throw error;
@@ -1201,37 +1249,6 @@ async function handleGuildScheduledEventCreate(client, event) {
     console.log(`[scheduler-reconciliation] send-succeeded guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)} message=${sent?.id || "unknown"}`);
   } finally {
     reconciliationInProgress.delete(key);
-  }
-}
-
-async function reconcileScheduledEventsFallback(client, { initial = false } = {}) {
-  if (reconciliationPollInProgress) {
-    console.log("[scheduler-reconciliation] fallback-skipped reason=already-running");
-    return;
-  }
-  reconciliationPollInProgress = true;
-  if (initial) console.log("[scheduler-reconciliation] fallback-start");
-  try {
-    for (const guild of client.guilds?.cache?.values?.() || []) {
-      let events;
-      try {
-        if (initial) console.log(`[scheduler-reconciliation] fallback-fetch guild=${guild.id}`);
-        events = await guild.scheduledEvents.fetch();
-      } catch (error) {
-        console.error(`[scheduler-reconciliation] fallback-fetch-failed guild=${guild.id}:`, error);
-        continue;
-      }
-      if (initial || events.size) {
-        console.log(`[scheduler-reconciliation] fallback-fetched guild=${guild.id} events=${events.size}`);
-      }
-      for (const event of events.values()) {
-        await handleGuildScheduledEventCreate(client, event).catch((error) =>
-          console.error(`[scheduler-reconciliation] fallback-reconcile-failed guild=${guild.id} event=${event?.id || "unknown"}:`, error)
-        );
-      }
-    }
-  } finally {
-    reconciliationPollInProgress = false;
   }
 }
 
@@ -1388,24 +1405,49 @@ async function handleManagerInteraction(interaction) {
   const settings = store.getCalendarChannels(interaction.guildId) || {};
   const calendarChannelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
 
+  if (calendarType === "community" && action === "reviewnative" && interaction.isButton()) {
+    const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, eventId);
+    if (!reconciliation || reconciliation.status !== "open") {
+      await staleReconciliationInteraction(interaction);
+      return;
+    }
+    let native;
+    try {
+      native = await interaction.guild?.scheduledEvents?.fetch(eventId);
+    } catch {
+      native = null;
+    }
+    if (!native) {
+      await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 });
+      return;
+    }
+    const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
+    await interaction.reply(reconciliationReviewPayload(native, candidates));
+    return;
+  }
+
   if (calendarType === "community" && action === "nativelinkselect" && interaction.isStringSelectMenu()) {
+    if (!store.claimDiscordEventReconciliation(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     const linked = store.getEvent(interaction.guildId, Number(interaction.values[0]));
-    if (!linked) { await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+    if (!linked) { store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "open"); await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
     const nativeId = eventId;
-    if (store.getEventByDiscordId(interaction.guildId, nativeId)) { await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
+    if (store.getEventByDiscordId(interaction.guildId, nativeId)) { store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "linked"); await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
     store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
+    await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
     await interaction.update({ content: `Linked the native event to **${linked.title}**.`, components: [] });
     return;
   }
   if (calendarType === "community" && action === "nativeadd" && interaction.isButton()) {
+    if (!store.claimDiscordEventReconciliation(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     try {
       const added = await addNativeEventToCalendar(interaction, eventId);
       store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "added");
+      await disableReconciliationNotice(interaction.client, interaction.guildId, eventId);
       managerDrafts.set(draftKey(interaction, calendarType, `native-${added.id}`), { eventId: added.id, existing: added });
       await interaction.update({ content: `Added **${added.title}** to the Youtiful Stays calendar. Choose optional announcements.`, components: announcementTimingMenu("nativeaddtiming", added.id) });
       await refreshPublishedCalendar(interaction.client, interaction.guildId, "community", added.event_date).catch(() => {});
-    } catch (error) { await interaction.update({ content: error.message, components: [] }); }
+    } catch (error) { store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "open"); await interaction.update({ content: error.message, components: [] }); }
     return;
   }
   if (calendarType === "community" && action === "nativeaddtiming" && interaction.isStringSelectMenu()) {
@@ -1432,21 +1474,28 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   if (calendarType === "community" && action === "linknative" && interaction.isButton()) {
+    const nativeId = parts[4];
+    if (!store.claimDiscordEventReconciliation(interaction.guildId, nativeId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     const linked = store.getEvent(interaction.guildId, Number(eventId));
-    if (!linked) { await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
-    if (store.getEventByDiscordId(interaction.guildId, parts[4])) { await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
-    store.updateEvent(interaction.guildId, linked.id, { discord_event_id: parts[4] });
-    store.saveDiscordEventReconciliation(interaction.guildId, parts[4], null, "linked");
+    if (!linked) { store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open"); await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+    if (store.getEventByDiscordId(interaction.guildId, nativeId)) { store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked"); await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
+    store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
+    store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
+    await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
     await interaction.update({ content: `Linked the native Discord event to **${linked.title}**.`, components: [] });
     return;
   }
   if (calendarType === "community" && action === "keepnative" && interaction.isButton()) {
+    if (!store.claimDiscordEventReconciliation(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "dismissed");
+    await disableReconciliationNotice(interaction.client, interaction.guildId, eventId);
     await interaction.update({ content: "Kept the native Discord event separate from Harmony.", components: [] });
     return;
   }
   if (calendarType === "community" && action === "nativedismiss" && interaction.isButton()) {
+    if (!store.claimDiscordEventReconciliation(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "dismissed");
+    await disableReconciliationNotice(interaction.client, interaction.guildId, eventId);
     await interaction.update({ content: "Dismissed this reconciliation notice. The native Discord event was left unchanged.", components: [] });
     return;
   }
@@ -2281,11 +2330,6 @@ function startEventScheduler(client) {
   processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
   processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
   syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event startup failed:", error));
-  const initialReconciliation = setTimeout(
-    () => reconcileScheduledEventsFallback(client, { initial: true }).catch((error) => console.error("Scheduled event fallback startup failed:", error)),
-    5_000
-  );
-  initialReconciliation.unref?.();
   const timer = setInterval(
     () => {
       processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
@@ -2295,11 +2339,6 @@ function startEventScheduler(client) {
     CHECK_INTERVAL_MS
   );
   timer.unref?.();
-  const reconciliationTimer = setInterval(
-    () => reconcileScheduledEventsFallback(client).catch((error) => console.error("Scheduled event fallback failed:", error)),
-    2 * 60 * 1000
-  );
-  reconciliationTimer.unref?.();
 }
 
 module.exports = {
@@ -2347,8 +2386,8 @@ module.exports = {
   handleGuildScheduledEventUpdate,
   handleGuildScheduledEventDelete,
   registerScheduledEventListeners,
-  reconcileScheduledEventsFallback,
   reconciliationPayload,
+  reconciliationReviewPayload,
   markPendingNativeCreate,
   clearPendingNativeCreate,
   nativeCreateKey,
