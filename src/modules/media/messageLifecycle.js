@@ -130,6 +130,11 @@ async function deleteOriginalAfterSuccess(
     await message.delete();
     return true;
   } catch (error) {
+    // Discord may report Unknown Message when another actor deleted the
+    // original between retrieval succeeding and this cleanup step. The
+    // desired postcondition is already satisfied, so keep the replacement.
+    if (error?.code === 10008 || error?.rawError?.code === 10008) return true;
+
     for (const id of replacementMessageIds) {
       const replacement = await message.channel.messages?.fetch(id).catch(() => null);
       if (replacement) await replacement.delete().catch(() => null);
