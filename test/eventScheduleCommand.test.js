@@ -17,6 +17,7 @@ test("registers the guided Harmony scheduler command", () => {
     ["title", "calendar", "event-date", "link", "channel", "date", "time", "message", "event-time", "event-timezone", "description", "category", "all-day", "timezone"]
   );
   assert.equal(create.options.find((option) => option.name === "timezone").required, false);
+  assert.deepEqual(create.options.find((option) => option.name === "channel").channel_types, [0, 5, 2]);
   const category = create.options.find((option) => option.name === "category");
   assert.ok(category.choices.some((choice) => choice.name === "Shopping / Pop-Up" && choice.value === "shopping"));
 });

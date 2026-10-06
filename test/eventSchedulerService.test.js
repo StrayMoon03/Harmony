@@ -16,9 +16,14 @@ const {
   reconciliationPayload,
   reconciliationReviewPayload,
   handleGuildScheduledEventCreate,
+  handleGuildScheduledEventDelete,
   registerScheduledEventListeners,
   markPendingNativeCreate,
   clearPendingNativeCreate,
+  markPendingNativeDelete,
+  announcementChannelMenu,
+  sendImmediateCalendarAnnouncement,
+  processScheduledAnnouncements,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 const { normalizeRecurrenceRule, generateRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
@@ -995,7 +1000,18 @@ test("Youtiful Add offers announcements exactly once, only after native-event ch
   await handleEventSchedulerInteraction(save);
   assert.equal(save.responses.length, 1);
   assert.match(save.responses[0].payload.content, /schedule announcements/i);
-  assert.equal(store.listCalendarEvents(guildId, "community", "2099-10-01T00:00:00.000Z", "2099-11-01T00:00:00.000Z").length, 1);
+  const created = store.listCalendarEvents(guildId, "community", "2099-10-01T00:00:00.000Z", "2099-11-01T00:00:00.000Z")[0];
+  assert.ok(created);
+
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannounce:${created.id}`, kind: "button", guildId }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncemodal:${created.id}`, kind: "modal", guildId, fields: { "announcement-message": "Watch together!" } }));
+  const blockedChannel = { isTextBased: () => true, isSendable: () => true, send: async () => { throw new Error("missing Send Messages"); } };
+  const guild = { channels: { cache: new Map([["server-updates", blockedChannel]]), fetch: async () => blockedChannel } };
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${created.id}`, kind: "channel", guildId, values: ["server-updates"] }));
+  const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${created.id}`, kind: "select", guildId, values: ["now", "86400"], guild });
+  await handleEventSchedulerInteraction(timing);
+  assert.match(timing.responses[0].payload.content, /future announcements were scheduled, but Harmony could not post the announcement now/i);
+  assert.deepEqual(JSON.parse(store.getEvent(guildId, created.id).announcement_offsets), [86400]);
 });
 
 test("Youtiful edit panel persists details, timezone, type, and channel independently", async () => {
@@ -1244,6 +1260,67 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
   assert.ok(linkedId);
   await client.listeners.get("guildScheduledEventCreate")({ guildId, id: "linked-native", name: "Harmony event", scheduledStartAt: new Date("2099-10-19T23:00:00Z") });
   assert.equal(sent.length, 1);
+});
+
+test("Harmony-initiated native cancellation suppresses the deletion notice but external deletion still notifies", async () => {
+  const guildId = `native-delete-${Date.now()}`;
+  const notices = [];
+  const channel = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
+  const guild = { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+
+  const harmonyEventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Harmony cancellation", eventDate: "2099-11-02",
+    eventAt: "2099-11-02T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId: "harmony-native-delete", createdBy: "admin",
+  });
+  markPendingNativeDelete(guildId, "harmony-native-delete");
+  await handleGuildScheduledEventDelete(client, { guildId, id: "harmony-native-delete" });
+  assert.equal(notices.length, 0);
+  assert.equal(store.getEventByDiscordId(guildId, "harmony-native-delete"), null);
+  assert.ok(store.getEvent(guildId, harmonyEventId));
+
+  store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "External deletion", eventDate: "2099-11-03",
+    eventAt: "2099-11-03T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId: "external-native-delete", createdBy: "admin",
+  });
+  await handleGuildScheduledEventDelete(client, { guildId, id: "external-native-delete" });
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].content, /External deletion/);
+  assert.equal(store.getEventByDiscordId(guildId, "external-native-delete"), null);
+});
+
+test("announcement destination picker allows GuildVoice but not Stage, and immediate delivery reports failures", async () => {
+  const picker = announcementChannelMenu("ysannouncechannel", 42)[0].toJSON().components[0];
+  assert.deepEqual(picker.channel_types, [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice]);
+  assert.equal(picker.channel_types.includes(ChannelType.GuildStageVoice), false);
+
+  const event = { id: 42, event_channel_id: "cinema", discord_event_id: null };
+  const sent = [];
+  const voiceChat = { isTextBased: () => true, isSendable: () => true, send: async (payload) => { sent.push(payload); return { id: "announcement" }; } };
+  assert.equal(await sendImmediateCalendarAnnouncement(voiceChat, event, "guild", "Watch with us!"), true);
+  assert.equal(sent.length, 1);
+
+  const failed = { isTextBased: () => true, isSendable: () => true, send: async () => { throw new Error("missing Send Messages"); } };
+  assert.equal(await sendImmediateCalendarAnnouncement(failed, event, "guild", "Watch with us!"), false);
+  const unavailable = { isTextBased: () => false, isSendable: () => false };
+  assert.equal(await sendImmediateCalendarAnnouncement(unavailable, event, "guild", "Watch with us!"), false);
+
+  const guildId = `voice-scheduled-${Date.now()}`;
+  const futureSent = [];
+  const scheduledVoice = { isTextBased: () => true, send: async (payload) => { futureSent.push(payload); return { id: "future-announcement" }; } };
+  const guild = { channels: { cache: new Map([["cinema", scheduledVoice]]), fetch: async () => scheduledVoice } };
+  const eventId = store.createEvent({
+    guildId, sourceChannelId: "calendar", destinationChannelId: "calendar", title: "Voice chat reminder", link: "",
+    timezone: "UTC", eventAt: "2099-11-04T20:00:00.000Z", eventDate: "2099-11-04", eventTimezone: "UTC",
+    calendarType: "community", category: "community", announcementChannelId: "cinema",
+    announcements: [{ scheduledFor: new Date(Date.now() - 1000).toISOString(), message: "Join us!" }], createdBy: "admin",
+  });
+  await processScheduledAnnouncements({ guilds: { cache: new Map([[guildId, guild]]) } });
+  assert.equal(futureSent.length, 1);
+  assert.equal(store.dueAnnouncements(new Date().toISOString()).some((item) => item.event_id === eventId), false);
 });
 
 test("Review Event keeps reconciliation controls private and stale reviewers are blocked", async () => {

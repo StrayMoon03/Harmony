@@ -503,6 +503,7 @@ function recurrenceCancelButtons(eventId) {
 
 const managerDrafts = new Map();
 const pendingNativeCreates = new Map();
+const pendingNativeDeletes = new Map();
 const reconciliationInProgress = new Set();
 
 function nativeCreateKey(guildId, name, start) {
@@ -523,6 +524,35 @@ function clearPendingNativeCreate(guildId, name, start) {
   const timer = pendingNativeCreates.get(key);
   if (timer) clearTimeout(timer);
   pendingNativeCreates.delete(key);
+}
+
+function nativeDeleteKey(guildId, eventId) {
+  return `${guildId}:${eventId}`;
+}
+
+function markPendingNativeDelete(guildId, eventId) {
+  const key = nativeDeleteKey(guildId, eventId);
+  const previous = pendingNativeDeletes.get(key);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(() => pendingNativeDeletes.delete(key), 60_000);
+  timer.unref?.();
+  pendingNativeDeletes.set(key, timer);
+}
+
+function clearPendingNativeDelete(guildId, eventId) {
+  const key = nativeDeleteKey(guildId, eventId);
+  const timer = pendingNativeDeletes.get(key);
+  if (timer) clearTimeout(timer);
+  pendingNativeDeletes.delete(key);
+}
+
+function consumePendingNativeDelete(guildId, eventId) {
+  const key = nativeDeleteKey(guildId, eventId);
+  const timer = pendingNativeDeletes.get(key);
+  if (!timer) return false;
+  clearTimeout(timer);
+  pendingNativeDeletes.delete(key);
+  return true;
 }
 
 const CALENDAR_ANNOUNCEMENT_OPTIONS = [
@@ -565,7 +595,23 @@ function announcementChannelMenu(action, eventId = "new") {
   return [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
     .setCustomId(`harmony-manager:community:${action}:${eventId}`)
     .setPlaceholder("Choose the announcement channel")
-    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))];
+    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice))];
+}
+
+async function sendImmediateCalendarAnnouncement(channel, event, guildId, message) {
+  if (!channel?.isTextBased?.() || !channel?.isSendable?.() || typeof channel.send !== "function") return false;
+  const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${guildId}/${event.discord_event_id}`))] : [];
+  try {
+    await channel.send({
+      content: [message, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"),
+      components,
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  } catch (error) {
+    console.error(`Immediate calendar announcement failed for event ${event.id}:`, error);
+    return false;
+  }
 }
 
 function persistCalendarAnnouncements(guildId, event, offsets, channelId) {
@@ -737,7 +783,14 @@ async function cancelLinkedNativeEvents(interaction, events) {
   for (const item of events) {
     if (!item.discord_event_id) continue;
     const native = interaction.guild?.scheduledEvents?.cache?.get(item.discord_event_id) || await interaction.guild?.scheduledEvents?.fetch(item.discord_event_id).catch(() => null);
-    if (native) await native.edit({ status: GuildScheduledEventStatus.Canceled }).catch((error) => console.error("Linked Discord event cancellation failed:", error));
+    if (!native) continue;
+    markPendingNativeDelete(interaction.guildId, item.discord_event_id);
+    try {
+      await native.edit({ status: GuildScheduledEventStatus.Canceled });
+    } catch (error) {
+      clearPendingNativeDelete(interaction.guildId, item.discord_event_id);
+      console.error("Linked Discord event cancellation failed:", error);
+    }
   }
 }
 
@@ -1297,7 +1350,9 @@ async function handleGuildScheduledEventDelete(client, event) {
   if (!event?.guildId) return;
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
+  const harmonyInitiated = consumePendingNativeDelete(event.guildId, event.id);
   store.updateEvent(event.guildId, linked.id, { discord_event_id: null });
+  if (harmonyInitiated) return;
   const channel = await managerControlChannel(client, event.guildId);
   if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${linked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
 }
@@ -1702,22 +1757,27 @@ async function handleManagerInteraction(interaction) {
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     let immediatePosted = false;
+    let immediateFailed = false;
+    let immediateAttempted = false;
     for (const id of eventIds) {
       const event = store.getEvent(interaction.guildId, id);
       if (!event) continue;
       const items = calendarAnnouncementItems({ ...event, announcement_message: draft.announcementMessage }, offsets);
       store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, draft.announcementMessage);
-      if (selected.includes("now") && !immediatePosted) {
+      if (selected.includes("now") && !immediateAttempted) {
+        immediateAttempted = true;
         const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
-        if (channel?.isTextBased()) {
-          const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${interaction.guildId}/${event.discord_event_id}`))] : [];
-          await channel.send({ content: [draft.announcementMessage, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"), components, allowedMentions: { parse: [] } }).catch(() => {});
-          immediatePosted = true;
-        }
+        immediatePosted = await sendImmediateCalendarAnnouncement(channel, event, interaction.guildId, draft.announcementMessage);
+        immediateFailed = !immediatePosted;
       }
     }
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
-    await interaction.update({ content: "✅ Event created and announcements scheduled.", components: [] });
+    const status = selected.includes("now") && immediateFailed && !immediatePosted
+      ? (offsets.length
+        ? "✅ Event saved and future announcements were scheduled, but Harmony could not post the announcement now."
+        : "✅ Event saved, but Harmony could not post the announcement now.")
+      : "✅ Event created and announcements scheduled.";
+    await interaction.update({ content: status, components: [] });
     return;
   }
 
@@ -2130,10 +2190,7 @@ async function handleManagerInteraction(interaction) {
   if (action === "cancelconfirm" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     const removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
-    if (removed && event?.discord_event_id) {
-      const native = interaction.guild?.scheduledEvents?.cache?.get(event.discord_event_id) || await interaction.guild?.scheduledEvents?.fetch(event.discord_event_id).catch(() => null);
-      if (native) await native.edit({ status: GuildScheduledEventStatus.Canceled }).catch((error) => console.error("Linked Discord event cancellation failed:", error));
-    }
+    if (removed && event?.discord_event_id) await cancelLinkedNativeEvents(interaction, [event]);
     if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
     await interaction.update({ content: removed ? `Cancelled calendar event #${eventId}.` : "That event is no longer active.", components: [] });
     return;
@@ -2423,6 +2480,11 @@ module.exports = {
   markPendingNativeCreate,
   clearPendingNativeCreate,
   nativeCreateKey,
+  markPendingNativeDelete,
+  clearPendingNativeDelete,
+  nativeDeleteKey,
+  announcementChannelMenu,
+  sendImmediateCalendarAnnouncement,
   CALENDAR_ANNOUNCEMENT_OPTIONS,
   offerEventReminder,
   handleReminderInteraction,
