@@ -111,6 +111,19 @@ test("original is deleted only after replacement and rolls replacement back on f
   assert.equal(replacementDeleted, true);
 });
 
+test("an already-deleted original keeps the successful replacement", async () => {
+  let replacementDeleted = false;
+  const error = new Error("Unknown Message");
+  error.code = 10008;
+  const message = {
+    delete: async () => { throw error; },
+    channel: { messages: { fetch: async () => ({ delete: async () => { replacementDeleted = true; } }) } },
+  };
+
+  assert.equal(await deleteOriginalAfterSuccess(message, ["replacement"]), true);
+  assert.equal(replacementDeleted, false);
+});
+
 test("safe link-only or preserved-comment messages are deleted after replacement", async () => {
   let deleted = false;
   const message = { delete: async () => { deleted = true; } };
