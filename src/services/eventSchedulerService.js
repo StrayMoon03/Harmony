@@ -1522,7 +1522,8 @@ async function handleManagerInteraction(interaction) {
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
     store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
     await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
-    await interaction.update({ content: `Linked the native event to **${linked.title}**.`, components: [] });
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${linked.id}`), { eventIds: [linked.id], linked: true, title: linked.title });
+    await interaction.update({ content: `Linked the native event to **${linked.title}**. Would you like to schedule announcements for this event?`, components: announcementPrompt(linked.id) });
     return;
   }
   if (calendarType === "community" && action === "nativeadd" && interaction.isButton()) {
@@ -1531,33 +1532,10 @@ async function handleManagerInteraction(interaction) {
       const added = await addNativeEventToCalendar(interaction, eventId);
       store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "added");
       await disableReconciliationNotice(interaction.client, interaction.guildId, eventId);
-      managerDrafts.set(draftKey(interaction, calendarType, `native-${added.id}`), { eventId: added.id, existing: added });
-      await interaction.update({ content: `Added **${added.title}** to the Youtiful Stays calendar. Choose optional announcements.`, components: announcementTimingMenu("nativeaddtiming", added.id) });
+      managerDrafts.set(draftKey(interaction, calendarType, `announce-${added.id}`), { eventIds: [added.id], linked: true, title: added.title });
+      await interaction.update({ content: `Added **${added.title}** to the Youtiful Stays calendar. Would you like to schedule announcements for this event?`, components: announcementPrompt(added.id) });
       await refreshPublishedCalendar(interaction.client, interaction.guildId, "community", added.event_date).catch(() => {});
     } catch (error) { store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "open"); await interaction.update({ content: error.message, components: [] }); }
-    return;
-  }
-  if (calendarType === "community" && action === "nativeaddtiming" && interaction.isStringSelectMenu()) {
-    const added = store.getEvent(interaction.guildId, Number(eventId));
-    if (!added) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
-    if (!offsets.length) {
-      persistCalendarAnnouncements(interaction.guildId, added, [], null);
-      managerDrafts.delete(draftKey(interaction, calendarType, `native-${added.id}`));
-      await interaction.update({ content: "Event added to the Youtiful Stays calendar. No announcements selected.", components: [] });
-    } else {
-      managerDrafts.set(draftKey(interaction, calendarType, `native-${added.id}`), { eventId: added.id, existing: added, announcementOffsets: offsets });
-      await interaction.update({ content: "Choose the separate announcement channel.", components: announcementChannelMenu("nativeaddchannel", added.id) });
-    }
-    return;
-  }
-  if (calendarType === "community" && action === "nativeaddchannel" && interaction.isChannelSelectMenu()) {
-    const added = store.getEvent(interaction.guildId, Number(eventId));
-    if (!added) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    const draft = managerDrafts.get(draftKey(interaction, calendarType, `native-${added.id}`));
-    persistCalendarAnnouncements(interaction.guildId, added, draft?.announcementOffsets || [], interaction.values[0]);
-    managerDrafts.delete(draftKey(interaction, calendarType, `native-${added.id}`));
-    await interaction.update({ content: "Event added to the Youtiful Stays calendar and announcements scheduled.", components: [] });
     return;
   }
   if (calendarType === "community" && action === "linknative" && interaction.isButton()) {
@@ -1569,7 +1547,8 @@ async function handleManagerInteraction(interaction) {
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
     store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
     await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
-    await interaction.update({ content: `Linked the native Discord event to **${linked.title}**.`, components: [] });
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${linked.id}`), { eventIds: [linked.id], linked: true, title: linked.title });
+    await interaction.update({ content: `Linked the native Discord event to **${linked.title}**. Would you like to schedule announcements for this event?`, components: announcementPrompt(linked.id) });
     return;
   }
   if (calendarType === "community" && action === "keepnative" && interaction.isButton()) {

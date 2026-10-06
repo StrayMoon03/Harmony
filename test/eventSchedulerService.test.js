@@ -1382,7 +1382,7 @@ test("Review Event Add to Calendar and Ignore remain private and durable", async
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
   assert.equal(add.responses[0].type, "update");
-  assert.match(add.responses[0].payload.content, /Choose optional announcements/);
+  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "added");
 
   await handleGuildScheduledEventCreate(client, ignored);
@@ -1391,6 +1391,90 @@ test("Review Event Add to Calendar and Ignore remain private and durable", async
   assert.equal(ignore.responses[0].type, "update");
   assert.match(ignore.responses[0].payload.content, /left unchanged/);
   assert.equal(store.getDiscordEventReconciliation(guildId, ignored.id).status, "dismissed");
+});
+
+test("reconciliation Add to Calendar enters the canonical announcement flow", async () => {
+  const guildId = `native-add-announcements-${Date.now()}`;
+  const notices = [];
+  const noticeEdits = [];
+  const immediate = [];
+  const control = {
+    isTextBased: () => true,
+    send: async (payload) => { notices.push(payload); return { id: "reconciliation-notice" }; },
+    messages: { fetch: async () => ({ edit: async (payload) => { noticeEdits.push(payload); } }) },
+  };
+  const voice = {
+    isTextBased: () => true,
+    isSendable: () => true,
+    send: async (payload) => { immediate.push(payload); return { id: "immediate-announcement" }; },
+  };
+  const native = { guildId, id: "native-add-announcements", name: "Canonical Add", description: "Watch together", scheduledStartAt: new Date("2099-11-20T23:00:00Z") };
+  const guild = {
+    channels: { cache: new Map([["control", control], ["cinema", voice]]), fetch: async (id) => guild.channels.cache.get(id) },
+    scheduledEvents: { fetch: async () => native },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+  await handleGuildScheduledEventCreate(client, native);
+
+  const review = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(review);
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
+
+  const added = store.getEventByDiscordId(guildId, native.id);
+  assert.ok(added);
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannounce:${added.id}`, kind: "button", guildId, guild, client }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncemodal:${added.id}`, kind: "modal", guildId, guild, client, fields: { "announcement-message": "Canonical announcement" } }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${added.id}`, kind: "channel", guildId, guild, client, values: ["cinema"] }));
+  const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${added.id}`, kind: "select", guildId, guild, client, values: ["now", "604800", "259200", "86400", "3600"] });
+  await handleEventSchedulerInteraction(timing);
+
+  const saved = store.getEvent(guildId, added.id);
+  assert.equal(immediate.length, 1);
+  assert.match(immediate[0].content, /Canonical announcement/);
+  assert.equal(saved.announcement_channel_id, "cinema");
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 86400, 3600]);
+  assert.match(timing.responses[0].payload.content, /Event created and announcements scheduled/);
+  assert.match(noticeEdits[0].content, /has been reviewed/);
+  assert.equal(notices.length, 1);
+});
+
+test("reconciliation Link Existing enters the canonical flow and preserves future schedules on Announce Now failure", async () => {
+  const guildId = `native-link-announcements-${Date.now()}`;
+  const noticeEdits = [];
+  const candidateId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Canonical Link", eventDate: "2099-11-21", eventAt: "2099-11-21T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin" });
+  const control = {
+    isTextBased: () => true,
+    send: async () => ({ id: "reconciliation-notice" }),
+    messages: { fetch: async () => ({ edit: async (payload) => { noticeEdits.push(payload); } }) },
+  };
+  const blocked = { isTextBased: () => true, isSendable: () => true, send: async () => { throw new Error("missing Send Messages"); } };
+  const native = { guildId, id: "native-link-announcements", name: "Canonical Link", scheduledStartAt: new Date("2099-11-21T23:00:00Z") };
+  const guild = { channels: { cache: new Map([["control", control], ["server-updates", blocked]]), fetch: async (id) => guild.channels.cache.get(id) }, scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+  await handleGuildScheduledEventCreate(client, native);
+
+  const review = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(review);
+  const linkId = review.responses[0].payload.components[0].toJSON().components[0].custom_id;
+  const link = fakeInteraction({ customId: linkId, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(link);
+  assert.match(link.responses[0].payload.content, /Would you like to schedule announcements/);
+
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannounce:${candidateId}`, kind: "button", guildId, guild, client }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncemodal:${candidateId}`, kind: "modal", guildId, guild, client, fields: { "announcement-message": "Link announcement" } }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${candidateId}`, kind: "channel", guildId, guild, client, values: ["server-updates"] }));
+  const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${candidateId}`, kind: "select", guildId, guild, client, values: ["now", "604800", "259200", "86400", "3600"] });
+  await handleEventSchedulerInteraction(timing);
+
+  const saved = store.getEvent(guildId, candidateId);
+  assert.equal(saved.announcement_channel_id, "server-updates");
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 86400, 3600]);
+  assert.match(timing.responses[0].payload.content, /future announcements were scheduled, but Harmony could not post the announcement now/);
+  assert.match(noticeEdits[0].content, /has been reviewed/);
 });
 
 test("multiple Review Event matches open the private candidate selector only after Link Existing", async () => {
@@ -1494,5 +1578,5 @@ test("Add to Calendar links the existing Discord event without creating another 
   const linked = store.getEventByDiscordId(guildId, native.id);
   assert.ok(linked);
   assert.equal(creates, 0);
-  assert.match(interaction.responses[0].payload.content, /Choose optional announcements/);
+  assert.match(interaction.responses[0].payload.content, /Would you like to schedule announcements/);
 });
