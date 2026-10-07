@@ -24,6 +24,7 @@ const moderateMessageCommand = require("./commands/moderateMessage");
 const birthdaysCommand = require("./commands/birthdays");
 const memberCountsCommand = require("./commands/memberCounts");
 const eventScheduleCommand = require("./commands/eventSchedule");
+const calendarCandidateCommand = require("./commands/calendarCandidate");
 const shareStore = require("./stores/shareStore");
 const {
   handleDeletedShare,
@@ -86,6 +87,7 @@ const commands = [
   birthdaysCommand,
   memberCountsCommand,
   eventScheduleCommand,
+  calendarCandidateCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -124,7 +126,7 @@ async function registerGuildCommands(guild) {
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
       "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
-      "/harmony-errors, /harmony-monitor, /harmony-guard, /harmony-birthdays, /harmony-member-counts, /harmony-schedule, " +
+      "/harmony-errors, /harmony-monitor, /harmony-guard, /harmony-birthdays, /harmony-member-counts, /harmony-schedule, /harmony-calendar, " +
       "Harmony: Moderate Message"
   );
 }
@@ -393,3 +395,4 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+

@@ -1216,6 +1216,72 @@ function scheduledEventDateLabel(event) {
   return start && !Number.isNaN(start.getTime()) ? `<t:${Math.floor(start.getTime() / 1000)}:F>` : "Date/time unavailable";
 }
 
+function candidateDateLabel(candidate) {
+  if (candidate?.proposed_event_at) return `<t:${Math.floor(new Date(candidate.proposed_event_at).getTime() / 1000)}:F>`;
+  return candidate?.proposed_event_date || "Not provided";
+}
+
+function candidateReviewComponents(candidate, matches) {
+  const components = [];
+  if (matches.length) components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:candidate:link:${candidate.id}`).setLabel("Link Existing").setStyle(ButtonStyle.Primary),
+  ));
+  components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:candidate:add:${candidate.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`harmony-manager:candidate:dismiss:${candidate.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
+  ));
+  return components;
+}
+
+function candidateReviewPayload(candidate, matches) {
+  const details = [
+    `**Potential Stray Kids event #${candidate.id}**`,
+    `Source: ${candidate.source_url || "Not provided"}`,
+    `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
+    `Title: ${candidate.title || "Not provided"}`,
+    `Date/time: ${candidateDateLabel(candidate)}${candidate.proposed_event_timezone ? ` (${candidate.proposed_event_timezone})` : ""}`,
+    `Note: ${candidate.submitted_note || "None"}`,
+    matches.length ? `Likely calendar matches: ${matches.map((item) => `#${item.id} ${item.title}`).join(", ")}` : "Likely calendar matches: none",
+    "Choose an action; no calendar event has been created yet.",
+  ].join("\n");
+  return { content: details, components: candidateReviewComponents(candidate, matches), flags: 64, allowedMentions: { parse: [] } };
+}
+
+function candidateNoticePayload(candidate) {
+  return {
+    content: `A possible Stray Kids calendar event was submitted.\nTitle: ${candidate.title || "Not provided"}\nDate/time: ${candidateDateLabel(candidate)}\nSource: ${candidate.source_url || "Not provided"}`,
+    components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:candidate:review:${candidate.id}`).setLabel("Review Candidate").setStyle(ButtonStyle.Primary))],
+    allowedMentions: { parse: [] },
+  };
+}
+
+async function submitCalendarCandidate(client, input) {
+  const result = store.createOrGetCalendarCandidate(input);
+  if (result.duplicate) {
+    if (result.candidate?.status === "open" && !result.candidate.notice_message_id && client) {
+      const channel = await managerControlChannel(client, input.guildId);
+      if (channel?.isTextBased?.() && typeof channel.send === "function") {
+        try {
+          const notice = await channel.send(candidateNoticePayload(result.candidate));
+          store.saveCalendarCandidateNotice(input.guildId, result.candidate.id, notice?.id || null);
+          return { ...result, notice, noticeSent: Boolean(notice) };
+        } catch { /* Keep the durable candidate open for a later retry. */ }
+      }
+    }
+    return { ...result, notice: null, noticeSent: false };
+  }
+  if (!client) return { ...result, notice: null, noticeSent: false };
+  const channel = await managerControlChannel(client, input.guildId);
+  if (!channel?.isTextBased?.() || typeof channel.send !== "function") return { ...result, notice: null, noticeSent: false };
+  try {
+    const notice = await channel.send(candidateNoticePayload(result.candidate));
+    store.saveCalendarCandidateNotice(input.guildId, result.candidate.id, notice?.id || null);
+    return { ...result, notice, noticeSent: Boolean(notice) };
+  } catch {
+    return { ...result, notice: null, noticeSent: false };
+  }
+}
+
 function reconciliationCandidateLabel(item) {
   const when = item.event_at
     ? new Intl.DateTimeFormat("en-US", { timeZone: item.event_timezone || item.timezone || "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(item.event_at))
@@ -1280,6 +1346,18 @@ async function disableReconciliationNotice(client, guildId, discordEventId) {
       allowedMentions: { parse: [] },
     }).catch(() => {});
   }
+}
+
+async function disableCandidateNotice(client, guildId, candidateId) {
+  const candidate = store.getCalendarCandidate(guildId, candidateId);
+  if (!candidate?.notice_message_id) return;
+  const channel = await managerControlChannel(client, guildId);
+  const notice = channel?.messages?.fetch ? await channel.messages.fetch(candidate.notice_message_id).catch(() => null) : null;
+  if (notice?.edit) await notice.edit({
+    content: "✅ This calendar candidate has been reviewed.",
+    components: [],
+    allowedMentions: { parse: [] },
+  }).catch(() => {});
 }
 
 async function staleReconciliationInteraction(interaction, mode = "reply") {
@@ -1484,6 +1562,104 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   const parts = interaction.customId.split(":");
+  if (parts[1] === "candidate") {
+    const action = parts[2];
+    const candidateId = Number(parts[3]);
+    const candidate = store.getCalendarCandidate(interaction.guildId, candidateId);
+    if (!candidate || candidate.status !== "open") {
+      await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 });
+      return;
+    }
+    const matches = store.findCandidateCalendarMatches(interaction.guildId, candidate);
+    if (action === "review" && interaction.isButton()) {
+      await interaction.reply(candidateReviewPayload(candidate, matches));
+      return;
+    }
+    if (action === "dismiss" && interaction.isButton()) {
+      if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) {
+        await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 });
+        return;
+      }
+      store.decideCalendarCandidate(interaction.guildId, candidateId, "dismissed", interaction.user.id, "Dismissed by admin");
+      await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
+      await interaction.update({ content: "Dismissed this candidate. No calendar event was created.", components: [] });
+      return;
+    }
+    if (action === "link" && interaction.isButton()) {
+      if (!matches.length) {
+        await interaction.update({ content: "No likely Harmony calendar match is available. Choose Add to Calendar to enter the missing event details, or Dismiss.", components: candidateReviewComponents(candidate, []) });
+        return;
+      }
+      if (matches.length === 1) {
+        if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await staleReconciliationInteraction(interaction, "update"); return; }
+        store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", matches[0].id);
+        await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
+        await interaction.update({ content: `Linked this candidate to **${matches[0].title}**. No new calendar event was created.`, components: [] });
+        return;
+      }
+      await interaction.update({
+        content: `${candidateReviewPayload(candidate, matches).content}\n\nChoose the existing Harmony event to link:`,
+        components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+          .setCustomId(`harmony-manager:candidate:linkselect:${candidateId}`)
+          .setPlaceholder("Choose the existing Harmony event")
+          .addOptions(matches.slice(0, 25).map((item) => ({ label: `${item.title} • ${item.event_date || "date pending"}`.slice(0, 100), value: String(item.id) }))))],
+      });
+      return;
+    }
+    if (action === "linkselect" && interaction.isStringSelectMenu()) {
+      if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await staleReconciliationInteraction(interaction, "update"); return; }
+      const event = store.getEvent(interaction.guildId, Number(interaction.values[0]));
+      if (!event) { store.releaseCalendarCandidate(interaction.guildId, candidateId, "Selected calendar event was unavailable"); await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+      store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", event.id);
+      await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
+      await interaction.update({ content: `Linked this candidate to **${event.title}**. No new calendar event was created.`, components: [] });
+      return;
+    }
+    if (action === "add" && interaction.isButton()) {
+      const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}`).setTitle("Add candidate to Stray Kids calendar");
+      const fields = [
+        ["title", "Event title", candidate.title || "", true, 120],
+        ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
+        ["event-time", "Event time HH:MM (blank = all-day)", "", false, 5],
+        ["event-timezone", "Event timezone", candidate.proposed_event_timezone || "America/New_York", true, 80],
+        ["description", "Details (optional)", candidate.submitted_note || "", false, 500],
+      ];
+      modal.addComponents(fields.map(([id, label, value, required, maxLength]) => {
+        const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(id === "description" ? TextInputStyle.Paragraph : TextInputStyle.Short).setRequired(required).setMaxLength(maxLength);
+        if (value) input.setValue(value.slice(0, maxLength));
+        return new ActionRowBuilder().addComponents(input);
+      }));
+      await interaction.showModal(modal);
+      return;
+    }
+    if (action === "addmodal" && interaction.isModalSubmit()) {
+      const title = interaction.fields.getTextInputValue("title").trim();
+      const eventDate = interaction.fields.getTextInputValue("event-date").trim();
+      const eventTime = interaction.fields.getTextInputValue("event-time").trim();
+      const eventTimezone = interaction.fields.getTextInputValue("event-timezone").trim();
+      const description = interaction.fields.getTextInputValue("description").trim() || null;
+      if (!parseManagerDate(eventDate) || !validTimezone(eventTimezone) || (eventTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(eventTime))) {
+        await interaction.reply({ content: "Provide a valid event date, optional 24-hour time, and timezone.", flags: 64 });
+        return;
+      }
+      if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 }); return; }
+      try {
+        const settings = store.getCalendarChannels(interaction.guildId) || {};
+        const eventAt = eventTime ? localToUtc(eventDate, eventTime, eventTimezone) : null;
+        if (eventTime && !eventAt) throw new Error("That event date or time is invalid.");
+        const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: settings.stray_kids_channel_id || null, title, link: candidate.source_url || "", timezone: eventTimezone, eventAt: eventAt?.toISOString() || null, eventDate, eventTimezone, calendarType: "stray_kids", category: "other", allDay: !eventTime, description, createdBy: interaction.user.id });
+        store.decideCalendarCandidate(interaction.guildId, candidateId, "added", interaction.user.id, "Added to Stray Kids calendar", eventId);
+        await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
+        await refreshPublishedCalendar(interaction.client, interaction.guildId, "stray_kids", eventDate).catch(() => {});
+        await interaction.reply({ content: `Added **${title}** to the Stray Kids calendar. No announcements were created; configure them through the existing calendar workflow if needed.`, flags: 64 });
+      } catch (error) {
+        store.releaseCalendarCandidate(interaction.guildId, candidateId, `Add failed: ${error.message}`);
+        await interaction.reply({ content: error.message || "Harmony could not add that candidate.", flags: 64 });
+      }
+      return;
+    }
+    return;
+  }
   const calendarType = managerCalendarType(parts[1]);
   const action = parts[2];
   const eventId = parts[3];
@@ -2490,4 +2666,8 @@ module.exports = {
   handleReminderInteraction,
   processDiscordEventReminders,
   addNativeEventToCalendar,
+  submitCalendarCandidate,
+  candidateReviewPayload,
+  candidateNoticePayload,
 };
+
