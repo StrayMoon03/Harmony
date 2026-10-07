@@ -1292,6 +1292,45 @@ test("Harmony-initiated native cancellation suppresses the deletion notice but e
   assert.equal(store.getEventByDiscordId(guildId, "external-native-delete"), null);
 });
 
+test("current Schedule Manager cancellation stays private and suppresses its native deletion notice", async () => {
+  const guildId = `manager-cancel-privacy-${Date.now()}`;
+  const notices = [];
+  const control = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
+  let nativeEdits = 0;
+  const native = { id: "manager-cancel-native", edit: async () => { nativeEdits += 1; } };
+  const guild = {
+    channels: { cache: new Map([["control", control]]), fetch: async () => control },
+    scheduledEvents: { cache: new Map([[native.id, native]]), fetch: async () => native },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Private cancellation", eventDate: "2099-11-05",
+    eventAt: "2099-11-05T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId: native.id, createdBy: "admin",
+  });
+
+  const start = fakeInteraction({ customId: "harmony-manager:community:cancel", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(start);
+  assert.equal(start.responses[0].type, "reply");
+  assert.equal(start.responses[0].payload.flags, 64);
+
+  const choose = fakeInteraction({ customId: "harmony-manager:community:cancelselect", kind: "select", guildId, guild, client, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(choose);
+  assert.equal(choose.responses[0].type, "update");
+  assert.match(choose.responses[0].payload.content, /Confirm cancellation/);
+
+  const confirm = fakeInteraction({ customId: `harmony-manager:community:cancelconfirm:${eventId}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(confirm);
+  assert.equal(confirm.responses[0].type, "update");
+  assert.match(confirm.responses[0].payload.content, /Cancelled calendar event/);
+  assert.equal(nativeEdits, 1);
+
+  await handleGuildScheduledEventDelete(client, { guildId, id: native.id });
+  assert.equal(notices.length, 0);
+  assert.equal(store.getEventByDiscordId(guildId, native.id), null);
+});
+
 test("announcement destination picker allows GuildVoice but not Stage, and immediate delivery reports failures", async () => {
   const picker = announcementChannelMenu("ysannouncechannel", 42)[0].toJSON().components[0];
   assert.deepEqual(picker.channel_types, [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice]);
