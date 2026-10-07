@@ -1299,7 +1299,7 @@ test("announcement destination picker allows GuildVoice but not Stage, and immed
 
   const event = { id: 42, event_channel_id: "cinema", discord_event_id: null };
   const sent = [];
-  const voiceChat = { isTextBased: () => true, isSendable: () => true, send: async (payload) => { sent.push(payload); return { id: "announcement" }; } };
+  const voiceChat = { id: "cinema", isTextBased: () => true, isSendable: () => true, send: async (payload) => { sent.push(payload); return { id: "announcement", channelId: "cinema" }; } };
   assert.equal(await sendImmediateCalendarAnnouncement(voiceChat, event, "guild", "Watch with us!"), true);
   assert.equal(sent.length, 1);
 
@@ -1321,6 +1321,18 @@ test("announcement destination picker allows GuildVoice but not Stage, and immed
   await processScheduledAnnouncements({ guilds: { cache: new Map([[guildId, guild]]) } });
   assert.equal(futureSent.length, 1);
   assert.equal(store.dueAnnouncements(new Date().toISOString()).some((item) => item.event_id === eventId), false);
+});
+
+test("immediate announcement requires positive delivery evidence in the selected channel", async () => {
+  const event = { id: 43, event_channel_id: "cinema", discord_event_id: null };
+  const delivered = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({ id: "message-1", channelId: "target" }) };
+  assert.equal(await sendImmediateCalendarAnnouncement(delivered, event, "guild", "Delivered"), true);
+
+  const wrongDestination = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({ id: "message-2", channelId: "other" }) };
+  assert.equal(await sendImmediateCalendarAnnouncement(wrongDestination, event, "guild", "Wrong destination"), false);
+
+  const unconfirmed = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({}) };
+  assert.equal(await sendImmediateCalendarAnnouncement(unconfirmed, event, "guild", "Unconfirmed"), false);
 });
 
 test("Review Event keeps reconciliation controls private and stale reviewers are blocked", async () => {
