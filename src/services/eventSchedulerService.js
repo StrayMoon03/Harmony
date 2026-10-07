@@ -648,6 +648,19 @@ function announcementTargets(guildId, event, scope) {
   return scope === "series" ? series : scope === "future" ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
 }
 
+async function beginCanonicalAnnouncementFlow(interaction, event, eventIds = [event.id]) {
+  managerDrafts.set(draftKey(interaction, "community", `announce-${event.id}`), {
+    eventIds,
+    linked: Boolean(event.discord_event_id),
+    title: event.title,
+    editing: true,
+  });
+  await interaction.update({
+    content: `Would you like to schedule announcements for **${event.title}**?`,
+    components: announcementPrompt(event.id),
+  });
+}
+
 function applyAnnouncementConfig(guildId, event, scope, offsets, channelId) {
   return announcementTargets(guildId, event, scope).map((item) => persistCalendarAnnouncements(guildId, item, offsets, channelId));
 }
@@ -1727,8 +1740,12 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   if (calendarType === "community" && action === "ysannounce-no" && interaction.isButton()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
-    await interaction.update({ content: "✅ Event created. No public announcements scheduled.", components: [] });
+    await interaction.update({
+      content: draft?.editing ? "✅ Calendar event changes saved. No public announcements scheduled." : "✅ Event created. No public announcements scheduled.",
+      components: [],
+    });
     return;
   }
   if (calendarType === "community" && action === "ysannouncemodal" && interaction.isModalSubmit()) {
@@ -1749,6 +1766,7 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     const eventIds = draft.eventIds || [Number(eventId)];
+    const editing = Boolean(draft.editing);
     const selected = interaction.values.includes("none") ? [] : interaction.values;
     const first = store.getEvent(interaction.guildId, eventIds[0]);
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
@@ -1773,9 +1791,9 @@ async function handleManagerInteraction(interaction) {
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
     const status = selected.includes("now") && immediateFailed && !immediatePosted
       ? (offsets.length
-        ? "✅ Event saved and future announcements were scheduled, but Harmony could not post the announcement now."
-        : "✅ Event saved, but Harmony could not post the announcement now.")
-      : "✅ Event created and announcements scheduled.";
+        ? `${editing ? "✅ Calendar event changes saved" : "✅ Event saved"} and future announcements were scheduled, but Harmony could not post the announcement now.`
+        : `${editing ? "✅ Calendar event changes saved" : "✅ Event saved"}, but Harmony could not post the announcement now.`)
+      : editing ? "✅ Calendar event changes saved and announcements scheduled." : "✅ Event created and announcements scheduled.";
     await interaction.update({ content: status, components: [] });
     return;
   }
@@ -1870,7 +1888,11 @@ async function handleManagerInteraction(interaction) {
     else if (target === "timezone") await interaction.update({ content: "Choose the event time zone, or keep the current one.", components: editTimezoneComponents("community", "edittimezone", scopedEventId, event.event_timezone || event.timezone || (event.all_day ? "none" : null)) });
     else if (target === "type") await interaction.update({ content: "Choose the event icon / type, or keep the current one.", components: editTypeComponents(scopedEventId, event.calendar_event_type || "other") });
     else if (target === "channel") await interaction.update({ content: "Choose the Discord channel associated with this event, or keep the current one.", components: editChannelComponents(scopedEventId) });
-    else if (target === "announcements") await interaction.update({ content: "Choose optional promotional announcements.", components: announcementTimingMenu("editannouncementtiming", scopedEventId, announcementOffsetsFromEvent(event)) });
+    else if (target === "announcements") {
+      const targets = announcementTargets(interaction.guildId, event, interaction.values[0]);
+      managerDrafts.delete(draftKey(interaction, calendarType, event.id));
+      await beginCanonicalAnnouncementFlow(interaction, event, targets.map((item) => item.id));
+    }
     return;
   }
   if (action === "editkeep" && interaction.isButton()) {
@@ -1919,31 +1941,10 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
     if (event.recurrence_series_id) await interaction.update({ content: "Apply announcement changes to:", components: recurrenceScopeMenu("announcements", event.id) });
-    else await interaction.update({ content: "Choose optional promotional announcements.", components: announcementTimingMenu("editannouncementtiming", event.id, announcementOffsetsFromEvent(event)) });
-    return;
-  }
-  if (calendarType === "community" && action === "editannouncementtiming" && interaction.isStringSelectMenu()) {
-    const event = store.getEvent(interaction.guildId, Number(eventId));
-    if (!event) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
-    const scope = managerDrafts.get(draftKey(interaction, calendarType, eventId))?.scope || "this";
-    const offsets = interaction.values.includes("none") ? [] : interaction.values.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
-    if (!offsets.length) {
-      applyAnnouncementConfig(interaction.guildId, event, scope, [], null);
-      managerDrafts.delete(draftKey(interaction, calendarType, eventId));
-      await interaction.update(youtifulEditPanel(store.getEvent(interaction.guildId, event.id)));
-    } else {
-      managerDrafts.set(draftKey(interaction, calendarType, `announcements-${eventId}`), { eventId: event.id, scope, offsets });
-      await interaction.update({ content: "Choose the separate announcement channel.", components: announcementChannelMenu("editannouncementchannel", event.id) });
+    else {
+      managerDrafts.delete(draftKey(interaction, calendarType, event.id));
+      await beginCanonicalAnnouncementFlow(interaction, event);
     }
-    return;
-  }
-  if (calendarType === "community" && action === "editannouncementchannel" && interaction.isChannelSelectMenu()) {
-    const event = store.getEvent(interaction.guildId, Number(eventId));
-    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announcements-${eventId}`));
-    if (!event || !draft) { await interaction.update({ content: "That announcement edit expired.", components: [] }); return; }
-    applyAnnouncementConfig(interaction.guildId, event, draft.scope || "this", draft.offsets || [], interaction.values[0]);
-    managerDrafts.delete(draftKey(interaction, calendarType, `announcements-${eventId}`));
-    await interaction.update(youtifulEditPanel(store.getEvent(interaction.guildId, event.id)));
     return;
   }
   if (calendarType === "community" && action === "editdetails" && interaction.isButton()) {

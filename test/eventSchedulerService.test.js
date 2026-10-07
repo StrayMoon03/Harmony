@@ -1061,6 +1061,54 @@ test("Youtiful edit panel persists details, timezone, type, and channel independ
   assert.equal(channel.responses[0].type, "update");
 });
 
+test("Youtiful edit announcements enter the canonical timing flow and deliver Announce Now to Cinema", async () => {
+  const guildId = `youtiful-edit-announcements-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "community-calendar", title: "Existing Cinema Event",
+    eventDate: "2099-12-10", eventAt: "2099-12-10T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC",
+    calendarType: "community", category: "kdrama", eventChannelId: "event-channel", createdBy: "admin",
+  });
+  const immediate = [];
+  const cinema = {
+    id: "cinema", isTextBased: () => true, isSendable: () => true,
+    send: async (payload) => { immediate.push(payload); return { id: "cinema-announcement", channelId: "cinema" }; },
+  };
+  const guild = { channels: { cache: new Map([["cinema", cinema]]), fetch: async (id) => guild.channels.cache.get(id) } };
+
+  const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  assert.equal(edit.responses[0].payload.flags, 64);
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] }));
+
+  const announcementButton = fakeInteraction({ customId: `harmony-manager:community:editannouncementpick:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(announcementButton);
+  assert.match(announcementButton.responses[0].payload.content, /Would you like to schedule announcements/);
+  const promptButton = announcementButton.responses[0].payload.components[0].toJSON().components[0];
+  assert.match(promptButton.custom_id, /:ysannounce:/);
+  assert.doesNotMatch(announcementButton.responses[0].payload.content, /Calendar event changes saved\.$/);
+
+  const announce = fakeInteraction({ customId: `harmony-manager:community:ysannounce:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(announce);
+  assert.equal(announce.responses[0].type, "modal");
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncemodal:${eventId}`, kind: "modal", guildId, fields: { "announcement-message": "Meet us in Cinema chat!" } }));
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${eventId}`, kind: "channel", guildId, guild, values: ["cinema"] }));
+
+  const timing = fakeInteraction({
+    customId: `harmony-manager:community:ysannouncetiming:${eventId}`, kind: "select", guildId, guild,
+    values: ["now", "604800", "259200", "86400", "3600"],
+  });
+  await handleEventSchedulerInteraction(timing);
+
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(immediate.length, 1);
+  assert.match(immediate[0].content, /Meet us in Cinema chat/);
+  assert.equal(saved.announcement_channel_id, "cinema");
+  assert.equal(saved.announcement_message, "Meet us in Cinema chat!");
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 86400, 3600]);
+  assert.match(timing.responses[0].payload.content, /Calendar event changes saved and announcements scheduled/);
+  assert.doesNotMatch(timing.responses[0].payload.content, /^✅ Calendar event changes saved\.$/);
+});
+
 test("Youtiful Other / Custom remains a one-off title", async () => {
   const guildId = `youtiful-custom-title-${Date.now()}`;
   const add = fakeInteraction({ customId: "harmony-manager:community:add", kind: "button", guildId });
