@@ -22,6 +22,7 @@ const { randomUUID } = require("node:crypto");
 const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences } = require("./recurrenceService");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
+const NATIVE_DELETE_MARKER_TTL_MS = 5 * 60 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
 const HEADER = /^harmony\s+event\b/i;
 const CALENDAR_CATEGORIES = ["birthday", "content", "concert", "stream", "release", "video_call", "appearance", "community", "shopping", "other"];
@@ -534,7 +535,7 @@ function markPendingNativeDelete(guildId, eventId) {
   const key = nativeDeleteKey(guildId, eventId);
   const previous = pendingNativeDeletes.get(key);
   if (previous) clearTimeout(previous);
-  const timer = setTimeout(() => pendingNativeDeletes.delete(key), 60_000);
+  const timer = setTimeout(() => pendingNativeDeletes.delete(key), NATIVE_DELETE_MARKER_TTL_MS);
   timer.unref?.();
   pendingNativeDeletes.set(key, timer);
 }
@@ -599,14 +600,31 @@ function announcementChannelMenu(action, eventId = "new") {
 }
 
 async function sendImmediateCalendarAnnouncement(channel, event, guildId, message) {
-  if (!channel?.isTextBased?.() || !channel?.isSendable?.() || typeof channel.send !== "function") return false;
+  if (!channel?.isTextBased?.() || !channel?.isSendable?.() || typeof channel.send !== "function") {
+    console.warn(`[scheduler-announcements] immediate-unavailable event=${event?.id || "unknown"} channel=${channel?.id || "unresolved"}`);
+    return false;
+  }
+  const botMember = channel.guild?.members?.me;
+  const permissions = botMember && typeof channel.permissionsFor === "function" ? channel.permissionsFor(botMember) : null;
+  const missing = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+    .filter((permission) => permissions && !permissions.has(permission));
+  if (missing.length) {
+    console.warn(`[scheduler-announcements] immediate-permission-denied event=${event?.id || "unknown"} channel=${channel.id || "unknown"} missing=${missing.join(",")}`);
+    return false;
+  }
   const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${guildId}/${event.discord_event_id}`))] : [];
   try {
-    await channel.send({
+    const sent = await channel.send({
       content: [message, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"),
       components,
       allowedMentions: { parse: [] },
     });
+    const sentChannelId = sent?.channelId || sent?.channel?.id || null;
+    if (!sent?.id || (channel.id && sentChannelId !== channel.id)) {
+      console.error(`[scheduler-announcements] immediate-unconfirmed event=${event?.id || "unknown"} expectedChannel=${channel.id || "unknown"} returnedMessage=${sent?.id || "none"} returnedChannel=${sentChannelId || "unknown"}`);
+      return false;
+    }
+    console.log(`[scheduler-announcements] immediate-sent event=${event?.id || "unknown"} channel=${channel.id || sentChannelId} message=${sent.id}`);
     return true;
   } catch (error) {
     console.error(`Immediate calendar announcement failed for event ${event.id}:`, error);
@@ -1735,6 +1753,7 @@ async function handleManagerInteraction(interaction) {
     const first = store.getEvent(interaction.guildId, eventIds[0]);
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
+    console.log(`[scheduler-announcements] timing-submit guild=${interaction.guildId} eventIds=${eventIds.join(",")} selected=${selected.join(",")} channel=${draft.announcementChannelId}`);
     let immediatePosted = false;
     let immediateFailed = false;
     let immediateAttempted = false;
@@ -1748,6 +1767,7 @@ async function handleManagerInteraction(interaction) {
         const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
         immediatePosted = await sendImmediateCalendarAnnouncement(channel, event, interaction.guildId, draft.announcementMessage);
         immediateFailed = !immediatePosted;
+        console.log(`[scheduler-announcements] timing-immediate-result guild=${interaction.guildId} event=${event.id} channel=${draft.announcementChannelId} posted=${immediatePosted}`);
       }
     }
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
