@@ -1292,6 +1292,45 @@ test("Harmony-initiated native cancellation suppresses the deletion notice but e
   assert.equal(store.getEventByDiscordId(guildId, "external-native-delete"), null);
 });
 
+test("current Schedule Manager cancellation stays private and suppresses its native deletion notice", async () => {
+  const guildId = `manager-cancel-privacy-${Date.now()}`;
+  const notices = [];
+  const control = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
+  let nativeEdits = 0;
+  const native = { id: "manager-cancel-native", edit: async () => { nativeEdits += 1; } };
+  const guild = {
+    channels: { cache: new Map([["control", control]]), fetch: async () => control },
+    scheduledEvents: { cache: new Map([[native.id, native]]), fetch: async () => native },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Private cancellation", eventDate: "2099-11-05",
+    eventAt: "2099-11-05T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId: native.id, createdBy: "admin",
+  });
+
+  const start = fakeInteraction({ customId: "harmony-manager:community:cancel", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(start);
+  assert.equal(start.responses[0].type, "reply");
+  assert.equal(start.responses[0].payload.flags, 64);
+
+  const choose = fakeInteraction({ customId: "harmony-manager:community:cancelselect", kind: "select", guildId, guild, client, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(choose);
+  assert.equal(choose.responses[0].type, "update");
+  assert.match(choose.responses[0].payload.content, /Cancel/);
+
+  const confirm = fakeInteraction({ customId: `harmony-manager:community:cancelconfirm:${eventId}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(confirm);
+  assert.equal(confirm.responses[0].type, "update");
+  assert.match(confirm.responses[0].payload.content, /Cancelled calendar event/);
+  assert.equal(nativeEdits, 1);
+
+  await handleGuildScheduledEventDelete(client, { guildId, id: native.id });
+  assert.equal(notices.length, 0);
+  assert.equal(store.getEventByDiscordId(guildId, native.id), null);
+});
+
 test("announcement destination picker allows GuildVoice but not Stage, and immediate delivery reports failures", async () => {
   const picker = announcementChannelMenu("ysannouncechannel", 42)[0].toJSON().components[0];
   assert.deepEqual(picker.channel_types, [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice]);
@@ -1299,7 +1338,7 @@ test("announcement destination picker allows GuildVoice but not Stage, and immed
 
   const event = { id: 42, event_channel_id: "cinema", discord_event_id: null };
   const sent = [];
-  const voiceChat = { isTextBased: () => true, isSendable: () => true, send: async (payload) => { sent.push(payload); return { id: "announcement" }; } };
+  const voiceChat = { id: "cinema", isTextBased: () => true, isSendable: () => true, send: async (payload) => { sent.push(payload); return { id: "announcement", channelId: "cinema" }; } };
   assert.equal(await sendImmediateCalendarAnnouncement(voiceChat, event, "guild", "Watch with us!"), true);
   assert.equal(sent.length, 1);
 
@@ -1321,6 +1360,18 @@ test("announcement destination picker allows GuildVoice but not Stage, and immed
   await processScheduledAnnouncements({ guilds: { cache: new Map([[guildId, guild]]) } });
   assert.equal(futureSent.length, 1);
   assert.equal(store.dueAnnouncements(new Date().toISOString()).some((item) => item.event_id === eventId), false);
+});
+
+test("immediate announcement requires positive delivery evidence in the selected channel", async () => {
+  const event = { id: 43, event_channel_id: "cinema", discord_event_id: null };
+  const delivered = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({ id: "message-1", channelId: "target" }) };
+  assert.equal(await sendImmediateCalendarAnnouncement(delivered, event, "guild", "Delivered"), true);
+
+  const wrongDestination = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({ id: "message-2", channelId: "other" }) };
+  assert.equal(await sendImmediateCalendarAnnouncement(wrongDestination, event, "guild", "Wrong destination"), false);
+
+  const unconfirmed = { id: "target", isTextBased: () => true, isSendable: () => true, send: async () => ({}) };
+  assert.equal(await sendImmediateCalendarAnnouncement(unconfirmed, event, "guild", "Unconfirmed"), false);
 });
 
 test("Review Event keeps reconciliation controls private and stale reviewers are blocked", async () => {
