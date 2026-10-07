@@ -1318,7 +1318,7 @@ test("current Schedule Manager cancellation stays private and suppresses its nat
   const choose = fakeInteraction({ customId: "harmony-manager:community:cancelselect", kind: "select", guildId, guild, client, values: [String(eventId)] });
   await handleEventSchedulerInteraction(choose);
   assert.equal(choose.responses[0].type, "update");
-  assert.match(choose.responses[0].payload.content, /Confirm cancellation/);
+  assert.match(choose.responses[0].payload.content, /Cancel/);
 
   const confirm = fakeInteraction({ customId: `harmony-manager:community:cancelconfirm:${eventId}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(confirm);
