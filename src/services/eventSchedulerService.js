@@ -569,6 +569,22 @@ function announcementOffsetsFromEvent(event) {
   try { return JSON.parse(event?.announcement_offsets || "[]").map(Number); } catch { return []; }
 }
 
+function formatAnnouncementCountdown(offsetSeconds) {
+  const offset = Number(offsetSeconds);
+  if (!Number.isFinite(offset)) return null;
+  if (offset <= 0) return "✨ Today!";
+  const hours = offset / 3600;
+  if (Number.isInteger(hours) && hours < 24) {
+    return `✨ ${hours} hour${hours === 1 ? "" : "s"} to go!`;
+  }
+  const days = offset / 86400;
+  if (Number.isInteger(days)) {
+    if (days === 1) return "✨ Tomorrow!";
+    return `✨ ${days} day${days === 1 ? "" : "s"} to go!`;
+  }
+  return null;
+}
+
 function calendarAnnouncementItems(event, offsets) {
   if (event?.all_day) return [];
   const start = event?.event_at
@@ -580,7 +596,7 @@ function calendarAnnouncementItems(event, offsets) {
   const now = Date.now();
   return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
-    message: event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`,
+    message: [formatAnnouncementCountdown(offset), event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`].filter(Boolean).join("\n"),
   })).filter((item) => new Date(item.scheduledFor).getTime() > now);
 }
 
@@ -2638,6 +2654,8 @@ module.exports = {
   handleEventSchedulerMessage,
   handleEventSchedulerInteraction,
   processScheduledAnnouncements,
+  formatAnnouncementCountdown,
+  calendarAnnouncementItems,
   startEventScheduler,
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,
