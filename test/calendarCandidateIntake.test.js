@@ -276,6 +276,8 @@ test("JSON-LD date and endDate remain authoritative and preserve existing behavi
   assert.equal(metadata.proposedEventEndDate, "2026-12-02");
   assert.equal(metadata.proposedEventAt, "2026-12-02T00:00:00.000Z");
   assert.equal(metadata.proposedEventTimezone, "America/New_York");
+  const aliased = extractCandidateMetadata(`<script type="application/ld+json">${JSON.stringify({ "@type": "Event", name: "KST Event", startDate: "2026-12-01", eventSchedule: { scheduleTimezone: "KST" } })}</script>`, "https://official.example/kst");
+  assert.equal(aliased.proposedEventTimezone, "Asia/Seoul");
 });
 
 test("enrichment blocks private destinations and redirects to them", async () => {

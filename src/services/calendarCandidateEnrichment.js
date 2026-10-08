@@ -136,6 +136,7 @@ function extractCandidateMetadata(html, sourceUrl) {
     proposedEventDate ||= textDates.proposedEventDate;
     proposedEventEndDate ||= textDates.proposedEventEndDate;
   }
+  if (proposedEventTimezone) proposedEventTimezone = TIMEZONE_ALIASES[String(proposedEventTimezone).toUpperCase()] || proposedEventTimezone;
   if (proposedEventTimezone && !validTimezone(proposedEventTimezone)) proposedEventTimezone = null;
   proposedEventTimezone ||= timezoneFromText(title);
   const parsed = new URL(sourceUrl);
