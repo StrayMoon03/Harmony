@@ -413,6 +413,41 @@ function migrate(database) {
       updated_at        TEXT NOT NULL,
       PRIMARY KEY (guild_id, discord_event_id)
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_candidates (
+      id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id                   TEXT NOT NULL,
+      title                      TEXT,
+      proposed_event_at          TEXT,
+      proposed_event_date        TEXT,
+      proposed_event_timezone    TEXT,
+      source_url                 TEXT,
+      source_url_normalized      TEXT,
+      source_type                TEXT NOT NULL DEFAULT 'member_submission',
+      source_provider            TEXT,
+      source_metadata            TEXT,
+      submitter_id               TEXT,
+      submitted_note             TEXT,
+      discord_event_id           TEXT,
+      dedupe_key                 TEXT NOT NULL,
+      status                     TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'processing', 'added', 'linked', 'dismissed')),
+      calendar_event_id         INTEGER,
+      notice_message_id          TEXT,
+      decision_by                TEXT,
+      decision_note              TEXT,
+      created_at                 TEXT NOT NULL,
+      updated_at                 TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_calendar_candidates_review
+      ON calendar_candidates (guild_id, status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_candidates_url
+      ON calendar_candidates (guild_id, source_url_normalized)
+      WHERE source_url_normalized IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_candidates_discord
+      ON calendar_candidates (guild_id, discord_event_id)
+      WHERE discord_event_id IS NOT NULL;
   `);
 
   migrateSharesToGuildScope(database);
@@ -496,6 +531,16 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("announcement_message")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_message TEXT");
+  }
+
+  const candidateColumns = new Set(
+    database.prepare("PRAGMA table_info(calendar_candidates)").all().map((column) => column.name)
+  );
+  if (!candidateColumns.has("source_provider")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_provider TEXT");
+  }
+  if (!candidateColumns.has("source_metadata")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_metadata TEXT");
   }
 
   const settingColumns = new Set(

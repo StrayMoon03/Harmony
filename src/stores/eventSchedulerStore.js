@@ -1,5 +1,35 @@
 const { getDb } = require("../db/sqlite");
 
+function normalizeCandidateUrl(value) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(String(value).trim());
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    parsed.hash = '';
+    parsed.hostname = parsed.hostname.toLowerCase();
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$)/i.test(key)) parsed.searchParams.delete(key);
+    }
+    parsed.searchParams.sort();
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCandidateTitle(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function candidateTitleSimilarity(left, right) {
+  const a = new Set(normalizeCandidateTitle(left).split(' ').filter(Boolean));
+  const b = new Set(normalizeCandidateTitle(right).split(' ').filter(Boolean));
+  if (!a.size || !b.size) return 0;
+  const overlap = [...a].filter((token) => b.has(token)).length;
+  return overlap / new Set([...a, ...b]).size;
+}
+
 function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -143,6 +173,81 @@ function getEvent(guildId, eventId) {
 }
 function getEventByDiscordId(guildId, discordEventId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? AND cancelled_at IS NULL").get(guildId, discordEventId) || null;
+}
+
+function getCalendarCandidate(guildId, candidateId) {
+  return getDb().prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND id = ?").get(guildId, candidateId) || null;
+}
+
+function listCalendarCandidates(guildId, status = null) {
+  return status
+    ? getDb().prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND status = ? ORDER BY created_at, id").all(guildId, status)
+    : getDb().prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? ORDER BY created_at, id").all(guildId);
+}
+
+function findCandidateCalendarMatches(guildId, candidate) {
+  const title = normalizeCandidateTitle(candidate?.title);
+  const sourceUrl = normalizeCandidateUrl(candidate?.source_url);
+  if (!title && !sourceUrl) return [];
+  const rows = getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND calendar_type = 'stray_kids' AND cancelled_at IS NULL ORDER BY event_at, id").all(guildId);
+  return rows.filter((event) => {
+    const sameTitle = normalizeCandidateTitle(event.title) === title;
+    const similarTitle = title && candidateTitleSimilarity(event.title, candidate.title) >= 0.75;
+    const sameDate = Boolean(candidate.proposed_event_date && event.event_date === candidate.proposed_event_date);
+    const sameSource = Boolean(sourceUrl && normalizeCandidateUrl(event.link) === sourceUrl);
+    const sameTime = Boolean(candidate.proposed_event_at && event.event_at && Math.abs(new Date(candidate.proposed_event_at).getTime() - new Date(event.event_at).getTime()) <= 2 * 60 * 60 * 1000);
+    return sameSource || (sameDate && (sameTitle || similarTitle || sameTime)) || (sameTitle && sameTime);
+  });
+}
+
+function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
+  const normalizedUrl = normalizeCandidateUrl(sourceUrl);
+  if (!normalizedUrl && !discordEventId) throw new Error('A complete http(s) source link is required.');
+  const dedupeKey = normalizedUrl ? `url:${normalizedUrl}` : `discord:${discordEventId}`;
+  const db = getDb();
+  const existing = normalizedUrl
+    ? db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_url_normalized = ?").get(guildId, normalizedUrl)
+    : db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId);
+  if (existing) return { candidate: existing, duplicate: true, duplicateReason: 'same-source' };
+  if (normalizedUrl) {
+    const canonical = db.prepare("SELECT id, title, link FROM scheduled_events WHERE guild_id = ? AND cancelled_at IS NULL AND link IS NOT NULL").all(guildId).find((event) => normalizeCandidateUrl(event.link) === normalizedUrl) || null;
+    if (canonical) return { candidate: null, duplicate: true, duplicateReason: 'already-calendar', canonicalEvent: canonical };
+  }
+
+  const strong = title && proposedEventDate
+    ? db.prepare(`SELECT * FROM calendar_candidates WHERE guild_id = ? AND status IN ('open','processing','added','linked') AND proposed_event_date = ? AND lower(trim(title)) = lower(trim(?)) LIMIT 1`).get(guildId, proposedEventDate, title)
+    : null;
+  if (strong) return { candidate: strong, duplicate: true, duplicateReason: 'same-title-date' };
+
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    INSERT INTO calendar_candidates (
+      guild_id, title, proposed_event_at, proposed_event_date, proposed_event_timezone,
+      source_url, source_url_normalized, source_type, source_provider, source_metadata, submitter_id, submitted_note,
+      discord_event_id, dedupe_key, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
+  return { candidate: getCalendarCandidate(guildId, Number(result.lastInsertRowid)), duplicate: false, duplicateReason: null };
+}
+
+function saveCalendarCandidateNotice(guildId, candidateId, noticeMessageId) {
+  getDb().prepare("UPDATE calendar_candidates SET notice_message_id = ?, updated_at = ? WHERE guild_id = ? AND id = ?").run(noticeMessageId || null, new Date().toISOString(), guildId, candidateId);
+  return getCalendarCandidate(guildId, candidateId);
+}
+
+function claimCalendarCandidate(guildId, candidateId) {
+  return getDb().prepare("UPDATE calendar_candidates SET status = 'processing', updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'open'").run(new Date().toISOString(), guildId, candidateId).changes > 0;
+}
+
+function releaseCalendarCandidate(guildId, candidateId, note = null) {
+  getDb().prepare("UPDATE calendar_candidates SET status = 'open', decision_note = ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'processing'").run(note, new Date().toISOString(), guildId, candidateId);
+  return getCalendarCandidate(guildId, candidateId);
+}
+
+function decideCalendarCandidate(guildId, candidateId, status, decisionBy, decisionNote = null, calendarEventId = null) {
+  if (!['added', 'linked', 'dismissed'].includes(status)) throw new Error('Invalid candidate decision.');
+  getDb().prepare("UPDATE calendar_candidates SET status = ?, calendar_event_id = COALESCE(?, calendar_event_id), decision_by = ?, decision_note = ?, updated_at = ? WHERE guild_id = ? AND id = ?").run(status, calendarEventId, decisionBy || null, decisionNote, new Date().toISOString(), guildId, candidateId);
+  return getCalendarCandidate(guildId, candidateId);
 }
 function listUnlinkedCommunityEvents(guildId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND calendar_type = 'community' AND discord_event_id IS NULL AND cancelled_at IS NULL ORDER BY event_date, id").all(guildId);
@@ -431,6 +536,15 @@ module.exports = {
   createCalendarEvent,
   getEvent,
   getEventByDiscordId,
+  normalizeCandidateUrl,
+  getCalendarCandidate,
+  listCalendarCandidates,
+  findCandidateCalendarMatches,
+  createOrGetCalendarCandidate,
+  saveCalendarCandidateNotice,
+  claimCalendarCandidate,
+  releaseCalendarCandidate,
+  decideCalendarCandidate,
   listUnlinkedCommunityEvents,
   listSeriesEvents,
   listRecurringNativeCandidates,
