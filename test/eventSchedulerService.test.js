@@ -1679,3 +1679,54 @@ test("Add to Calendar links the existing Discord event without creating another 
   assert.equal(creates, 0);
   assert.match(interaction.responses[0].payload.content, /Would you like to schedule announcements/);
 });
+
+
+test("all-day Stray Kids edit keeps the legacy timezone and reaches Shopping category", async () => {
+  const guildId = `all-day-edit-timezone-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar-stray-kids",
+    title: "ODD&FRESH POP-UP",
+    eventDate: "2026-10-22",
+    eventAt: null,
+    eventTimezone: null,
+    timezone: "Asia/Seoul",
+    calendarType: "stray_kids",
+    category: "other",
+    allDay: true,
+    createdBy: "admin",
+  });
+
+  const edit = fakeInteraction({ customId: "harmony-manager:stray_kids:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const select = fakeInteraction({ customId: "harmony-manager:stray_kids:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  const modal = fakeInteraction({
+    customId: `harmony-manager:stray_kids:editmodal:${eventId}`, kind: "modal", guildId,
+    fields: { title: "ODD&FRESH POP-UP", "event-date": "2026-10-22", "event-time": "", location: "", description: "" },
+  });
+  await handleEventSchedulerInteraction(modal);
+  const keep = fakeInteraction({ customId: `harmony-manager:stray_kids:editkeep:timezone:${eventId}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(keep);
+
+  const saved = store.getEvent(guildId, eventId);
+  assert.equal(saved.event_timezone, null);
+  assert.equal(saved.timezone, "Asia/Seoul");
+  assert.equal(keep.responses[0].type, "update");
+  const categoryMenu = keep.responses[0].payload.components[0].toJSON().components[0];
+  assert.ok(categoryMenu.options.some((option) => option.label === "🛍️ Shopping / Pop-Up"));
+
+  const category = fakeInteraction({ customId: `harmony-manager:stray_kids:editcategory:${eventId}`, kind: "select", guildId, values: ["shopping"] });
+  await handleEventSchedulerInteraction(category);
+  assert.equal(store.getEvent(guildId, eventId).category, "shopping");
+
+  const timedId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar-stray-kids", title: "Timed event", eventDate: "2026-10-23",
+    eventAt: "2026-10-23T16:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "stray_kids", category: "content", createdBy: "admin",
+  });
+  store.updateEvent(guildId, timedId, { timezone: "Asia/Tokyo", event_timezone: "Asia/Tokyo" });
+  const timed = store.getEvent(guildId, timedId);
+  assert.equal(timed.timezone, "Asia/Tokyo");
+  assert.equal(timed.event_timezone, "Asia/Tokyo");
+});
