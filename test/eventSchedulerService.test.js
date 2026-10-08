@@ -1749,9 +1749,9 @@ test("scheduled announcement countdown labels use the configured offset and pres
   const source = require("../src/services/eventSchedulerService");
   const items = source.calendarAnnouncementItems(event, [259200, 86400, 3600]);
   assert.equal(items.length, 3);
-  assert.equal(items[0].message, "✨ 3 days to go!\\nBring your lightstick!");
-  assert.equal(items[1].message, "✨ Tomorrow!\\nBring your lightstick!");
-  assert.equal(items[2].message, "✨ 1 hour to go!\\nBring your lightstick!");
+  assert.equal(items[0].message, "✨ 3 days to go!\nBring your lightstick!");
+  assert.equal(items[1].message, "✨ Tomorrow!\nBring your lightstick!");
+  assert.equal(items[2].message, "✨ 1 hour to go!\nBring your lightstick!");
 });
 
 test("scheduled announcement offsets remain unchanged when countdown labels are generated", () => {
@@ -1776,8 +1776,8 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
   const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", offsets, items, "Countdown event details");
   assert.deepEqual(JSON.parse(saved.announcement_offsets), offsets);
   assert.deepEqual(store.listAnnouncements(eventId).map((item) => item.message), [
-    "✨ 3 days to go!\\nCountdown event details",
-    "✨ Tomorrow!\\nCountdown event details",
-    "✨ 1 hour to go!\\nCountdown event details",
+    "✨ 3 days to go!\nCountdown event details",
+    "✨ Tomorrow!\nCountdown event details",
+    "✨ 1 hour to go!\nCountdown event details",
   ]);
 });
