@@ -420,6 +420,7 @@ function migrate(database) {
       title                      TEXT,
       proposed_event_at          TEXT,
       proposed_event_date        TEXT,
+      proposed_event_end_date    TEXT,
       proposed_event_timezone    TEXT,
       source_url                 TEXT,
       source_url_normalized      TEXT,
@@ -541,6 +542,9 @@ function migrate(database) {
   }
   if (!candidateColumns.has("source_metadata")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_metadata TEXT");
+  }
+  if (!candidateColumns.has("proposed_event_end_date")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN proposed_event_end_date TEXT");
   }
 
   const settingColumns = new Set(

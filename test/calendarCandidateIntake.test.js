@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
 const { handleEventSchedulerInteraction } = require("../src/services/eventSchedulerService");
-const { extractCandidateMetadata } = require("../src/services/calendarCandidateEnrichment");
+const { extractCandidateMetadata, enrichCalendarCandidate, parseTextDates } = require("../src/services/calendarCandidateEnrichment");
 
 global.fetch = async () => ({ ok: true, status: 200, text: async () => "<title>Test source</title>" });
 
@@ -230,4 +230,98 @@ test("candidate matching requires supporting identity and does not match by date
   const legitimate = store.createCalendarEvent({ guildId, calendarChannelId: null, title: "Stray Kids Fan Meeting", link: "https://official.example/fan-meeting", timezone: "America/New_York", eventAt: "2026-12-01T19:00:00.000Z", eventDate: "2026-12-01", eventTimezone: "America/New_York", calendarType: "stray_kids", category: "other", allDay: false, createdBy: "admin" });
   assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate).map((event) => event.id), [legitimate]);
   assert.ok(sameDate);
+});
+
+test("social title date range extracts the live Instagram dates and KST without inventing a time", () => {
+  const metadata = extractCandidateMetadata(
+    `<title>Stray Kids on Instagram: ODD&amp;FRESH 26.10.22 THU – 11.08 SUN (KST)</title>`,
+    "https://www.instagram.com/p/DeOPfnHzVKh/",
+  );
+  assert.equal(metadata.proposedEventDate, "2026-10-22");
+  assert.equal(metadata.proposedEventEndDate, "2026-11-08");
+  assert.equal(metadata.proposedEventTimezone, "Asia/Seoul");
+  assert.equal(metadata.proposedEventAt, null);
+});
+
+test("candidate storage and private review preserve extracted date range and timezone", async () => {
+  const guildId = `candidate-range-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = store.createOrGetCalendarCandidate({
+    guildId, title: "ODD&FRESH POP-UP", proposedEventDate: "2026-10-22", proposedEventEndDate: "2026-11-08", proposedEventTimezone: "Asia/Seoul", sourceUrl: "https://official.example/popup",
+  }).candidate;
+  const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(review);
+  assert.match(review.replyPayload.content, /Harmony extracted start date: 2026-10-22/);
+  assert.match(review.replyPayload.content, /Harmony extracted end date: 2026-11-08/);
+  assert.match(review.replyPayload.content, /Harmony extracted timezone: Asia\/Seoul/);
+  assert.match(review.replyPayload.content, /Event time: Not provided/);
+});
+
+test("social parser supports Korean-style single dates and cross-year ranges", () => {
+  assert.deepEqual(parseTextDates("Event 2026.10.22 THU"), { proposedEventDate: "2026-10-22" });
+  assert.deepEqual(parseTextDates("Pop-up 2026.12.31 THU – 01.02 SAT (KST)"), { proposedEventDate: "2026-12-31", proposedEventEndDate: "2027-01-02" });
+  assert.deepEqual(parseTextDates("Event 10.22"), {});
+});
+
+test("weekday disagreement degrades conservatively", () => {
+  assert.deepEqual(parseTextDates("Event 2026.10.22 FRI"), {});
+  assert.deepEqual(parseTextDates("Event 2026.10.22 THU – 11.08 MON"), {});
+});
+
+test("JSON-LD date and endDate remain authoritative and preserve existing behavior", () => {
+  const metadata = extractCandidateMetadata(`<script type="application/ld+json">${JSON.stringify({
+    "@type": "Event", name: "Structured Event", startDate: "2026-12-01T19:00:00-05:00", endDate: "2026-12-02", eventSchedule: { scheduleTimezone: "America/New_York" },
+  })}</script>`, "https://official.example/structured");
+  assert.equal(metadata.proposedEventDate, "2026-12-01");
+  assert.equal(metadata.proposedEventEndDate, "2026-12-02");
+  assert.equal(metadata.proposedEventAt, "2026-12-02T00:00:00.000Z");
+  assert.equal(metadata.proposedEventTimezone, "America/New_York");
+});
+
+test("enrichment blocks private destinations and redirects to them", async () => {
+  const privateResult = await enrichCalendarCandidate("http://127.0.0.1/event", { fetchImpl: async () => ({ ok: true, status: 200, text: async () => "ignored" }) });
+  assert.equal(privateResult.error, "blocked-destination");
+  let redirectCalls = 0;
+  const redirectResult = await enrichCalendarCandidate("https://public.example/event", {
+    fetchImpl: async () => {
+      redirectCalls += 1;
+      return redirectCalls === 1
+        ? { ok: false, status: 302, headers: { get: () => "http://[::1]/metadata" } }
+        : { ok: true, status: 200, text: async () => "not reached" };
+    },
+    lookupImpl: async () => [{ address: "8.8.8.8", family: 4 }],
+  });
+  assert.equal(redirectResult.error, "blocked-destination");
+});
+
+test("enrichment rejects IPv6 loopback, private, and link-local literals", async () => {
+  for (const address of ["::1", "fc00::1", "fd12::1", "fe80::1", "::ffff:127.0.0.1"]) {
+    const result = await enrichCalendarCandidate(`http://[${address}]/event`, { fetchImpl: async () => ({ ok: true, status: 200, text: async () => "not reached" }) });
+    assert.equal(result.error, "blocked-destination", address);
+  }
+});
+
+test("enrichment rejects DNS names resolving to prohibited addresses", async () => {
+  const result = await enrichCalendarCandidate("https://attacker.example/event", {
+    fetchImpl: async () => ({ ok: true, status: 200, text: async () => "not reached" }),
+    lookupImpl: async () => [{ address: "192.168.1.20", family: 4 }],
+  });
+  assert.equal(result.error, "blocked-destination");
+});
+
+test("enrichment stops an oversized streamed response before loading it fully", async () => {
+  let cancelled = false;
+  const chunk = new Uint8Array(1_500_000);
+  const result = await enrichCalendarCandidate("https://official.example/large", {
+    fetchImpl: async () => ({
+      ok: true, status: 200,
+      body: { getReader: () => ({
+        reads: 0,
+        async read() { this.reads += 1; return this.reads === 1 ? { done: false, value: chunk } : { done: false, value: chunk }; },
+        async cancel() { cancelled = true; }, releaseLock() {},
+      }) },
+    }),
+  });
+  assert.equal(result.error, "response-too-large");
+  assert.equal(cancelled, true);
 });
