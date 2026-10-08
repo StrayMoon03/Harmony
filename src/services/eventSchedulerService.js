@@ -2655,6 +2655,7 @@ module.exports = {
   handleEventSchedulerInteraction,
   processScheduledAnnouncements,
   formatAnnouncementCountdown,
+  calendarAnnouncementItems,
   startEventScheduler,
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,
