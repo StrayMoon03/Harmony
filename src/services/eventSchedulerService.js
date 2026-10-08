@@ -16,6 +16,7 @@ const {
   Events,
 } = require("discord.js");
 const store = require("../stores/eventSchedulerStore");
+const { enrichCalendarCandidate } = require("./calendarCandidateEnrichment");
 const birthdayStore = require("../stores/birthdayStore");
 const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 const { randomUUID } = require("node:crypto");
@@ -1238,8 +1239,10 @@ function candidateReviewPayload(candidate, matches) {
     `**Potential Stray Kids event #${candidate.id}**`,
     `Source: ${candidate.source_url || "Not provided"}`,
     `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
-    `Title: ${candidate.title || "Not provided"}`,
-    `Date/time: ${candidateDateLabel(candidate)}${candidate.proposed_event_timezone ? ` (${candidate.proposed_event_timezone})` : ""}`,
+    `Harmony extracted title: ${candidate.title || "Not available"}`,
+    `Harmony extracted date/time: ${candidateDateLabel(candidate)}${candidate.proposed_event_timezone ? ` (${candidate.proposed_event_timezone})` : ""}`,
+    `Source/provider: ${candidate.source_provider || "Not identified"}${candidate.source_metadata ? ` (${candidate.source_metadata})` : ""}`,
+    `Still missing: ${[!candidate.title && "event title", !candidate.proposed_event_date && "event date", !candidate.proposed_event_at && "event time"].filter(Boolean).join(", ") || "nothing obvious"}`,
     `Note: ${candidate.submitted_note || "None"}`,
     matches.length ? `Likely calendar matches: ${matches.map((item) => `#${item.id} ${item.title}`).join(", ")}` : "Likely calendar matches: none",
     "Choose an action; no calendar event has been created yet.",
@@ -1256,7 +1259,12 @@ function candidateNoticePayload(candidate) {
 }
 
 async function submitCalendarCandidate(client, input) {
-  const result = store.createOrGetCalendarCandidate(input);
+  let enriched = {};
+  if (input.sourceUrl) {
+    const enrichment = await enrichCalendarCandidate(input.sourceUrl);
+    enriched = enrichment.metadata || {};
+  }
+  const result = store.createOrGetCalendarCandidate({ ...input, ...enriched });
   if (result.duplicate) {
     if (result.candidate?.status === "open" && !result.candidate.notice_message_id && client) {
       const channel = await managerControlChannel(client, input.guildId);
@@ -2670,4 +2678,3 @@ module.exports = {
   candidateReviewPayload,
   candidateNoticePayload,
 };
-

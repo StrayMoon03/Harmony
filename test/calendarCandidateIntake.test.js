@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
 const { handleEventSchedulerInteraction } = require("../src/services/eventSchedulerService");
+const { extractCandidateMetadata } = require("../src/services/calendarCandidateEnrichment");
+
+global.fetch = async () => ({ ok: true, status: 200, text: async () => "<title>Test source</title>" });
 
 function permissions() { return { has: () => true }; }
 
@@ -133,3 +136,59 @@ test("candidate Link Existing is match-aware and atomic", async () => {
   assert.equal(stale.replyPayload.flags, 64);
 });
 
+test("submitted URL enrichment stores structured event metadata without creating calendar or announcements", async () => {
+  const guildId = `candidate-enrich-${Date.now()}`;
+  const { client, sent } = setupGuild(guildId);
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 200, text: async () => `
+    <meta property="og:title" content="Stray Kids Fan Meeting">
+    <script type="application/ld+json">${JSON.stringify({
+      "@context": "https://schema.org", "@type": "Event", name: "Stray Kids Fan Meeting",
+      startDate: "2026-12-01T19:00:00-05:00", eventSchedule: { scheduleTimezone: "America/New_York" },
+    })}</script>` });
+  try {
+    const result = await require("../src/services/eventSchedulerService").submitCalendarCandidate(client, { guildId, sourceUrl: "https://official.example/fan-meeting", sourceType: "member_submission", submitterId: "member" });
+    assert.equal(result.duplicate, false);
+    const candidate = store.getCalendarCandidate(guildId, result.candidate.id);
+    assert.equal(candidate.title, "Stray Kids Fan Meeting");
+    assert.equal(candidate.proposed_event_date, "2026-12-01");
+    assert.equal(candidate.proposed_event_timezone, "America/New_York");
+    assert.equal(candidate.source_provider, "official.example");
+    assert.equal(candidate.source_metadata, "json-ld-event");
+    assert.equal(store.listEvents(guildId).length, 0);
+    assert.equal(store.listAnnouncements(result.candidate.id).length, 0);
+    assert.match(sent[0].content, /Stray Kids Fan Meeting/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test("enrichment failure saves a candidate and leaves unsupported date/time missing", async () => {
+  const guildId = `candidate-enrich-fail-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const originalFetch = global.fetch;
+  global.fetch = async () => { throw new Error("unavailable"); };
+  try {
+    const result = await require("../src/services/eventSchedulerService").submitCalendarCandidate(client, { guildId, sourceUrl: "https://official.example/unavailable", sourceType: "member_submission" });
+    const candidate = store.getCalendarCandidate(guildId, result.candidate.id);
+    assert.equal(candidate.title, null);
+    assert.equal(candidate.proposed_event_date, null);
+    assert.equal(candidate.proposed_event_at, null);
+    assert.equal(candidate.status, "open");
+  } finally { global.fetch = originalFetch; }
+});
+
+test("metadata extraction does not invent a time from a date-only source", () => {
+  const metadata = extractCandidateMetadata(`<script type="application/ld+json">${JSON.stringify({ "@type": "Event", name: "Date Only Event", startDate: "2026-12-01" })}</script>`, "https://official.example/date-only");
+  assert.equal(metadata.proposedEventDate, "2026-12-01");
+  assert.equal(metadata.proposedEventAt, null);
+  assert.equal(metadata.proposedEventTimezone, null);
+});
+
+test("candidate matching requires supporting identity and does not match by date alone", () => {
+  const guildId = `candidate-match-${Date.now()}`;
+  const sameDate = store.createCalendarEvent({ guildId, calendarChannelId: null, title: "Unrelated livestream", link: "https://official.example/other", timezone: "America/New_York", eventDate: "2026-12-01", eventTimezone: "America/New_York", calendarType: "stray_kids", category: "other", allDay: true, createdBy: "admin" });
+  const candidate = store.createOrGetCalendarCandidate({ guildId, title: "Stray Kids Fan Meeting", proposedEventDate: "2026-12-01", sourceUrl: "https://official.example/fan-meeting" }).candidate;
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate), []);
+  const legitimate = store.createCalendarEvent({ guildId, calendarChannelId: null, title: "Stray Kids Fan Meeting", link: "https://official.example/fan-meeting", timezone: "America/New_York", eventAt: "2026-12-01T19:00:00.000Z", eventDate: "2026-12-01", eventTimezone: "America/New_York", calendarType: "stray_kids", category: "other", allDay: false, createdBy: "admin" });
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate).map((event) => event.id), [legitimate]);
+  assert.ok(sameDate);
+});

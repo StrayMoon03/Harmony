@@ -424,6 +424,8 @@ function migrate(database) {
       source_url                 TEXT,
       source_url_normalized      TEXT,
       source_type                TEXT NOT NULL DEFAULT 'member_submission',
+      source_provider            TEXT,
+      source_metadata            TEXT,
       submitter_id               TEXT,
       submitted_note             TEXT,
       discord_event_id           TEXT,
@@ -529,6 +531,16 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("announcement_message")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_message TEXT");
+  }
+
+  const candidateColumns = new Set(
+    database.prepare("PRAGMA table_info(calendar_candidates)").all().map((column) => column.name)
+  );
+  if (!candidateColumns.has("source_provider")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_provider TEXT");
+  }
+  if (!candidateColumns.has("source_metadata")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_metadata TEXT");
   }
 
   const settingColumns = new Set(
@@ -648,4 +660,3 @@ module.exports = {
   DB_PATH,
   migrate,
 };
-
