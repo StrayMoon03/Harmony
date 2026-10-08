@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   sendAlreadySharedAndCleanup,
+  uploadFacebookMediaOrPreserveOriginal,
 } = require("./mediaHandler");
 const {
   resolveShareKey,
@@ -66,6 +67,42 @@ test("duplicate response failure leaves the submitted message untouched", async 
     /Discord send failed/
   );
   assert.equal(message.deleted, false);
+});
+
+test("oversized Facebook video preserves the original player without reporting a failure", async () => {
+  const tooLarge = new Error("Could not compress video under Discord limit");
+  tooLarge.code = "HARMONY_MEDIA_TOO_LARGE";
+  let calls = 0;
+
+  const result = await uploadFacebookMediaOrPreserveOriginal(
+    {},
+    [{ path: "long-video.mp4" }],
+    {},
+    "temporary-facebook-job",
+    async () => {
+      calls += 1;
+      throw tooLarge;
+    }
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.preservedOriginal, true);
+  assert.deepEqual(result.sentMessageIds, []);
+});
+
+test("Facebook upload failures unrelated to size are still reported", async () => {
+  await assert.rejects(
+    uploadFacebookMediaOrPreserveOriginal(
+      {},
+      [{ path: "video.mp4" }],
+      {},
+      "temporary-facebook-job",
+      async () => {
+        throw new Error("Discord unavailable");
+      }
+    ),
+    /Discord unavailable/
+  );
 });
 
 test("Facebook share aliases use the same key for sharing and forget", async () => {

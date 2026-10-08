@@ -140,6 +140,31 @@ async function markRetrievedOrCleanup(lifecycle, downloadResult) {
   }
 }
 
+async function uploadFacebookMediaOrPreserveOriginal(
+  message,
+  files,
+  cardText,
+  rawDir,
+  upload = uploadMedia
+) {
+  try {
+    return {
+      preservedOriginal: false,
+      sentMessageIds: await upload(message, files, cardText, rawDir),
+    };
+  } catch (error) {
+    if (error?.code !== "HARMONY_MEDIA_TOO_LARGE") throw error;
+
+    console.warn(
+      "Facebook video cannot fit within Discord's upload limit; preserving the original Facebook player."
+    );
+    return {
+      preservedOriginal: true,
+      sentMessageIds: [],
+    };
+  }
+}
+
 /**
  * Sends a friendly error reply while keeping
  * technical details in the terminal.
@@ -588,12 +613,14 @@ async function processMediaMessage(message, lifecycle) {
       });
 
       await markRetrievedOrCleanup(lifecycle, downloadResult);
-      const sentMessageIds = await uploadMedia(
+      const uploadResult = await uploadFacebookMediaOrPreserveOriginal(
         message,
         classification.files,
         cardText,
         downloadResult.rawDir
       );
+      if (uploadResult.preservedOriginal) return;
+      const sentMessageIds = uploadResult.sentMessageIds;
 
       await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
@@ -1174,4 +1201,5 @@ async function handleMediaMessage(message) {
 module.exports = {
   handleMediaMessage,
   sendAlreadySharedAndCleanup,
+  uploadFacebookMediaOrPreserveOriginal,
 };
