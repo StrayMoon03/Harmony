@@ -24,6 +24,7 @@ const {
   announcementChannelMenu,
   sendImmediateCalendarAnnouncement,
   processScheduledAnnouncements,
+  formatAnnouncementCountdown,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 const { normalizeRecurrenceRule, generateRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
@@ -1729,4 +1730,53 @@ test("all-day Stray Kids edit keeps the legacy timezone and reaches Shopping cat
   const timed = store.getEvent(guildId, timedId);
   assert.equal(timed.timezone, "Asia/Tokyo");
   assert.equal(timed.event_timezone, "Asia/Tokyo");
+});
+
+
+test("scheduled announcement countdown labels use the configured offset and preserve the announcement body", () => {
+  assert.equal(formatAnnouncementCountdown(259200), "✨ 3 days to go!");
+  assert.equal(formatAnnouncementCountdown(86400), "✨ Tomorrow!");
+  assert.equal(formatAnnouncementCountdown(7200), "✨ 2 hours to go!");
+  assert.equal(formatAnnouncementCountdown(3600), "✨ 1 hour to go!");
+  assert.equal(formatAnnouncementCountdown(0), "✨ Today!");
+
+  const event = {
+    title: "Bang Chan & CHAOS",
+    event_at: "2099-10-18T23:00:00.000Z",
+    announcement_message: "Bring your lightstick!",
+    event_channel_id: "cinema",
+  };
+  const source = require("../src/services/eventSchedulerService");
+  const items = source.calendarAnnouncementItems(event, [259200, 86400, 3600]);
+  assert.equal(items.length, 3);
+  assert.equal(items[0].message, "✨ 3 days to go!\\nBring your lightstick!");
+  assert.equal(items[1].message, "✨ Tomorrow!\\nBring your lightstick!");
+  assert.equal(items[2].message, "✨ 1 hour to go!\\nBring your lightstick!");
+});
+
+test("scheduled announcement offsets remain unchanged when countdown labels are generated", () => {
+  const guildId = `countdown-offsets-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar",
+    title: "Countdown event",
+    eventDate: "2099-10-18",
+    eventAt: "2099-10-18T23:00:00.000Z",
+    eventTimezone: "UTC",
+    timezone: "UTC",
+    calendarType: "community",
+    category: "community",
+    createdBy: "admin",
+  });
+  const event = store.getEvent(guildId, eventId);
+  const source = require("../src/services/eventSchedulerService");
+  const offsets = [259200, 86400, 3600];
+  const items = source.calendarAnnouncementItems(event, offsets);
+  const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", offsets, items, "Countdown event details");
+  assert.deepEqual(JSON.parse(saved.announcement_offsets), offsets);
+  assert.deepEqual(store.listAnnouncements(eventId).map((item) => item.message), [
+    "✨ 3 days to go!\\nCountdown event details",
+    "✨ Tomorrow!\\nCountdown event details",
+    "✨ 1 hour to go!\\nCountdown event details",
+  ]);
 });
