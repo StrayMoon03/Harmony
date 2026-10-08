@@ -261,6 +261,8 @@ test("social parser supports Korean-style single dates and cross-year ranges", (
   assert.deepEqual(parseTextDates("Event 2026.10.22 THU"), { proposedEventDate: "2026-10-22" });
   assert.deepEqual(parseTextDates("Pop-up 2026.12.31 THU – 01.02 SAT (KST)"), { proposedEventDate: "2026-12-31", proposedEventEndDate: "2027-01-02" });
   assert.deepEqual(parseTextDates("Event 10.22"), {});
+  assert.deepEqual(parseTextDates("Event 10.22 THU"), {});
+  assert.deepEqual(parseTextDates("Event 10/22 THU"), {});
 });
 
 test("weekday disagreement degrades conservatively", () => {

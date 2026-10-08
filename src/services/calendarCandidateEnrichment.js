@@ -76,14 +76,9 @@ function weekdayMatches(date, weekday) {
 
 function inferYear(month, day, weekday, contextYear) {
   if (contextYear) return dateParts(contextYear, month, day) && weekdayMatches(dateParts(contextYear, month, day), weekday) ? contextYear : null;
-  if (!weekday) return null;
-  const currentYear = new Date().getUTCFullYear();
-  const candidates = [];
-  for (let year = currentYear - 1; year <= currentYear + 2; year++) {
-    const date = dateParts(year, month, day);
-    if (date && weekdayMatches(date, weekday)) candidates.push(year);
-  }
-  return candidates.length === 1 ? candidates[0] : null;
+  // A weekday validates a date once its year is known; it is not reliable
+  // context for inventing a year from the runtime clock.
+  return null;
 }
 
 function parseDateToken(yearText, monthText, dayText, weekdayText, contextYear) {
