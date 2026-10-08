@@ -425,11 +425,18 @@ function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
   const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "announcement_channel_id", "announcement_offsets", "announcement_message"];
-  const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(changes, field));
+  const normalizedChanges = { ...changes };
+  // event_timezone is nullable for all-day events, but the legacy timezone
+  // column is NOT NULL. Preserve its compatibility value when an edit clears
+  // the actual event timezone.
+  if (Object.prototype.hasOwnProperty.call(normalizedChanges, "timezone") && !normalizedChanges.timezone) {
+    normalizedChanges.timezone = event.timezone || "America/New_York";
+  }
+  const fields = allowed.filter((field) => Object.prototype.hasOwnProperty.call(normalizedChanges, field));
   if (!fields.length) return event;
   const assignments = fields.map((field) => `${field} = ?`).join(", ");
   getDb().prepare(`UPDATE scheduled_events SET ${assignments} WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL`)
-    .run(...fields.map((field) => changes[field]), guildId, eventId);
+    .run(...fields.map((field) => normalizedChanges[field]), guildId, eventId);
   return getEvent(guildId, eventId);
 }
 
