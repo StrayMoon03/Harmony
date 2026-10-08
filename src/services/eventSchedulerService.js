@@ -1218,8 +1218,8 @@ function scheduledEventDateLabel(event) {
 }
 
 function candidateDateLabel(candidate) {
-  if (candidate?.proposed_event_at) return `<t:${Math.floor(new Date(candidate.proposed_event_at).getTime() / 1000)}:F>`;
   if (candidate?.proposed_event_date && candidate?.proposed_event_end_date) return `${candidate.proposed_event_date} – ${candidate.proposed_event_end_date}`;
+  if (candidate?.proposed_event_at) return `<t:${Math.floor(new Date(candidate.proposed_event_at).getTime() / 1000)}:F>`;
   return candidate?.proposed_event_date || "Not provided";
 }
 
