@@ -161,6 +161,45 @@ test("submitted URL enrichment stores structured event metadata without creating
   } finally { global.fetch = originalFetch; }
 });
 
+test("candidate Add to Calendar prefills extracted local date, time, and timezone", async () => {
+  const guildId = `candidate-prefill-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 200, text: async () => `<script type="application/ld+json">${JSON.stringify({
+    "@type": "Event", name: "Timezone Test", startDate: "2026-12-01T19:00:00-05:00", eventSchedule: { scheduleTimezone: "America/New_York" },
+  })}</script>` });
+  try {
+    const result = await require("../src/services/eventSchedulerService").submitCalendarCandidate(client, { guildId, sourceUrl: "https://official.example/timezone-test", sourceType: "member_submission", submitterId: "member" });
+    const candidate = store.getCalendarCandidate(guildId, result.candidate.id);
+    assert.equal(candidate.proposed_event_at, "2026-12-02T00:00:00.000Z");
+    assert.equal(candidate.proposed_event_date, "2026-12-01");
+    assert.equal(candidate.proposed_event_timezone, "America/New_York");
+
+    const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
+    await handleEventSchedulerInteraction(review);
+    const add = managerInteraction(guildId, client, `harmony-manager:candidate:add:${candidate.id}`, { kind: "button" });
+    await handleEventSchedulerInteraction(add);
+    const values = Object.fromEntries(add.modal.components.map((row) => [row.components[0].data.custom_id, row.components[0].data.value || ""]));
+    assert.equal(values.title, "Timezone Test");
+    assert.equal(values["event-date"], "2026-12-01");
+    assert.equal(values["event-time"], "19:00");
+    assert.equal(values["event-timezone"], "America/New_York");
+  } finally { global.fetch = originalFetch; }
+});
+
+test("candidate Add to Calendar leaves time blank without a trustworthy extracted timezone", async () => {
+  const guildId = `candidate-prefill-blank-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = store.createOrGetCalendarCandidate({
+    guildId, title: "Date Only", proposedEventDate: "2026-12-01", sourceUrl: "https://official.example/date-only",
+  }).candidate;
+  const add = managerInteraction(guildId, client, `harmony-manager:candidate:add:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(add);
+  const values = Object.fromEntries(add.modal.components.map((row) => [row.components[0].data.custom_id, row.components[0].data.value || ""]));
+  assert.equal(values["event-date"], "2026-12-01");
+  assert.equal(values["event-time"], "");
+});
+
 test("enrichment failure saves a candidate and leaves unsupported date/time missing", async () => {
   const guildId = `candidate-enrich-fail-${Date.now()}`;
   const { client } = setupGuild(guildId);
