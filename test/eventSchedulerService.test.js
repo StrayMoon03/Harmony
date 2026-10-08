@@ -1769,6 +1769,7 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
     createdBy: "admin",
   });
   const event = store.getEvent(guildId, eventId);
+  event.announcement_message = "Countdown event details";
   const source = require("../src/services/eventSchedulerService");
   const offsets = [259200, 86400, 3600];
   const items = source.calendarAnnouncementItems(event, offsets);
