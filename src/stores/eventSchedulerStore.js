@@ -200,7 +200,7 @@ function findCandidateCalendarMatches(guildId, candidate) {
   });
 }
 
-function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
+function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
   const normalizedUrl = normalizeCandidateUrl(sourceUrl);
   if (!normalizedUrl && !discordEventId) throw new Error('A complete http(s) source link is required.');
   const dedupeKey = normalizedUrl ? `url:${normalizedUrl}` : `discord:${discordEventId}`;
@@ -222,11 +222,11 @@ function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt =
   const now = new Date().toISOString();
   const result = db.prepare(`
     INSERT INTO calendar_candidates (
-      guild_id, title, proposed_event_at, proposed_event_date, proposed_event_timezone,
+      guild_id, title, proposed_event_at, proposed_event_date, proposed_event_end_date, proposed_event_timezone,
       source_url, source_url_normalized, source_type, source_provider, source_metadata, submitter_id, submitted_note,
       discord_event_id, dedupe_key, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
   return { candidate: getCalendarCandidate(guildId, Number(result.lastInsertRowid)), duplicate: false, duplicateReason: null };
 }
 

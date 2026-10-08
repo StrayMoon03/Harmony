@@ -1218,6 +1218,7 @@ function scheduledEventDateLabel(event) {
 }
 
 function candidateDateLabel(candidate) {
+  if (candidate?.proposed_event_date && candidate?.proposed_event_end_date) return `${candidate.proposed_event_date} – ${candidate.proposed_event_end_date}`;
   if (candidate?.proposed_event_at) return `<t:${Math.floor(new Date(candidate.proposed_event_at).getTime() / 1000)}:F>`;
   return candidate?.proposed_event_date || "Not provided";
 }
@@ -1252,7 +1253,10 @@ function candidateReviewPayload(candidate, matches) {
     `Source: ${candidate.source_url || "Not provided"}`,
     `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
     `Harmony extracted title: ${candidate.title || "Not available"}`,
-    `Harmony extracted date/time: ${candidateDateLabel(candidate)}${candidate.proposed_event_timezone ? ` (${candidate.proposed_event_timezone})` : ""}`,
+    `Harmony extracted start date: ${candidate.proposed_event_date || "Not provided"}`,
+    `Harmony extracted end date: ${candidate.proposed_event_end_date || "Not provided"}`,
+    `Harmony extracted timezone: ${candidate.proposed_event_timezone || "Not provided"}`,
+    `Event time: ${candidate.proposed_event_at ? candidateLocalTime(candidate) : "Not provided"}`,
     `Source/provider: ${candidate.source_provider || "Not identified"}${candidate.source_metadata ? ` (${candidate.source_metadata})` : ""}`,
     `Still missing: ${[!candidate.title && "event title", !candidate.proposed_event_date && "event date", !candidate.proposed_event_at && "event time"].filter(Boolean).join(", ") || "nothing obvious"}`,
     `Note: ${candidate.submitted_note || "None"}`,
