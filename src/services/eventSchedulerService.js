@@ -596,7 +596,7 @@ function calendarAnnouncementItems(event, offsets) {
   const now = Date.now();
   return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
-    message: [formatAnnouncementCountdown(offset), event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`].filter(Boolean).join("\\n"),
+    message: [formatAnnouncementCountdown(offset), event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`].filter(Boolean).join("\n"),
   })).filter((item) => new Date(item.scheduledFor).getTime() > now);
 }
 
