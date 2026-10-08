@@ -692,11 +692,13 @@ async function ensureUnderSizeLimit(filePath, maxBytes) {
     }
   }
 
-  throw new Error(
+  const error = new Error(
     `Could not compress video under Discord limit (${limitMb.toFixed(
       0
     )} MB) after all size tiers`
   );
+  error.code = "HARMONY_MEDIA_TOO_LARGE";
+  throw error;
 }
 
 /** Default Harmony accent (blue left bar on the media card embed). */
