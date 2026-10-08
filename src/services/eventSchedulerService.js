@@ -1222,6 +1222,18 @@ function candidateDateLabel(candidate) {
   return candidate?.proposed_event_date || "Not provided";
 }
 
+function candidateLocalTime(candidate) {
+  if (!candidate?.proposed_event_at || !validTimezone(candidate.proposed_event_timezone)) return "";
+  const date = new Date(candidate.proposed_event_at);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: candidate.proposed_event_timezone, hour12: false, hour: "2-digit", minute: "2-digit",
+  }).formatToParts(date)
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
+}
+
 function candidateReviewComponents(candidate, matches) {
   const components = [];
   if (matches.length) components.push(new ActionRowBuilder().addComponents(
@@ -1628,7 +1640,7 @@ async function handleManagerInteraction(interaction) {
       const fields = [
         ["title", "Event title", candidate.title || "", true, 120],
         ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
-        ["event-time", "Event time HH:MM (blank = all-day)", "", false, 5],
+        ["event-time", "Event time HH:MM (blank = all-day)", candidateLocalTime(candidate), false, 5],
         ["event-timezone", "Event timezone", candidate.proposed_event_timezone || "America/New_York", true, 80],
         ["description", "Details (optional)", candidate.submitted_note || "", false, 500],
       ];
