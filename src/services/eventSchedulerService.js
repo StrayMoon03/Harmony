@@ -108,6 +108,11 @@ function managerPanelComponents(calendarType) {
     new ButtonBuilder().setCustomId(`${prefix}:edit`).setLabel("✏️ Edit Event").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${prefix}:cancel`).setLabel("❌ Cancel Event").setStyle(ButtonStyle.Danger)
   );
+  if (calendarType === "community") {
+    return [row, new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
+    )];
+  }
   return [row];
 }
 
@@ -1364,6 +1369,31 @@ function reconciliationPayload(event) {
   return { content, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:reviewnative:${event.id}`).setLabel("Review Event").setStyle(ButtonStyle.Primary))], allowedMentions: { parse: [] } };
 }
 
+function nativeEventSelectionLabel(event) {
+  const when = event?.scheduledStartAt
+    ? scheduledEventDateLabel(event).replace(/^When:\s*/, "")
+    : "date pending";
+  return `${event?.name || "Untitled Discord event"} • ${when}`.slice(0, 100);
+}
+
+function nativeEventSelectionMenu(events) {
+  return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId("harmony-manager:community:findnativeselect")
+    .setPlaceholder("Choose an existing Discord Scheduled Event")
+    .addOptions(events.slice(0, 25).map((event) => ({
+      label: nativeEventSelectionLabel(event),
+      value: String(event.id),
+    })) ))];
+}
+
+async function fetchExistingNativeEvents(guild) {
+  const fetched = await guild?.scheduledEvents?.fetch?.();
+  const events = fetched?.values ? [...fetched.values()] : Array.isArray(fetched) ? fetched : [];
+  return events
+    .filter((event) => event?.id && event?.name && event?.scheduledStartAt && event.status !== GuildScheduledEventStatus.Canceled)
+    .sort((left, right) => left.scheduledStartAt.getTime() - right.scheduledStartAt.getTime());
+}
+
 function reconciliationReviewPayload(event, candidates) {
   return {
     content: `${reconciliationPayload(event).content}\n\nChoose what Harmony should do with this event:`,
@@ -1709,6 +1739,44 @@ async function handleManagerInteraction(interaction) {
   }
   const settings = store.getCalendarChannels(interaction.guildId) || {};
   const calendarChannelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
+
+  if (calendarType === "community" && action === "findnative" && interaction.isButton()) {
+    const events = await fetchExistingNativeEvents(interaction.guild);
+    if (!events.length) {
+      await interaction.reply({ content: "Harmony could not find any active Discord Scheduled Events to reconcile.", flags: 64 });
+      return;
+    }
+    await interaction.reply({ content: "Choose the existing Discord Scheduled Event to reconcile. The native event will not be changed.", components: nativeEventSelectionMenu(events), flags: 64 });
+    return;
+  }
+
+  if (calendarType === "community" && action === "findnativeselect" && interaction.isStringSelectMenu()) {
+    const nativeId = interaction.values[0];
+    let native;
+    try {
+      native = await interaction.guild?.scheduledEvents?.fetch(nativeId);
+    } catch {
+      native = null;
+    }
+    if (!native) {
+      await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 });
+      return;
+    }
+    const linked = store.getEventByDiscordId(interaction.guildId, nativeId);
+    if (linked) {
+      await interaction.reply({ content: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.`, flags: 64 });
+      return;
+    }
+    const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, nativeId);
+    if (reconciliation && reconciliation.status !== "open") {
+      await interaction.reply({ content: "That Discord Scheduled Event has already been reviewed by Harmony. No duplicate calendar event was created.", flags: 64 });
+      return;
+    }
+    if (!reconciliation) store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
+    const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
+    await interaction.reply(reconciliationReviewPayload(native, candidates));
+    return;
+  }
 
   if (calendarType === "community" && action === "reviewnative" && interaction.isButton()) {
     const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, eventId);
