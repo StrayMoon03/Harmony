@@ -5,6 +5,7 @@ const {
   sendStandaloneNotice,
   deleteOriginalAfterSuccess,
 } = require("../modules/media/messageLifecycle");
+const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
 const fs = require("node:fs/promises");
 const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -1187,19 +1188,29 @@ async function processMediaMessage(message, lifecycle) {
   }
 }
 
+function mediaLifecycleCutoffMs(content) {
+  return findFacebookLinks(content).length ? FACEBOOK_LIFECYCLE_CUTOFF_MS : undefined;
+}
+
 async function handleMediaMessage(message) {
   if (message.author.bot) return;
   const finders = [findInstagramLinks, findFacebookLinks, findTikTokLinks, findXLinks, findYouTubeLinks, findThreadsLinks];
   if (!finders.some((find) => find(message.content).length)) return;
+  // Facebook's exact-post browser is deliberately serialized so concurrent
+  // shares cannot compete for the same browser session. Include that bounded
+  // queue time in Facebook's lifecycle window; the global 20-second cutoff
+  // remains unchanged for every other platform.
+  const cutoffMs = mediaLifecycleCutoffMs(message.content);
   return withMediaLifecycle(
     message,
     (lifecycle) => processMediaMessage(message, lifecycle),
-    { onTimeout: (error) => logMediaError(message, error) }
+    { cutoffMs, onTimeout: (error) => logMediaError(message, error) }
   );
 }
 
 module.exports = {
   handleMediaMessage,
+  mediaLifecycleCutoffMs,
   sendAlreadySharedAndCleanup,
   uploadFacebookMediaOrPreserveOriginal,
 };
