@@ -20,11 +20,12 @@ const { enrichCalendarCandidate } = require("./calendarCandidateEnrichment");
 const birthdayStore = require("../stores/birthdayStore");
 const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 const { randomUUID } = require("node:crypto");
-const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences } = require("./recurrenceService");
+const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences } = require("./recurrenceService");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
 const NATIVE_DELETE_MARKER_TTL_MS = 5 * 60 * 1000;
 const MAX_ANNOUNCEMENTS = 12;
+const NATIVE_RECURRENCE_MODE = 2;
 const HEADER = /^harmony\s+event\b/i;
 const CALENDAR_CATEGORIES = ["birthday", "content", "concert", "stream", "release", "video_call", "appearance", "community", "shopping", "other"];
 const CALENDAR_CATEGORY_ICONS = {
@@ -590,6 +591,22 @@ function formatAnnouncementCountdown(offsetSeconds) {
   return null;
 }
 
+function normalizeCalendarAnnouncementBody(value) {
+  return String(value || "")
+    .replace(/@everyone/gi, "")
+    .replace(/^\s+|\s+$/g, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function calendarAnnouncementMessage(event, offsetSeconds = null, body = null) {
+  const lines = ["@everyone"];
+  if (offsetSeconds != null) lines.push(formatAnnouncementCountdown(offsetSeconds));
+  const cleanBody = normalizeCalendarAnnouncementBody(body == null ? event?.announcement_message : body);
+  if (cleanBody) lines.push(cleanBody);
+  else lines.push(`📅 Reminder: **${event?.title || "Calendar event"}**${event?.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`);
+  return lines.filter(Boolean).join("\n");
+}
+
 function calendarAnnouncementItems(event, offsets) {
   if (event?.all_day) return [];
   const start = event?.event_at
@@ -601,7 +618,7 @@ function calendarAnnouncementItems(event, offsets) {
   const now = Date.now();
   return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
-    message: ["@everyone", formatAnnouncementCountdown(offset), event.announcement_message || `📅 Reminder: **${event.title}**${event.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`].filter(Boolean).join("\n"),
+    message: calendarAnnouncementMessage(event, offset),
   })).filter((item) => new Date(item.scheduledFor).getTime() > now);
 }
 
@@ -628,7 +645,7 @@ async function sendImmediateCalendarAnnouncement(channel, event, guildId, messag
   }
   const botMember = channel.guild?.members?.me;
   const permissions = botMember && typeof channel.permissionsFor === "function" ? channel.permissionsFor(botMember) : null;
-  const missing = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+  const missing = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.MentionEveryone]
     .filter((permission) => permissions && !permissions.has(permission));
   if (missing.length) {
     console.warn(`[scheduler-announcements] immediate-permission-denied event=${event?.id || "unknown"} channel=${channel.id || "unknown"} missing=${missing.join(",")}`);
@@ -637,9 +654,9 @@ async function sendImmediateCalendarAnnouncement(channel, event, guildId, messag
   const components = event.discord_event_id ? [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${guildId}/${event.discord_event_id}`))] : [];
   try {
     const sent = await channel.send({
-      content: [message, event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"),
+      content: [calendarAnnouncementMessage(event, null, message), event.event_channel_id ? `Event channel: <#${event.event_channel_id}>` : null].filter(Boolean).join("\n"),
       components,
-      allowedMentions: { parse: [] },
+      allowedMentions: { parse: ["everyone"] },
     });
     const sentChannelId = sent?.channelId || sent?.channel?.id || null;
     if (!sent?.id || (channel.id && sentChannelId !== channel.id)) {
@@ -684,7 +701,12 @@ async function beginCanonicalAnnouncementFlow(interaction, event, eventIds = [ev
 }
 
 function applyAnnouncementConfig(guildId, event, scope, offsets, channelId) {
-  return announcementTargets(guildId, event, scope).map((item) => persistCalendarAnnouncements(guildId, item, offsets, channelId));
+  return announcementTargets(guildId, event, scope).map((item) => {
+    if (Number(item.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+      return store.mergeEventAnnouncements(guildId, item.id, channelId, offsets, calendarAnnouncementItems({ ...item, announcement_message: event.announcement_message }, offsets), event.announcement_message);
+    }
+    return persistCalendarAnnouncements(guildId, item, offsets, channelId);
+  });
 }
 
 function recurrenceOccurrences(draft) {
@@ -771,6 +793,74 @@ async function saveManagerEvent(interaction, calendarType, draft, metadata = {},
 async function syncChangedNativeEvents(client, events) {
   for (const event of events) {
     if (event.discord_event_id && !event.all_day) await syncNativeScheduledEvent(client, event).catch((error) => console.error("Linked recurring Discord event sync failed:", error));
+  }
+}
+
+function nativeRecurrencePayload(nativeEvent) {
+  const rule = nativeEvent?.recurrenceRule;
+  if (!rule) return null;
+  return JSON.stringify({
+    source: "discord",
+    startAt: rule.startAt?.toISOString?.() || nativeEvent.scheduledStartAt?.toISOString?.() || null,
+    endAt: rule.endAt?.toISOString?.() || null,
+    frequency: Number(rule.frequency),
+    interval: Number(rule.interval) || 1,
+    byWeekday: rule.byWeekday ? [...rule.byWeekday].map(Number) : null,
+    byNWeekday: rule.byNWeekday ? [...rule.byNWeekday] : null,
+    byMonth: rule.byMonth ? [...rule.byMonth].map(Number) : null,
+    byMonthDay: rule.byMonthDay ? [...rule.byMonthDay].map(Number) : null,
+    byYearDay: rule.byYearDay ? [...rule.byYearDay].map(Number) : null,
+    count: rule.count == null ? null : Number(rule.count),
+  });
+}
+
+function parseNativeRecurrence(event) {
+  try {
+    const parsed = JSON.parse(event?.recurrence_rule || "null");
+    return parsed?.source === "discord" ? parsed : null;
+  } catch { return null; }
+}
+
+function nativeSeriesOccurrences(event, until = null) {
+  const rule = parseNativeRecurrence(event);
+  if (!rule) return [];
+  const anchorMs = Date.parse(rule.startAt || event.event_at);
+  const horizon = until || new Date(Math.max(Date.now(), anchorMs) + 180 * 24 * 60 * 60 * 1000);
+  return generateDiscordRecurringOccurrences({
+    startAt: rule.startAt || event.event_at,
+    endAt: event.event_end_at,
+    recurrenceRule: rule,
+    until: horizon,
+  });
+}
+
+function materializeNativeSeriesAnnouncements(guildId, anchor, occurrences) {
+  const offsets = announcementOffsetsFromEvent(anchor);
+  if (!offsets.length || !anchor.announcement_channel_id) return;
+  for (const occurrence of occurrences) {
+    const target = store.getSeriesEvent(guildId, anchor.recurrence_series_id, occurrence.occurrenceIndex);
+    if (!target) continue;
+    const items = calendarAnnouncementItems(target, offsets);
+    store.mergeEventAnnouncements(guildId, target.id, anchor.announcement_channel_id, offsets, items, anchor.announcement_message);
+  }
+}
+
+async function syncDiscordRecurringSeries(guildId, anchor, until = null) {
+  if (!anchor?.recurrence_series_id || Number(anchor.recurrence_native_enabled) !== NATIVE_RECURRENCE_MODE) return [];
+  const occurrences = nativeSeriesOccurrences(anchor, until);
+  for (const occurrence of occurrences) {
+    if (Number(occurrence.occurrenceIndex) === Number(anchor.recurrence_index)) continue;
+    store.createSeriesOccurrence(guildId, anchor.recurrence_series_id, occurrence, anchor);
+  }
+  materializeNativeSeriesAnnouncements(guildId, anchor, occurrences);
+  return occurrences;
+}
+
+async function syncDiscordRecurringSeriesWindow() {
+  const anchors = store.listNativeRecurringSeriesAnchors();
+  for (const anchor of anchors) {
+    try { await syncDiscordRecurringSeries(anchor.guild_id, anchor); }
+    catch (error) { console.error(`Discord recurring series projection failed for ${anchor.id}:`, error); }
   }
 }
 
@@ -1520,11 +1610,16 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
   if (!event.scheduledStartAt) return;
-  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime()) return;
+  const nextNativeRule = nativeRecurrencePayload(event);
+  const recurrenceChanged = Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule !== linked.recurrence_rule;
+  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime() && !recurrenceChanged) return;
   const timezone = linked.event_timezone || linked.timezone;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
   const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  store.updateEvent(event.guildId, linked.id, { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_end_at: event.scheduledEndAt?.toISOString() || null, event_date: `${localDate.year}-${localDate.month}-${localDate.day}` });
+  const changes = { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_end_at: event.scheduledEndAt?.toISOString() || null, event_date: `${localDate.year}-${localDate.month}-${localDate.day}` };
+  if (Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) changes.recurrence_rule = nextNativeRule;
+  const updated = store.updateEvent(event.guildId, linked.id, changes);
+  if (updated?.recurrence_series_id && Number(updated.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule) await syncDiscordRecurringSeries(event.guildId, updated).catch((error) => console.error("Discord recurring series update failed:", error));
   await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
 }
 
@@ -1545,8 +1640,27 @@ async function addNativeEventToCalendar(interaction, discordEventId) {
   if (store.getEventByDiscordId(interaction.guildId, discordEventId)) return store.getEventByDiscordId(interaction.guildId, discordEventId);
   const eventAt = event.scheduledStartAt.toISOString();
   const eventDate = eventAt.slice(0, 10);
-  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: event.description || null, createdBy: interaction.user.id });
+  const recurrenceRule = nativeRecurrencePayload(event);
+  const seriesId = recurrenceRule ? randomUUID() : null;
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: event.description || null, createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: null, recurrenceEndCount: null, recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
+  const saved = store.getEvent(interaction.guildId, id);
+  if (seriesId) await syncDiscordRecurringSeries(interaction.guildId, saved);
   return store.getEvent(interaction.guildId, id);
+}
+
+async function attachNativeRecurrence(interaction, nativeEvent, linked) {
+  const recurrenceRule = nativeRecurrencePayload(nativeEvent);
+  if (!recurrenceRule) return linked;
+  if (linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) return linked;
+  const seriesId = linked.recurrence_series_id || randomUUID();
+  const updated = store.updateEvent(interaction.guildId, linked.id, {
+    recurrence_series_id: seriesId,
+    recurrence_rule: recurrenceRule,
+    recurrence_index: 0,
+    recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+  });
+  await syncDiscordRecurringSeries(interaction.guildId, updated);
+  return store.getEvent(interaction.guildId, linked.id);
 }
 
 async function handleEventSchedulerInteraction(interaction) {
@@ -1840,6 +1954,9 @@ async function handleManagerInteraction(interaction) {
     const nativeId = eventId;
     if (store.getEventByDiscordId(interaction.guildId, nativeId)) { store.saveDiscordEventReconciliation(interaction.guildId, eventId, null, "linked"); await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
+    let native = null;
+    try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+    if (native) { try { await attachNativeRecurrence(interaction, native, store.getEvent(interaction.guildId, linked.id)); } catch (error) { console.error("Native recurrence adoption failed:", error); } }
     store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
     await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
     managerDrafts.set(draftKey(interaction, calendarType, `announce-${linked.id}`), { eventIds: [linked.id], linked: true, title: linked.title });
@@ -1865,6 +1982,9 @@ async function handleManagerInteraction(interaction) {
     if (!linked) { store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open"); await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
     if (store.getEventByDiscordId(interaction.guildId, nativeId)) { store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked"); await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
     store.updateEvent(interaction.guildId, linked.id, { discord_event_id: nativeId });
+    let native = null;
+    try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+    if (native) { try { await attachNativeRecurrence(interaction, native, store.getEvent(interaction.guildId, linked.id)); } catch (error) { console.error("Native recurrence adoption failed:", error); } }
     store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
     await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
     managerDrafts.set(draftKey(interaction, calendarType, `announce-${linked.id}`), { eventIds: [linked.id], linked: true, title: linked.title });
@@ -2059,6 +2179,7 @@ async function handleManagerInteraction(interaction) {
     const selected = interaction.values.includes("none") ? [] : interaction.values;
     const first = store.getEvent(interaction.guildId, eventIds[0]);
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
+    const announcementMessage = normalizeCalendarAnnouncementBody(draft.announcementMessage);
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     console.log(`[scheduler-announcements] timing-submit guild=${interaction.guildId} eventIds=${eventIds.join(",")} selected=${selected.join(",")} channel=${draft.announcementChannelId}`);
     let immediatePosted = false;
@@ -2067,15 +2188,19 @@ async function handleManagerInteraction(interaction) {
     for (const id of eventIds) {
       const event = store.getEvent(interaction.guildId, id);
       if (!event) continue;
-      const items = calendarAnnouncementItems({ ...event, announcement_message: draft.announcementMessage }, offsets);
-      store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, draft.announcementMessage);
+      const items = calendarAnnouncementItems({ ...event, announcement_message: announcementMessage }, offsets);
+      store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, announcementMessage);
       if (selected.includes("now") && !immediateAttempted) {
         immediateAttempted = true;
         const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
-        immediatePosted = await sendImmediateCalendarAnnouncement(channel, event, interaction.guildId, draft.announcementMessage);
+        immediatePosted = await sendImmediateCalendarAnnouncement(channel, event, interaction.guildId, announcementMessage);
         immediateFailed = !immediatePosted;
         console.log(`[scheduler-announcements] timing-immediate-result guild=${interaction.guildId} event=${event.id} channel=${draft.announcementChannelId} posted=${immediatePosted}`);
       }
+    }
+    const configured = store.getEvent(interaction.guildId, eventIds[0]);
+    if (configured && Number(configured.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+      applyAnnouncementConfig(interaction.guildId, configured, "series", offsets, draft.announcementChannelId);
     }
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
     const status = selected.includes("now") && immediateFailed && !immediatePosted
@@ -2692,6 +2817,9 @@ async function processScheduledAnnouncements(client) {
         new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${item.guild_id}/${item.discord_event_id}`)
       )] : [];
       const isCalendarReminder = /^@everyone\n✨ (?:Today!|Tomorrow!|\d+ (?:day|days|hour|hours) to go!)\n/.test(item.message || "");
+      const botMember = channel.guild?.members?.me;
+      const permissions = botMember && typeof channel.permissionsFor === "function" ? channel.permissionsFor(botMember) : null;
+      if (isCalendarReminder && permissions && !permissions.has(PermissionFlagsBits.MentionEveryone)) throw new Error("Harmony is missing the Mention Everyone permission in the announcement channel.");
       const sent = await channel.send({
         content: [item.message, item.event_channel_id ? `Event channel: <#${item.event_channel_id}>` : null, item.link || null].filter(Boolean).join("\n"),
         components,
@@ -2708,11 +2836,13 @@ async function processScheduledAnnouncements(client) {
 function startEventScheduler(client) {
   processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
   processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
+  syncDiscordRecurringSeriesWindow().catch((error) => console.error("Discord recurring series startup failed:", error));
   syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event startup failed:", error));
   const timer = setInterval(
     () => {
       processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
       processDiscordEventReminders(client).catch((error) => console.error("Discord event reminders failed:", error));
+      syncDiscordRecurringSeriesWindow().catch((error) => console.error("Discord recurring series window failed:", error));
       syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event window failed:", error));
     },
     CHECK_INTERVAL_MS
@@ -2729,7 +2859,11 @@ module.exports = {
   handleEventSchedulerInteraction,
   processScheduledAnnouncements,
   formatAnnouncementCountdown,
+  normalizeCalendarAnnouncementBody,
+  calendarAnnouncementMessage,
   calendarAnnouncementItems,
+  syncDiscordRecurringSeries,
+  syncDiscordRecurringSeriesWindow,
   startEventScheduler,
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,

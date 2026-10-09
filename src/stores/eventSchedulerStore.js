@@ -47,7 +47,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, recurrenceNativeEnabled ? 1 : 0, announcementChannelId, JSON.stringify(announcementOffsets || []), announcementMessage || null, createdBy, now);
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, typeof recurrenceNativeEnabled === "number" ? recurrenceNativeEnabled : (recurrenceNativeEnabled ? 1 : 0), announcementChannelId, JSON.stringify(announcementOffsets || []), announcementMessage || null, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -255,6 +255,51 @@ function listUnlinkedCommunityEvents(guildId) {
 
 function listSeriesEvents(guildId, seriesId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND recurrence_series_id = ? ORDER BY recurrence_index, event_date, id").all(guildId, seriesId);
+}
+
+function getSeriesEvent(guildId, seriesId, recurrenceIndex) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = ? AND cancelled_at IS NULL LIMIT 1").get(guildId, seriesId, recurrenceIndex) || null;
+}
+
+function listNativeRecurringSeriesAnchors() {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE recurrence_native_enabled = 2 AND recurrence_series_id IS NOT NULL AND discord_event_id IS NOT NULL AND cancelled_at IS NULL ORDER BY event_at, id").all();
+}
+
+function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
+  const existing = getSeriesEvent(guildId, seriesId, occurrence.occurrenceIndex);
+  if (existing) return existing;
+  try {
+    const id = createCalendarEvent({
+      guildId,
+      calendarChannelId: template.destination_channel_id || template.source_channel_id || null,
+      title: template.title,
+      link: template.link || "",
+      timezone: template.timezone || "UTC",
+      eventAt: occurrence.eventAt,
+      eventEndAt: occurrence.eventEndAt,
+      eventDate: occurrence.eventAt.slice(0, 10),
+      eventTimezone: template.event_timezone || template.timezone || "UTC",
+      eventLocation: template.event_location,
+      calendarType: template.calendar_type,
+      category: template.category,
+      member: template.member,
+      allDay: Boolean(template.all_day),
+      description: template.description,
+      createdBy: template.created_by,
+      calendarEventType: template.calendar_event_type,
+      eventChannelId: template.event_channel_id,
+      recurrenceSeriesId: seriesId,
+      recurrenceRule: template.recurrence_rule,
+      recurrenceIndex: occurrence.occurrenceIndex,
+      recurrenceEndDate: template.recurrence_end_date,
+      recurrenceEndCount: template.recurrence_end_count,
+      recurrenceNativeEnabled: false,
+      announcementChannelId: template.announcement_channel_id,
+      announcementOffsets: (() => { try { return JSON.parse(template.announcement_offsets || "[]"); } catch { return []; } })(),
+      announcementMessage: template.announcement_message,
+    });
+    return getEvent(guildId, id);
+  } catch (error) { throw error; }
 }
 
 function listRecurringNativeCandidates(nowIso, untilIso, limit = 100) {
@@ -491,6 +536,29 @@ function saveEventAnnouncements(guildId, eventId, channelId, offsets, items, ann
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
+// Series projection uses this non-destructive variant. It never deletes or
+// rewrites existing scheduled rows, so already-sent/manual reminders remain
+// authoritative while missing future reminders are filled in idempotently.
+function mergeEventAnnouncements(guildId, eventId, channelId, offsets, items, announcementMessage = undefined) {
+  const db = getDb();
+  const event = getEvent(guildId, eventId);
+  if (!event) return null;
+  const normalized = [...new Set((offsets || []).map(Number).filter((value) => [604800, 259200, 86400, 3600].includes(value)))].sort((a, b) => b - a);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (announcementMessage !== undefined) db.prepare("UPDATE scheduled_events SET announcement_channel_id = ?, announcement_offsets = ?, announcement_message = ? WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL").run(channelId || null, JSON.stringify(normalized), announcementMessage || null, guildId, eventId);
+    else db.prepare("UPDATE scheduled_events SET announcement_channel_id = ?, announcement_offsets = ? WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL").run(channelId || null, JSON.stringify(normalized), guildId, eventId);
+    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, status, created_at) SELECT ?, ?, ?, 'pending', ? WHERE NOT EXISTS (SELECT 1 FROM scheduled_announcements WHERE event_id = ? AND scheduled_for = ? AND status <> 'cancelled')");
+    const now = new Date().toISOString();
+    for (const item of items || []) {
+      if (event.event_at && item.scheduledFor === event.event_at) continue;
+      insert.run(eventId, item.scheduledFor, item.message, now, eventId, item.scheduledFor);
+    }
+    db.exec("COMMIT");
+    return getEvent(guildId, eventId);
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
 function getDiscordEventReconciliation(guildId, discordEventId) {
   return getDb().prepare("SELECT * FROM discord_event_reconciliations WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId) || null;
 }
@@ -564,6 +632,9 @@ module.exports = {
   decideCalendarCandidate,
   listUnlinkedCommunityEvents,
   listSeriesEvents,
+  getSeriesEvent,
+  listNativeRecurringSeriesAnchors,
+  createSeriesOccurrence,
   listRecurringNativeCandidates,
   listAnnouncements,
   addAnnouncement,
@@ -578,6 +649,7 @@ module.exports = {
   markSent,
   markFailed,
   saveEventAnnouncements,
+  mergeEventAnnouncements,
   getDiscordEventReconciliation,
   saveDiscordEventReconciliation,
   claimDiscordEventReconciliation,
