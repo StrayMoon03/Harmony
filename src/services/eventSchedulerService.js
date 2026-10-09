@@ -2618,7 +2618,7 @@ async function processScheduledAnnouncements(client) {
       const components = item.discord_event_id ? [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${item.guild_id}/${item.discord_event_id}`)
       )] : [];
-      const isCalendarReminder = item.message?.startsWith("@everyone\n");
+      const isCalendarReminder = /^@everyone\n✨ (?:Today!|Tomorrow!|\d+ (?:day|days|hour|hours) to go!)\n/.test(item.message || "");
       const sent = await channel.send({
         content: [item.message, item.event_channel_id ? `Event channel: <#${item.event_channel_id}>` : null, item.link || null].filter(Boolean).join("\n"),
         components,
