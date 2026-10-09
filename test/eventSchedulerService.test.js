@@ -23,11 +23,14 @@ const {
   markPendingNativeDelete,
   announcementChannelMenu,
   sendImmediateCalendarAnnouncement,
+  addNativeEventToCalendar,
+  syncDiscordRecurringSeries,
+  normalizeCalendarAnnouncementBody,
   processScheduledAnnouncements,
   formatAnnouncementCountdown,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
-const { normalizeRecurrenceRule, generateRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
+const { normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
 
 test("Youtiful Stays event types use the approved custom emoji set", () => {
   assert.deepEqual(YOUTIFUL_EVENT_TYPES, ["kdrama", "chans_room", "skz_code", "chat_only", "concert_stream", "games", "birthday", "other"]);
@@ -1916,5 +1919,81 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
     "@everyone\n✨ 3 days to go!\nCountdown event details",
     "@everyone\n✨ Tomorrow!\nCountdown event details",
     "@everyone\n✨ 1 hour to go!\nCountdown event details",
+  ]);
+});
+
+test("Discord recurrence rules expand into deterministic Harmony occurrences without native writes", () => {
+  const occurrences = generateDiscordRecurringOccurrences({
+    startAt: "2099-10-02T23:00:00.000Z",
+    endAt: "2099-10-03T00:00:00.000Z",
+    recurrenceRule: { frequency: 2, interval: 1, byWeekday: [4], count: 3 },
+  });
+  assert.deepEqual(occurrences.map((item) => item.eventAt), [
+    "2099-10-02T23:00:00.000Z", "2099-10-09T23:00:00.000Z", "2099-10-16T23:00:00.000Z",
+  ]);
+});
+
+test("adopted Discord recurring events project future calendar rows and reminders idempotently", async () => {
+  const guildId = `native-series-${Date.now()}`;
+  const native = {
+    guildId,
+    id: "native-recurring-series",
+    name: "Recurring Watch Party",
+    description: "Series description",
+    scheduledStartAt: new Date("2099-10-02T23:00:00.000Z"),
+    scheduledEndAt: new Date("2099-10-03T00:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-10-02T23:00:00.000Z"), endAt: null, frequency: 2, interval: 1, byWeekday: [4], byNWeekday: null, byMonth: null, byMonthDay: null, byYearDay: null, count: 3 },
+  };
+  let nativeCreates = 0;
+  const guild = { scheduledEvents: { fetch: async () => native, create: async () => { nativeCreates += 1; throw new Error("must not create native events"); } } };
+  const interaction = { guildId, user: { id: "admin" }, guild };
+  const anchorId = await addNativeEventToCalendar(interaction, native.id);
+  const anchor = store.getEvent(guildId, anchorId.id);
+  assert.equal(anchor.discord_event_id, native.id);
+  assert.equal(Number(anchor.recurrence_native_enabled), 2);
+  assert.equal(JSON.parse(anchor.recurrence_rule).source, "discord");
+  assert.equal(store.listSeriesEvents(guildId, anchor.recurrence_series_id).length, 3);
+  assert.deepEqual(store.listSeriesEvents(guildId, anchor.recurrence_series_id).map((row) => row.event_at), [
+    "2099-10-02T23:00:00.000Z", "2099-10-09T23:00:00.000Z", "2099-10-16T23:00:00.000Z",
+  ]);
+
+  const firstReminder = store.saveEventAnnouncements(guildId, anchor.id, "cinema", [86400], [
+    { scheduledFor: "2099-10-01T23:00:00.000Z", message: "@everyone\n✨ Tomorrow!\nWatch together" },
+  ], "Watch together");
+  const firstRow = store.listAnnouncements(anchor.id)[0];
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  const rows = store.listSeriesEvents(guildId, anchor.recurrence_series_id);
+  assert.equal(rows.length, 3);
+  assert.equal(store.listAnnouncements(anchor.id)[0].id, firstRow.id);
+  assert.equal(store.listAnnouncements(anchor.id)[0].scheduled_for, firstRow.scheduled_for);
+  assert.equal(store.listAnnouncements(rows[1].id).length, 1);
+  assert.equal(store.listAnnouncements(rows[2].id).length, 1);
+  assert.equal(nativeCreates, 0);
+  assert.ok(firstReminder);
+});
+
+test("Announce Now automatically sends exactly one real everyone mention", async () => {
+  const sent = [];
+  const channel = {
+    id: "cinema",
+    isTextBased: () => true,
+    isSendable: () => true,
+    send: async (payload) => { sent.push(payload); return { id: "msg", channelId: "cinema" }; },
+  };
+  const event = { id: 1, title: "K-Drama", event_channel_id: null, discord_event_id: null };
+  assert.equal(normalizeCalendarAnnouncementBody("@everyone\nDon't forget!"), "Don't forget!");
+  assert.equal(await sendImmediateCalendarAnnouncement(channel, event, "guild", "@everyone\nDon't forget!"), true);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /^@everyone\nDon't forget!/);
+  assert.equal((sent[0].content.match(/@everyone/g) || []).length, 1);
+  assert.deepEqual(sent[0].allowedMentions, { parse: ["everyone"] });
+});
+
+test("announcement timing keeps the event's non-midnight instant when subtracting offsets", () => {
+  const event = { event_at: "2099-10-03T19:00:00.000Z", title: "Timed event", announcement_message: "Details" };
+  const items = require("../src/services/eventSchedulerService").calendarAnnouncementItems(event, [259200, 86400, 3600]);
+  assert.deepEqual(items.map((item) => item.scheduledFor), [
+    "2099-09-30T19:00:00.000Z", "2099-10-02T19:00:00.000Z", "2099-10-03T18:00:00.000Z",
   ]);
 });

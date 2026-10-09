@@ -79,4 +79,55 @@ function generateRecurringOccurrences({ startDate, startTime = "", timezone = nu
   return output;
 }
 
-module.exports = { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences };
+// Discord stores a recurring Scheduled Event as one native object plus a
+// recurrence rule.  discord.js does not expose expanded occurrences, so keep
+// the projection deliberately local, bounded, and deterministic.
+function generateDiscordRecurringOccurrences({ startAt, endAt = null, recurrenceRule, until = null, maxOccurrences = MAX_RECURRENCE_OCCURRENCES }) {
+  const start = new Date(startAt);
+  if (Number.isNaN(start.getTime())) return [];
+  const rule = recurrenceRule || {};
+  const frequency = Number(rule.frequency);
+  const interval = Math.max(1, Number(rule.interval) || 1);
+  const limit = Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(1, Number(maxOccurrences) || MAX_RECURRENCE_OCCURRENCES));
+  const horizon = until ? new Date(until) : new Date(Math.max(Date.now(), start.getTime()) + 180 * 24 * 60 * 60 * 1000);
+  const ruleEnd = rule.endAt ? new Date(rule.endAt) : null;
+  const last = ruleEnd && ruleEnd < horizon ? ruleEnd : horizon;
+  const count = Number.isInteger(rule.count) && rule.count > 0 ? rule.count : null;
+  const output = [];
+  const duration = endAt ? Math.max(0, new Date(endAt).getTime() - start.getTime()) : null;
+  const weekday = start.getUTCDay();
+  const discordWeekday = (weekday + 6) % 7; // Discord uses Monday=0, Sunday=6.
+  const byWeekday = Array.isArray(rule.byWeekday) && rule.byWeekday.length ? rule.byWeekday.map(Number) : [discordWeekday];
+  const byMonthDay = Array.isArray(rule.byMonthDay) && rule.byMonthDay.length ? rule.byMonthDay.map(Number) : [start.getUTCDate()];
+  const byMonth = Array.isArray(rule.byMonth) && rule.byMonth.length ? rule.byMonth.map(Number) : [start.getUTCMonth() + 1];
+  const byNWeekday = Array.isArray(rule.byNWeekday) ? rule.byNWeekday : [];
+  const seen = new Set();
+  const add = (date) => {
+    if (date < start || date > last || seen.has(date.toISOString())) return;
+    seen.add(date.toISOString());
+    output.push({ eventAt: date.toISOString(), eventEndAt: duration == null ? null : new Date(date.getTime() + duration).toISOString(), occurrenceIndex: output.length });
+  };
+  const cursor = new Date(start);
+  let safety = 0;
+  while (cursor <= last && output.length < limit && (!count || output.length < count) && safety < 20000) {
+    const day = cursor.getUTCDay();
+    const days = Math.floor((cursor.getTime() - start.getTime()) / 86400000);
+    const weeks = Math.floor(days / 7);
+    const months = (cursor.getUTCFullYear() - start.getUTCFullYear()) * 12 + cursor.getUTCMonth() - start.getUTCMonth();
+    const years = cursor.getUTCFullYear() - start.getUTCFullYear();
+    let matches = false;
+    if (frequency === 3) matches = days % interval === 0;
+    else if (frequency === 2) matches = weeks % interval === 0 && byWeekday.includes((day + 6) % 7);
+    else if (frequency === 1) {
+      const nthMatch = byNWeekday.some((item) => Number(item?.n) === Math.floor((cursor.getUTCDate() - 1) / 7) + 1 && Number(item?.day) === (day + 6) % 7);
+      matches = months >= 0 && months % interval === 0 && (byNWeekday.length ? nthMatch : byMonthDay.includes(cursor.getUTCDate()));
+    }
+    else if (frequency === 0) matches = years >= 0 && years % interval === 0 && byMonth.includes(cursor.getUTCMonth() + 1) && byMonthDay.includes(cursor.getUTCDate());
+    if (matches) add(new Date(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    safety += 1;
+  }
+  return output;
+}
+
+module.exports = { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences };
