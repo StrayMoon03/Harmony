@@ -855,7 +855,10 @@ function upcomingCalendarEvents(guildId, calendarType) {
   const now = new Date();
   const start = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
   const end = new Date(now.getTime() + 366 * 24 * 60 * 60 * 1000).toISOString();
-  return store.listCalendarEvents(guildId, calendarType, start, end);
+  // Linked native events remain editable even when Discord's recurring event
+  // has an initial scheduledStartAt in the past. The native event itself is
+  // still active; its discord_event_id is the durable eligibility signal.
+  return store.listEditableCalendarEvents(guildId, calendarType, start, end);
 }
 
 async function installScheduleManagers(guild) {

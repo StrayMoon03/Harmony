@@ -1064,6 +1064,27 @@ test("Youtiful edit panel persists details, timezone, type, and channel independ
   assert.equal(channel.responses[0].type, "update");
 });
 
+test("adopted recurring Discord events remain available in the normal Edit selector", async () => {
+  const guildId = `adopted-edit-visibility-${Date.now()}`;
+  const nativeId = "adopted-recurring-native";
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: null, title: "K-Drama with Us! US PST & Asia Friendly",
+    eventDate: "2020-10-01", eventAt: "2020-10-01T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC",
+    calendarType: "community", category: "kdrama", calendarEventType: "kdrama", discordEventId: nativeId,
+    createdBy: "admin",
+  });
+  const edit = fakeInteraction({ customId: "harmony-manager:community:edit", kind: "button", guildId });
+  await handleEventSchedulerInteraction(edit);
+  const selector = edit.responses[0].payload.components[0].toJSON().components[0];
+  assert.ok(selector.options.some((option) => option.value === String(eventId)));
+
+  const select = fakeInteraction({ customId: "harmony-manager:community:editselect", kind: "select", guildId, values: [String(eventId)] });
+  await handleEventSchedulerInteraction(select);
+  assert.equal(select.responses[0].type, "update");
+  assert.match(select.responses[0].payload.content, /EDIT EVENT/);
+  assert.equal(store.getEvent(guildId, eventId).discord_event_id, nativeId);
+});
+
 test("Youtiful edit announcements enter the canonical timing flow and deliver Announce Now to Cinema", async () => {
   const guildId = `youtiful-edit-announcements-${Date.now()}`;
   const eventId = store.createCalendarEvent({
