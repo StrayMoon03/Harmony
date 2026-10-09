@@ -108,6 +108,11 @@ function managerPanelComponents(calendarType) {
     new ButtonBuilder().setCustomId(`${prefix}:edit`).setLabel("✏️ Edit Event").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${prefix}:cancel`).setLabel("❌ Cancel Event").setStyle(ButtonStyle.Danger)
   );
+  if (calendarType === "community") {
+    return [row, new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
+    )];
+  }
   return [row];
 }
 
@@ -1364,6 +1369,31 @@ function reconciliationPayload(event) {
   return { content, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:community:reviewnative:${event.id}`).setLabel("Review Event").setStyle(ButtonStyle.Primary))], allowedMentions: { parse: [] } };
 }
 
+function nativeEventSelectionLabel(event) {
+  const when = event?.scheduledStartAt
+    ? scheduledEventDateLabel(event).replace(/^When:\s*/, "")
+    : "date pending";
+  return `${event?.name || "Untitled Discord event"} • ${when}`.slice(0, 100);
+}
+
+function nativeEventSelectionMenu(events) {
+  return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId("harmony-manager:community:findnativeselect")
+    .setPlaceholder("Choose an existing Discord Scheduled Event")
+    .addOptions(events.slice(0, 25).map((event) => ({
+      label: nativeEventSelectionLabel(event),
+      value: String(event.id),
+    })) ))];
+}
+
+async function fetchExistingNativeEvents(guild) {
+  const fetched = await guild?.scheduledEvents?.fetch?.();
+  const events = fetched?.values ? [...fetched.values()] : Array.isArray(fetched) ? fetched : [];
+  return events
+    .filter((event) => event?.id && event?.name && event?.scheduledStartAt && event.status !== GuildScheduledEventStatus.Canceled)
+    .sort((left, right) => left.scheduledStartAt.getTime() - right.scheduledStartAt.getTime());
+}
+
 function reconciliationReviewPayload(event, candidates) {
   return {
     content: `${reconciliationPayload(event).content}\n\nChoose what Harmony should do with this event:`,
@@ -1709,6 +1739,44 @@ async function handleManagerInteraction(interaction) {
   }
   const settings = store.getCalendarChannels(interaction.guildId) || {};
   const calendarChannelId = calendarType === "stray_kids" ? settings.stray_kids_channel_id : settings.community_channel_id;
+
+  if (calendarType === "community" && action === "findnative" && interaction.isButton()) {
+    const events = await fetchExistingNativeEvents(interaction.guild);
+    if (!events.length) {
+      await interaction.reply({ content: "Harmony could not find any active Discord Scheduled Events to reconcile.", flags: 64 });
+      return;
+    }
+    await interaction.reply({ content: "Choose the existing Discord Scheduled Event to reconcile. The native event will not be changed.", components: nativeEventSelectionMenu(events), flags: 64 });
+    return;
+  }
+
+  if (calendarType === "community" && action === "findnativeselect" && interaction.isStringSelectMenu()) {
+    const nativeId = interaction.values[0];
+    let native;
+    try {
+      native = await interaction.guild?.scheduledEvents?.fetch(nativeId);
+    } catch {
+      native = null;
+    }
+    if (!native) {
+      await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 });
+      return;
+    }
+    const linked = store.getEventByDiscordId(interaction.guildId, nativeId);
+    if (linked) {
+      await interaction.reply({ content: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.`, flags: 64 });
+      return;
+    }
+    const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, nativeId);
+    if (reconciliation && reconciliation.status !== "open") {
+      await interaction.reply({ content: "That Discord Scheduled Event has already been reviewed by Harmony. No duplicate calendar event was created.", flags: 64 });
+      return;
+    }
+    if (!reconciliation) store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
+    const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
+    await interaction.reply(reconciliationReviewPayload(native, candidates));
+    return;
+  }
 
   if (calendarType === "community" && action === "reviewnative" && interaction.isButton()) {
     const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, eventId);
@@ -2330,386 +2398,3 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
     const existing = store.getEvent(interaction.guildId, Number(eventId));
     if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
-    const updated = store.updateEvent(interaction.guildId, Number(eventId), {
-      title: draft.title,
-      event_date: draft.eventDate,
-      event_at: draft.eventAt,
-      event_timezone: draft.eventTimezone,
-      timezone: draft.timezone,
-      event_location: draft.eventLocation,
-      link: draft.link,
-      description: draft.description,
-      all_day: draft.allDay ? 1 : 0,
-      event_end_at: draft.eventEndAt,
-      category: interaction.values[0],
-    });
-    if (updated.discord_event_id && !updated.all_day) await syncNativeScheduledEvent(interaction.client, updated).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
-    if (calendarType === "stray_kids") {
-      managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...draft, existing, member: updated.member || null });
-      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
-      await interaction.update({ content: "Choose an optional Stray Kids member, or keep the current one.", components: editMemberComponents(eventId, updated.member) });
-    } else {
-      managerDrafts.delete(draftKey(interaction, calendarType, eventId));
-      await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after category edit failed:", refreshError));
-      await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
-    }
-    return;
-  }
-  if (action === "editmember" && interaction.isStringSelectMenu()) {
-    const draft = managerDrafts.get(draftKey(interaction, calendarType, eventId));
-    const existing = store.getEvent(interaction.guildId, Number(eventId));
-    if (!draft || !existing) { await interaction.update({ content: "That event edit expired.", components: [] }); return; }
-    const updated = store.updateEvent(interaction.guildId, Number(eventId), { member: interaction.values[0] === "none" ? null : interaction.values[0] });
-    managerDrafts.delete(draftKey(interaction, calendarType, eventId));
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, updated.event_date).catch((refreshError) => console.error("Published calendar refresh after member edit failed:", refreshError));
-    await interaction.update({ content: `✅ Updated calendar event **${draft.title}**.`, components: [] });
-    return;
-  }
-  if (action === "description" && interaction.isButton()) {
-    const existing = store.getEvent(interaction.guildId, Number(eventId));
-    if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:descriptionmodal:${eventId}`, "Edit description", [{ id: "description", label: "Short description", maxLength: 300, paragraph: true, value: existing.description }]));
-    return;
-  }
-  if (action === "descriptionmodal" && interaction.isModalSubmit()) {
-    const existing = store.getEvent(interaction.guildId, Number(eventId));
-    if (!existing || existing.calendar_type !== calendarType) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    store.updateEvent(interaction.guildId, Number(eventId), { description: interaction.fields.getTextInputValue("description").trim() || null });
-    await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, existing.event_date).catch(() => {});
-    await interaction.reply({ content: `Updated the description for calendar event #${eventId}.`, flags: 64 });
-    return;
-  }
-  if (action === "done" && interaction.isButton()) {
-    await interaction.update({ content: "✅ Calendar event changes saved.", components: [] });
-    return;
-  }
-  if (action === "cancelselect" && interaction.isStringSelectMenu()) {
-    const selected = Number(interaction.values[0]);
-    const event = store.getEvent(interaction.guildId, selected);
-    if (!event || event.calendar_type !== calendarType) { await interaction.update({ content: "That event is no longer available.", components: [] }); return; }
-    if (event.recurrence_series_id) await interaction.update({ content: `Cancel **${event.title}** — choose the scope:`, components: recurrenceCancelButtons(selected) });
-    else await interaction.update({ content: `Cancel **${event.title}**?`, components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelconfirm:${selected}`).setLabel("Confirm cancellation").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:cancelno`).setLabel("Keep event").setStyle(ButtonStyle.Secondary)
-    )] });
-    return;
-  }
-  if (action === "cancelscope" && interaction.isButton()) {
-    const event = store.getEvent(interaction.guildId, Number(parts[4]));
-    if (!event) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    const targets = await cancelRecurringEvents(interaction, event, parts[3]);
-    await interaction.update({ content: `Cancelled ${parts[3] === "series" ? "the entire series" : parts[3] === "future" ? "this and future occurrences" : "this occurrence"}.`, components: [] });
-    await cancelLinkedNativeEvents(interaction, targets);
-    await refreshRecurringMonths(interaction.client, interaction.guildId, targets).catch((error) => console.error("Calendar refresh after recurring cancellation failed:", error));
-    return;
-  }
-  if (action === "cancelconfirm" && interaction.isButton()) {
-    const event = store.getEvent(interaction.guildId, Number(eventId));
-    const removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
-    if (removed && event?.discord_event_id) await cancelLinkedNativeEvents(interaction, [event]);
-    if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
-    await interaction.update({ content: removed ? `Cancelled calendar event #${eventId}.` : "That event is no longer active.", components: [] });
-    return;
-  }
-  if (action === "cancelno" && interaction.isButton()) {
-    await interaction.update({ content: "Cancellation cancelled.", components: [] });
-    return;
-  }
-  if (action === "view" && interaction.isButton()) {
-    await interaction.showModal(managerModal(`harmony-manager:${calendarType}:viewmodal`, "View calendar", [{ id: "month", label: "Month YYYY-MM (blank = current)", maxLength: 7 }]));
-    return;
-  }
-  if (action === "viewmodal" && interaction.isModalSubmit()) {
-    const month = interaction.fields.getTextInputValue("month").trim() || new Date().toISOString().slice(0, 7);
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) { await interaction.reply({ content: "Month must be formatted as YYYY-MM.", flags: 64 }); return; }
-    await interaction.deferReply({ flags: 64 });
-    try {
-      const preview = await publishMonthlyCalendar(interaction.client, interaction.guildId, calendarType, month, { preview: true, interaction });
-      await interaction.followUp({ content: `Preview shown for ${month}. Publish or refresh the official calendar?`, components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`harmony-manager:${calendarType}:publish:${month}`).setLabel("Publish / Refresh").setStyle(ButtonStyle.Primary)
-      )], flags: 64 });
-      return preview;
-    } catch (error) { await interaction.editReply({ content: error.message, components: [] }); }
-    return;
-  }
-  if (action === "publish" && interaction.isButton()) {
-    const month = eventId;
-    try {
-      const result = await publishMonthlyCalendar(interaction.client, interaction.guildId, calendarType, month);
-      await interaction.update({ content: `Published ${calendarLabel(calendarType)} for ${month} (${result.messageIds.length} message${result.messageIds.length === 1 ? "" : "s"}).`, components: [] });
-    } catch (error) { await interaction.update({ content: error.message, components: [] }); }
-  }
-}
-
-function localToUtc(dateText, timeText, timezone) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText);
-  const clock = /^(\d{1,2}):(\d{2})$/.exec(timeText);
-  if (!match || !clock) return null;
-  const target = {
-    year: Number(match[1]), month: Number(match[2]), day: Number(match[3]),
-    hour: Number(clock[1]), minute: Number(clock[2]),
-  };
-  if (target.hour > 23 || target.minute > 59) return null;
-  const utcMillis = (year, monthIndex, day, hour, minute) => {
-    // Date.UTC maps years 0-99 to 1900-1999. Build the value with
-    // setUTCFullYear so a four-digit input year is never rewritten.
-    const date = new Date(0);
-    date.setUTCFullYear(year, monthIndex, day);
-    date.setUTCHours(hour, minute, 0, 0);
-    return date.getTime();
-  };
-  let value = utcMillis(target.year, target.month - 1, target.day, target.hour, target.minute);
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone, hour12: false, year: "numeric", month: "2-digit",
-    day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
-  for (let i = 0; i < 3; i += 1) {
-    const parts = Object.fromEntries(
-      formatter.formatToParts(new Date(value))
-        .filter((part) => part.type !== "literal")
-        .map((part) => [part.type, Number(part.value)])
-    );
-    if (parts.hour === 24) parts.hour = 0;
-    const shown = utcMillis(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
-    const wanted = utcMillis(target.year, target.month - 1, target.day, target.hour, target.minute);
-    value += wanted - shown;
-  }
-  const result = new Date(value);
-  const verified = Object.fromEntries(
-    formatter.formatToParts(result)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)])
-  );
-  if (verified.hour === 24) verified.hour = 0;
-  if (
-    verified.year !== target.year || verified.month !== target.month ||
-    verified.day !== target.day || verified.hour !== target.hour ||
-    verified.minute !== target.minute
-  ) return null;
-  return result;
-}
-
-function field(lines, name) {
-  const line = lines.find((item) => item.toLowerCase().startsWith(name.toLowerCase() + ":"));
-  return line ? line.slice(line.indexOf(":") + 1).trim() : "";
-}
-
-function parseEvent(content) {
-  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const title = field(lines, "title");
-  const link = field(lines, "link");
-  const destination = field(lines, "post in");
-  const timezone = field(lines, "timezone") || "America/New_York";
-  const channelMatch = /<#(\d+)>/.exec(destination);
-  const marker = lines.findIndex((line) => /^announcements\s*:/i.test(line));
-  if (!title || title.length > 120) throw new Error("Add a Title (120 characters or fewer).");
-  if (!/^https?:\/\/\S+$/i.test(link)) throw new Error("Add one complete http or https Link.");
-  if (!channelMatch) throw new Error("Use a Discord channel mention after Post in.");
-  if (!validTimezone(timezone)) throw new Error("That Timezone is not valid.");
-  if (marker < 0) throw new Error("Add an Announcements: section.");
-
-  const announcements = [];
-  for (const line of lines.slice(marker + 1)) {
-    const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})\s*\|\s*(.+)$/.exec(line);
-    if (!match) throw new Error("Each announcement must be: YYYY-MM-DD HH:MM | your message");
-    const when = localToUtc(match[1], match[2], timezone);
-    if (!when || Number.isNaN(when.getTime())) throw new Error("One announcement has an invalid date or time.");
-    if (when.getTime() <= Date.now()) throw new Error("Every announcement time must be in the future.");
-    if (match[3].length > 1800) throw new Error("Each message must be 1,800 characters or fewer.");
-    announcements.push({ scheduledFor: when.toISOString(), message: match[3] });
-  }
-  if (!announcements.length || announcements.length > MAX_ANNOUNCEMENTS) {
-    throw new Error(`Add between 1 and ${MAX_ANNOUNCEMENTS} announcements.`);
-  }
-  return { title, link, destinationChannelId: channelMatch[1], timezone, announcements };
-}
-
-async function handleEventSchedulerMessage(message) {
-  if (!message.guild || message.author.bot || !HEADER.test(message.content || "")) return false;
-  if (!isAdmin(message)) {
-    await message.reply({ content: "Only server admins can schedule Harmony announcements.", allowedMentions: { repliedUser: false } });
-    return true;
-  }
-
-  const cancel = /^harmony\s+event\s+cancel\s+(\d+)\s*$/i.exec(message.content.trim());
-  if (cancel) {
-    const removed = store.cancelEvent(message.guild.id, Number(cancel[1]), message.author.id);
-    await message.reply({ content: removed ? `Cancelled event #${cancel[1]}.` : "I could not find that active event.", allowedMentions: { repliedUser: false } });
-    return true;
-  }
-
-  if (/^harmony\s+event\s+list\s*$/i.test(message.content.trim())) {
-    const events = store.listEvents(message.guild.id);
-    const content = events.length
-      ? events.map((event) => `#${event.id} — **${event.title}** (${event.pending_count} upcoming)`).join("\n")
-      : "There are no upcoming scheduled events.";
-    await message.reply({ content, allowedMentions: { parse: [] } });
-    return true;
-  }
-
-  try {
-    const parsed = parseEvent(message.content);
-    const destination = message.guild.channels.cache.get(parsed.destinationChannelId) ||
-      await message.guild.channels.fetch(parsed.destinationChannelId).catch(() => null);
-    if (!destination?.isTextBased()) throw new Error("The Post in channel is unavailable.");
-    const me = message.guild.members.me;
-    const permissions = destination.permissionsFor(me);
-    if (!permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions?.has(PermissionFlagsBits.SendMessages)) {
-      throw new Error("Harmony cannot view and send messages in that Post in channel.");
-    }
-
-    const eventId = store.createEvent({
-      guildId: message.guild.id,
-      sourceChannelId: message.channel.id,
-      destinationChannelId: parsed.destinationChannelId,
-      title: parsed.title,
-      link: parsed.link,
-      timezone: parsed.timezone,
-      createdBy: message.author.id,
-      announcements: parsed.announcements,
-    });
-    const lines = parsed.announcements.map((item) =>
-      `• <t:${Math.floor(new Date(item.scheduledFor).getTime() / 1000)}:F> — ${item.message}`
-    );
-    await message.reply({
-      content: [
-        `✅ Event #${eventId} saved: **${parsed.title}**`,
-        `Destination: <#${parsed.destinationChannelId}>`,
-        `Link: ${parsed.link}`,
-        "",
-        ...lines,
-        "",
-        `Cancel with: ` + "`Harmony event cancel " + eventId + "`",
-      ].join("\n"),
-      allowedMentions: { parse: [] },
-    });
-    await message.react("✅").catch(() => {});
-  } catch (error) {
-    await message.reply({
-      content: [
-        `I could not save that event: **${error.message}**`,
-        "",
-        "Use:",
-        "`Harmony event`",
-        "`Title: Rock in Rio Replay`",
-        "`Link: https://example.com/event`",
-        "`Post in: #your-channel`",
-        "`Timezone: America/New_York`",
-        "`Announcements:`",
-        "`2026-10-01 20:00 | Rock in Rio is one week away!`",
-        "`2026-10-08 20:00 | Rock in Rio is starting now!`",
-      ].join("\n"),
-      allowedMentions: { repliedUser: false },
-    });
-  }
-  return true;
-}
-
-async function processScheduledAnnouncements(client) {
-  const due = store.dueAnnouncements(new Date().toISOString());
-  for (const item of due) {
-    if (!store.markSending(item.id)) continue;
-    try {
-      const guild = client.guilds.cache.get(item.guild_id) ||
-        await client.guilds.fetch(item.guild_id).catch(() => null);
-      const channel = guild && (guild.channels.cache.get(item.destination_channel_id) ||
-        await guild.channels.fetch(item.destination_channel_id).catch(() => null));
-      if (!channel?.isTextBased()) throw new Error("Destination channel is unavailable.");
-      const components = item.discord_event_id ? [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setLabel("View Event").setStyle(ButtonStyle.Link).setURL(`https://discord.com/events/${item.guild_id}/${item.discord_event_id}`)
-      )] : [];
-      const isCalendarReminder = /^@everyone\n✨ (?:Today!|Tomorrow!|\d+ (?:day|days|hour|hours) to go!)\n/.test(item.message || "");
-      const sent = await channel.send({
-        content: [item.message, item.event_channel_id ? `Event channel: <#${item.event_channel_id}>` : null, item.link || null].filter(Boolean).join("\n"),
-        components,
-        allowedMentions: { parse: isCalendarReminder ? ["everyone"] : [] },
-      });
-      store.markSent(item.id, sent.id);
-    } catch (error) {
-      store.markFailed(item.id, error.message);
-      console.error(`Scheduled event announcement ${item.id} failed:`, error);
-    }
-  }
-}
-
-function startEventScheduler(client) {
-  processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler startup failed:", error));
-  processDiscordEventReminders(client).catch((error) => console.error("Discord event reminder startup failed:", error));
-  syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event startup failed:", error));
-  const timer = setInterval(
-    () => {
-      processScheduledAnnouncements(client).catch((error) => console.error("Event scheduler failed:", error));
-      processDiscordEventReminders(client).catch((error) => console.error("Discord event reminders failed:", error));
-      syncRecurringNativeEventWindow(client).catch((error) => console.error("Recurring native event window failed:", error));
-    },
-    CHECK_INTERVAL_MS
-  );
-  timer.unref?.();
-}
-
-module.exports = {
-  parseEvent,
-  localToUtc,
-  validTimezone,
-  renderEventControls,
-  handleEventSchedulerMessage,
-  handleEventSchedulerInteraction,
-  processScheduledAnnouncements,
-  formatAnnouncementCountdown,
-  calendarAnnouncementItems,
-  startEventScheduler,
-  CALENDAR_CATEGORIES,
-  CALENDAR_CATEGORY_LABELS,
-  SKZOO_MEMBER_OPTIONS,
-  SKZOO_MEMBER_EMOJIS,
-  buildCalendarMessages,
-  publishMonthlyCalendar,
-  refreshPublishedCalendar,
-  installScheduleManagers,
-  managerPanelContent,
-  managerPanelComponents,
-  managerModal,
-  parseManagerDraft,
-  nativeEventEndTime,
-  syncNativeScheduledEvent,
-  managerCalendarType,
-  MANAGER_TYPES,
-  YOUTIFUL_EVENT_TYPES,
-  YOUTIFUL_EVENT_TYPE_ICONS,
-  YOUTIFUL_EVENT_TYPE_LABELS,
-  YOUTIFUL_TIMEZONE_OPTIONS,
-  SKZ_TIMEZONE_OPTIONS,
-  buildYoutifulCalendarMessages,
-  recurrenceOccurrences,
-  createYoutifulOccurrences,
-  applyRecurringChanges,
-  cancelRecurringEvents,
-  MAX_RECURRENCE_OCCURRENCES,
-  RECURRENCE_TYPES,
-  youtifulBirthdayEvents,
-  interestedStateSupport,
-  fetchInterestedMembers,
-  scheduledEventLink,
-  handleGuildScheduledEventCreate,
-  handleGuildScheduledEventUpdate,
-  handleGuildScheduledEventDelete,
-  registerScheduledEventListeners,
-  reconciliationPayload,
-  reconciliationReviewPayload,
-  markPendingNativeCreate,
-  clearPendingNativeCreate,
-  nativeCreateKey,
-  markPendingNativeDelete,
-  clearPendingNativeDelete,
-  nativeDeleteKey,
-  announcementChannelMenu,
-  sendImmediateCalendarAnnouncement,
-  CALENDAR_ANNOUNCEMENT_OPTIONS,
-  offerEventReminder,
-  handleReminderInteraction,
-  processDiscordEventReminders,
-  addNativeEventToCalendar,
-  submitCalendarCandidate,
-  candidateReviewPayload,
-  candidateNoticePayload,
-};
