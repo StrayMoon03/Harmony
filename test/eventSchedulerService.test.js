@@ -378,6 +378,8 @@ test("manager panels stay scoped to their calendar", () => {
     "harmony-manager:stray_kids:edit",
     "harmony-manager:stray_kids:cancel",
   ]);
+  const communityRows = managerPanelComponents("community").flatMap((row) => row.toJSON().components);
+  assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:findnative"));
 });
 
 test("manager modals allow blank optional fields", () => {
@@ -1309,6 +1311,92 @@ test("registered Discord Scheduled Event listener reconciles manual events and s
   assert.ok(linkedId);
   await client.listeners.get("guildScheduledEventCreate")({ guildId, id: "linked-native", name: "Harmony event", scheduledStartAt: new Date("2099-10-19T23:00:00Z") });
   assert.equal(sent.length, 1);
+});
+
+test("Find Discord Event lists existing native events and opens the existing reconciliation review", async () => {
+  const guildId = `find-native-${Date.now()}`;
+  const native = {
+    guildId,
+    id: "existing-recurring-native",
+    name: "Recurring Watch Party",
+    description: "Existing Discord event",
+    scheduledStartAt: new Date("2099-10-18T23:00:00Z"),
+    recurrenceRule: { frequency: 2, interval: 1 },
+  };
+  let createCalls = 0;
+  const nativeEvents = new Map([[native.id, native]]);
+  const guild = {
+    scheduledEvents: {
+      fetch: async (id) => id ? nativeEvents.get(id) : nativeEvents,
+      create: async () => { createCalls += 1; throw new Error("native creation must not be called"); },
+    },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+
+  const find = fakeInteraction({ customId: "harmony-manager:community:findnative", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(find);
+  assert.equal(find.responses[0].type, "reply");
+  assert.equal(find.responses[0].payload.flags, 64);
+  const selector = find.responses[0].payload.components[0].toJSON().components[0];
+  assert.equal(selector.custom_id, "harmony-manager:community:findnativeselect");
+  assert.equal(selector.options[0].value, native.id);
+  assert.match(selector.options[0].label, /Recurring Watch Party/);
+
+  const choose = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(choose);
+  assert.equal(choose.responses[0].type, "reply");
+  assert.equal(choose.responses[0].payload.flags, 64);
+  assert.deepEqual(choose.responses[0].payload.components[0].toJSON().components.map((component) => component.label), ["Add to Calendar", "Ignore"]);
+  assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "open");
+  assert.equal(native.id, "existing-recurring-native");
+  assert.deepEqual(native.recurrenceRule, { frequency: 2, interval: 1 });
+  assert.equal(createCalls, 0);
+});
+
+test("Find Discord Event routes Add to Calendar into canonical announcements without replacing the native event", async () => {
+  const guildId = `find-native-add-${Date.now()}`;
+  const native = { guildId, id: "existing-native-add", name: "Existing Event", scheduledStartAt: new Date("2099-10-19T23:00:00Z") };
+  const nativeEvents = new Map([[native.id, native]]);
+  let createCalls = 0;
+  const guild = {
+    channels: { cache: new Map(), fetch: async () => null },
+    scheduledEvents: {
+      fetch: async (id) => id ? nativeEvents.get(id) : nativeEvents,
+      create: async () => { createCalls += 1; throw new Error("native creation must not be called"); },
+    },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const find = fakeInteraction({ customId: "harmony-manager:community:findnative", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(find);
+  const selector = find.responses[0].payload.components[0].toJSON().components[0];
+  const choose = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(choose);
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+
+  const linked = store.getEventByDiscordId(guildId, native.id);
+  assert.ok(linked);
+  assert.equal(linked.discord_event_id, native.id);
+  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
+  assert.equal(createCalls, 0);
+  assert.deepEqual(native, { guildId, id: "existing-native-add", name: "Existing Event", scheduledStartAt: native.scheduledStartAt });
+});
+
+test("Find Discord Event refuses duplicate linking when the native event is already linked", async () => {
+  const guildId = `find-native-duplicate-${Date.now()}`;
+  const native = { guildId, id: "already-linked-native", name: "Already Linked", scheduledStartAt: new Date("2099-10-20T23:00:00Z") };
+  const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: native.name, eventDate: "2099-10-20", eventAt: native.scheduledStartAt.toISOString(), eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", discordEventId: native.id, createdBy: "admin" });
+  const nativeEvents = new Map([[native.id, native]]);
+  const guild = { scheduledEvents: { fetch: async (id) => id ? nativeEvents.get(id) : nativeEvents } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const find = fakeInteraction({ customId: "harmony-manager:community:findnative", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(find);
+  const selector = find.responses[0].payload.components[0].toJSON().components[0];
+  const choose = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(choose);
+  assert.match(choose.responses[0].payload.content, /already linked/);
+  assert.equal(store.getEvent(guildId, eventId).discord_event_id, native.id);
+  assert.equal(store.getDiscordEventReconciliation(guildId, native.id), null);
 });
 
 test("Harmony-initiated native cancellation suppresses the deletion notice but external deletion still notifies", async () => {
