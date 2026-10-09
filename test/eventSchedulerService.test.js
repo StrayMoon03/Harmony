@@ -1404,10 +1404,20 @@ test("announcement destination picker allows GuildVoice but not Stage, and immed
     guildId, sourceChannelId: "calendar", destinationChannelId: "calendar", title: "Voice chat reminder", link: "",
     timezone: "UTC", eventAt: "2099-11-04T20:00:00.000Z", eventDate: "2099-11-04", eventTimezone: "UTC",
     calendarType: "community", category: "community", announcementChannelId: "cinema",
-    announcements: [{ scheduledFor: new Date(Date.now() - 1000).toISOString(), message: "Join us!" }], createdBy: "admin",
+    announcements: [{ scheduledFor: new Date(Date.now() - 1000).toISOString(), message: "@everyone\n✨ 1 hour to go!\nJoin us!" }], createdBy: "admin",
+  });
+  store.createEvent({
+    guildId, sourceChannelId: "calendar", destinationChannelId: "calendar", title: "Legacy announcement", link: "",
+    timezone: "UTC", eventAt: "2099-11-05T20:00:00.000Z", eventDate: "2099-11-05", eventTimezone: "UTC",
+    calendarType: "community", announcementChannelId: "cinema",
+    announcements: [{ scheduledFor: new Date(Date.now() - 500).toISOString(), message: "Legacy message" }], createdBy: "admin",
   });
   await processScheduledAnnouncements({ guilds: { cache: new Map([[guildId, guild]]) } });
-  assert.equal(futureSent.length, 1);
+  assert.equal(futureSent.length, 2);
+  assert.equal(futureSent[0].content, "@everyone\n✨ 1 hour to go!\nJoin us!");
+  assert.deepEqual(futureSent[0].allowedMentions, { parse: ["everyone"] });
+  assert.equal(futureSent[1].content, "Legacy message");
+  assert.deepEqual(futureSent[1].allowedMentions, { parse: [] });
   assert.equal(store.dueAnnouncements(new Date().toISOString()).some((item) => item.event_id === eventId), false);
 });
 
@@ -1749,9 +1759,9 @@ test("scheduled announcement countdown labels use the configured offset and pres
   const source = require("../src/services/eventSchedulerService");
   const items = source.calendarAnnouncementItems(event, [259200, 86400, 3600]);
   assert.equal(items.length, 3);
-  assert.equal(items[0].message, "✨ 3 days to go!\nBring your lightstick!");
-  assert.equal(items[1].message, "✨ Tomorrow!\nBring your lightstick!");
-  assert.equal(items[2].message, "✨ 1 hour to go!\nBring your lightstick!");
+  assert.equal(items[0].message, "@everyone\n✨ 3 days to go!\nBring your lightstick!");
+  assert.equal(items[1].message, "@everyone\n✨ Tomorrow!\nBring your lightstick!");
+  assert.equal(items[2].message, "@everyone\n✨ 1 hour to go!\nBring your lightstick!");
 });
 
 test("scheduled announcement offsets remain unchanged when countdown labels are generated", () => {
@@ -1776,8 +1786,8 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
   const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", offsets, items, "Countdown event details");
   assert.deepEqual(JSON.parse(saved.announcement_offsets), offsets);
   assert.deepEqual(store.listAnnouncements(eventId).map((item) => item.message), [
-    "✨ 3 days to go!\nCountdown event details",
-    "✨ Tomorrow!\nCountdown event details",
-    "✨ 1 hour to go!\nCountdown event details",
+    "@everyone\n✨ 3 days to go!\nCountdown event details",
+    "@everyone\n✨ Tomorrow!\nCountdown event details",
+    "@everyone\n✨ 1 hour to go!\nCountdown event details",
   ]);
 });
