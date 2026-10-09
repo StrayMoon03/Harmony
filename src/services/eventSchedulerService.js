@@ -1243,7 +1243,10 @@ async function syncNativeScheduledEvent(client, event) {
     scheduledEndTime: nativeEventEndTime(event),
     description: event.description || undefined,
   };
-  if (event.event_channel_id) {
+  // Discord only accepts entity metadata for External scheduled events. Voice
+  // and Stage events are channel-bound and reject this field with
+  // GUILD_SCHEDULED_EVENT_ENTITY_METADATA_UNSUPPORTED.
+  if (event.event_channel_id && native.entityType === GuildScheduledEventEntityType.External) {
     const channel = guild?.channels?.cache?.get(event.event_channel_id) || await guild?.channels?.fetch(event.event_channel_id).catch(() => null);
     payload.entityMetadata = { location: channel ? `#${channel.name}` : "Harmony calendar" };
   }

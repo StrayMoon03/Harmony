@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { ChannelType } = require("discord.js");
+const { ChannelType, GuildScheduledEventEntityType } = require("discord.js");
 const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
@@ -332,7 +332,7 @@ test("an end time cannot be supplied for an all-day event", () => {
 
 test("editing a linked event synchronizes its explicit native end time", async () => {
   const calls = [];
-  const native = { edit: async (payload) => { calls.push(payload); } };
+  const native = { entityType: GuildScheduledEventEntityType.External, edit: async (payload) => { calls.push(payload); } };
   const client = { guilds: { cache: new Map([["g", { scheduledEvents: { cache: new Map([["native-edit", native]]) } }]]) } };
   const event = {
     guild_id: "g", discord_event_id: "native-edit", event_at: "2026-10-24T09:30:00.000Z",
@@ -341,6 +341,34 @@ test("editing a linked event synchronizes its explicit native end time", async (
   assert.equal(await syncNativeScheduledEvent(client, event), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].scheduledEndTime.toISOString(), event.event_end_at);
+});
+
+test("native sync includes entity metadata for External scheduled events", async () => {
+  const calls = [];
+  const native = { entityType: GuildScheduledEventEntityType.External, edit: async (payload) => { calls.push(payload); } };
+  const client = { guilds: { cache: new Map([["g", {
+    scheduledEvents: { cache: new Map([["native-external", native]]) },
+    channels: { cache: new Map([["text-channel", { name: "event-chat" }]]) },
+  }]]) } };
+  await syncNativeScheduledEvent(client, {
+    guild_id: "g", discord_event_id: "native-external", event_at: "2026-10-24T09:30:00.000Z",
+    event_channel_id: "text-channel", title: "External event", description: "Details",
+  });
+  assert.deepEqual(calls[0].entityMetadata, { location: "#event-chat" });
+});
+
+test("native sync omits unsupported entity metadata for Voice scheduled events", async () => {
+  const calls = [];
+  const native = { entityType: GuildScheduledEventEntityType.Voice, edit: async (payload) => { calls.push(payload); } };
+  const client = { guilds: { cache: new Map([["g", {
+    scheduledEvents: { cache: new Map([["native-voice", native]]) },
+    channels: { cache: new Map([["voice-channel", { name: "watch-room" }]]) },
+  }]]) } };
+  await syncNativeScheduledEvent(client, {
+    guild_id: "g", discord_event_id: "native-voice", event_at: "2026-10-24T09:30:00.000Z",
+    event_channel_id: "voice-channel", title: "Voice event", description: "Details",
+  });
+  assert.equal(Object.hasOwn(calls[0], "entityMetadata"), false);
 });
 
 test("manager drafts resolve common worldwide city and country locations deterministically", () => {
