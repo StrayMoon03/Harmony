@@ -1399,6 +1399,24 @@ test("Find Discord Event refuses duplicate linking when the native event is alre
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id), null);
 });
 
+test("Find Discord Event reopens a previously reviewed but unlinked native event", async () => {
+  const guildId = `find-native-reopen-${Date.now()}`;
+  const native = { guildId, id: "previously-reviewed-native", name: "Previously Reviewed", scheduledStartAt: new Date("2099-10-21T23:00:00Z") };
+  store.saveDiscordEventReconciliation(guildId, native.id, "old-review-notice", "dismissed");
+  const nativeEvents = new Map([[native.id, native]]);
+  const guild = { scheduledEvents: { fetch: async (id) => id ? nativeEvents.get(id) : nativeEvents } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const find = fakeInteraction({ customId: "harmony-manager:community:findnative", kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(find);
+  const selector = find.responses[0].payload.components[0].toJSON().components[0];
+  const choose = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(choose);
+
+  assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "open");
+  assert.deepEqual(choose.responses[0].payload.components[0].toJSON().components.map((component) => component.label), ["Add to Calendar", "Ignore"]);
+  assert.match(choose.responses[0].payload.content, /Choose what Harmony should do with this event/);
+});
+
 test("Harmony-initiated native cancellation suppresses the deletion notice but external deletion still notifies", async () => {
   const guildId = `native-delete-${Date.now()}`;
   const notices = [];

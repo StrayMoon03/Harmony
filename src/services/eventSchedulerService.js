@@ -1769,8 +1769,10 @@ async function handleManagerInteraction(interaction) {
     }
     const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, nativeId);
     if (reconciliation && reconciliation.status !== "open") {
-      await interaction.reply({ content: "That Discord Scheduled Event has already been reviewed by Harmony. No duplicate calendar event was created.", flags: 64 });
-      return;
+      // Find Discord Event is an explicit admin retry path. If the native event
+      // is still unlinked, reopen the old review record rather than permanently
+      // blocking reconciliation because of a prior dismiss/failed attempt.
+      store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
     }
     if (!reconciliation) store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
     const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
