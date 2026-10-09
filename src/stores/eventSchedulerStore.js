@@ -353,6 +353,16 @@ function listCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
   `).all(guildId, calendarType, monthStart, monthEnd, monthStart, monthEnd);
 }
 
+function listEditableCalendarEvents(guildId, calendarType, monthStart, monthEnd) {
+  return getDb().prepare(`
+    SELECT * FROM scheduled_events
+    WHERE guild_id = ? AND calendar_type = ? AND cancelled_at IS NULL
+      AND ((event_at >= ? AND event_at < ? OR event_date >= substr(?, 1, 10) AND event_date < substr(?, 1, 10))
+        OR discord_event_id IS NOT NULL)
+    ORDER BY COALESCE(event_date, substr(event_at, 1, 10)), event_at, id
+  `).all(guildId, calendarType, monthStart, monthEnd, monthStart, monthEnd);
+}
+
 function listPublishedCalendars(guildId, calendarType, monthKey) {
   return getDb().prepare(`SELECT * FROM calendar_publications WHERE guild_id = ? AND calendar_type = ? AND month_key = ? ORDER BY part_index`).all(guildId, calendarType, monthKey);
 }
@@ -578,6 +588,7 @@ module.exports = {
   setReconciliationChannel,
   getReconciliationChannel,
   listCalendarEvents,
+  listEditableCalendarEvents,
   listPublishedCalendars,
   savePublishedCalendar,
   removePublishedCalendarPart,
