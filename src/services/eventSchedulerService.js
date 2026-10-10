@@ -2268,7 +2268,11 @@ async function handleManagerInteraction(interaction) {
     const announcementOverrides = draft.announcementOverrides || new Map();
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     console.log(`[scheduler-announcements] timing-submit guild=${interaction.guildId} eventIds=${eventIds.join(",")} selected=${selected.join(",")} channel=${draft.announcementChannelId}`);
-    const recurring = Number(first.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && first.recurrence_series_id;
+    // Series membership is the source of truth for announcement overrides.
+    // Only the native anchor is guaranteed to carry recurrence_native_enabled;
+    // projected occurrences inherit the series identity but may leave that
+    // mode unset.
+    const recurring = Boolean(first.recurrence_series_id);
     const seriesEvents = recurring ? store.listSeriesEvents(interaction.guildId, first.recurrence_series_id) : [];
     const seriesAnchor = recurring ? (seriesEvents.find((item) => Number(item.recurrence_index) === 0) || first) : first;
     let immediatePosted = false;
@@ -2288,7 +2292,7 @@ async function handleManagerInteraction(interaction) {
       const override = announcementOverrides.has(event.event_date) ? announcementOverrides.get(event.event_date) : null;
       const body = recurring && announcementScope !== "this" ? (override || announcementMessage) : announcementMessage;
       const items = calendarAnnouncementItems({ ...event, announcement_message: body }, offsets);
-      if (recurring && Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+      if (recurring) {
         store.updateEvent(interaction.guildId, event.id, { announcement_message_override: announcementScope === "this" ? announcementMessage : override });
         store.mergeEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items);
         store.refreshPendingAnnouncementMessages(event.id, items);
