@@ -501,6 +501,18 @@ function recurrenceScopeMenu(action, eventId) {
   )];
 }
 
+function announcementScopeMenu(eventId) {
+  return [new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`harmony-manager:community:recurrencescope:announcements:${eventId}`)
+      .setPlaceholder("Apply announcement changes to...")
+      .addOptions(
+        { label: "This event", value: "this", description: "Customize announcements for this occurrence only" },
+        { label: "Entire series", value: "series", description: "Set a default and optional message per occurrence" },
+      )
+  )];
+}
+
 function recurrenceCancelButtons(eventId) {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`harmony-manager:community:cancelscope:this:${eventId}`).setLabel("This event").setStyle(ButtonStyle.Danger),
@@ -699,55 +711,63 @@ function announcementTargets(guildId, event, scope) {
   return scope === "series" ? series : scope === "future" ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
 }
 
-function announcementOverrideLines(events) {
-  return (events || [])
-    .filter((event) => event?.event_date)
-    .map((event) => `${event.event_date}: ${event.announcement_message_override || ""}`)
-    .join("\n");
+function announcementOccurrenceLabel(event) {
+  const date = event?.event_date || (event?.event_at || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Occurrence date pending";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "long", month: "long", day: "numeric" })
+    .format(new Date(`${date}T00:00:00Z`));
 }
+
+const ANNOUNCEMENT_OCCURRENCES_PER_PAGE = 4;
 
 function announcementEditorModal(eventId, draft, event, guildId = null) {
   const recurring = Boolean(event?.recurrence_series_id);
   const scope = draft?.announcementScope || (recurring ? "series" : "this");
   const targetGuildId = draft?.guildId || guildId || event?.guild_id;
-  const targets = (draft?.eventIds || [event?.id]).map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
+  const allTargets = (draft?.eventIds || [event?.id]).map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
+  const page = Number(draft?.announcementPage || 0);
+  const targets = allTargets.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE);
   const seriesAnchor = recurring ? (store.listSeriesEvents(targetGuildId, event.recurrence_series_id).find((item) => Number(item.recurrence_index) === 0) || event) : event;
   const modal = new ModalBuilder()
     .setCustomId(`harmony-manager:community:ysannouncemodal:${eventId}`)
-    .setTitle(scope === "this" || !recurring ? "Schedule event announcements" : "Schedule series announcements");
-  const messageInput = new TextInputBuilder()
-    .setCustomId("announcement-message")
-    .setLabel(scope === "this" || !recurring ? "Announcement message" : "Series/default message")
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(true)
-    .setMaxLength(1800);
-  const currentBody = effectiveCalendarAnnouncementBody(scope === "this" || !recurring ? event : seriesAnchor, seriesAnchor?.announcement_message);
-  if (currentBody) messageInput.setValue(normalizeCalendarAnnouncementBody(currentBody).slice(0, 1800));
-  modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
-  if (recurring && scope !== "this") {
-    const overrideInput = new TextInputBuilder()
-      .setCustomId("announcement-overrides")
-      .setLabel("Occurrence overrides (optional)")
-      .setPlaceholder("YYYY-MM-DD: custom message (one per line)")
+    .setTitle(scope === "this" || !recurring ? "Schedule event announcements" : `Series announcements${allTargets.length > ANNOUNCEMENT_OCCURRENCES_PER_PAGE ? ` • Page ${page + 1}` : ""}`);
+  if (scope === "this" || !recurring) {
+    const messageInput = new TextInputBuilder()
+      .setCustomId("announcement-message")
+      .setLabel("Announcement message")
       .setStyle(TextInputStyle.Paragraph)
-      .setRequired(false)
-      .setMaxLength(4000);
-    const existingOverrides = announcementOverrideLines(targets);
-    if (existingOverrides) overrideInput.setValue(existingOverrides.slice(0, 4000));
-    modal.addComponents(new ActionRowBuilder().addComponents(overrideInput));
+      .setRequired(true)
+      .setMaxLength(1800);
+    const currentBody = effectiveCalendarAnnouncementBody(event, seriesAnchor?.announcement_message);
+    if (currentBody) messageInput.setValue(normalizeCalendarAnnouncementBody(currentBody).slice(0, 1800));
+    modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
+  } else {
+    if (page === 0) {
+      const defaultInput = new TextInputBuilder()
+        .setCustomId("announcement-message")
+        .setLabel("Series/default message")
+        .setPlaceholder("Used when an occurrence has no custom message")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1800);
+      const currentBody = seriesAnchor?.announcement_message;
+      if (currentBody) defaultInput.setValue(normalizeCalendarAnnouncementBody(currentBody).slice(0, 1800));
+      modal.addComponents(new ActionRowBuilder().addComponents(defaultInput));
+    }
+    for (const target of targets) {
+      const input = new TextInputBuilder()
+        .setCustomId(`announcement-override-${target.id}`)
+        .setLabel(announcementOccurrenceLabel(target).slice(0, 45))
+        .setPlaceholder("Optional custom message; blank uses series default")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+        .setMaxLength(1800);
+      const existing = draft?.announcementOverrides?.get?.(String(target.id)) ?? target.announcement_message_override;
+      if (existing) input.setValue(normalizeCalendarAnnouncementBody(existing).slice(0, 1800));
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+    }
   }
   return modal;
-}
-
-function parseAnnouncementOverrides(raw, events) {
-  const allowedDates = new Set((events || []).map((event) => event.event_date).filter(Boolean));
-  const overrides = new Map();
-  for (const line of String(raw || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
-    const match = /^(\d{4}-\d{2}-\d{2})\s*[:=|]\s*(.*)$/.exec(line);
-    if (!match || !allowedDates.has(match[1])) continue;
-    overrides.set(match[1], normalizeCalendarAnnouncementBody(match[2]) || null);
-  }
-  return overrides;
 }
 
 async function beginCanonicalAnnouncementFlow(interaction, event, eventIds = [event.id], scope = null) {
@@ -2222,6 +2242,16 @@ async function handleManagerInteraction(interaction) {
     await interaction.showModal(announcementEditorModal(eventId, draft, event, interaction.guildId));
     return;
   }
+  if (calendarType === "community" && action === "ysannouncepage" && interaction.isButton()) {
+    const key = draftKey(interaction, calendarType, `announce-${eventId}`);
+    const draft = managerDrafts.get(key);
+    const event = store.getEvent(interaction.guildId, Number(eventId));
+    if (!draft || !event) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
+    const page = Number(parts[4]);
+    managerDrafts.set(key, { ...draft, announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 });
+    await interaction.showModal(announcementEditorModal(eventId, managerDrafts.get(key), event, interaction.guildId));
+    return;
+  }
   if (calendarType === "community" && action === "ysannounce-no" && interaction.isButton()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));
@@ -2237,13 +2267,42 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     const announcementScope = draft.announcementScope || (event?.recurrence_series_id ? "series" : "this");
     const targetEvents = (draft.eventIds || [Number(eventId)]).map((id) => store.getEvent(interaction.guildId, Number(id))).filter(Boolean);
-    const overrides = announcementScope === "this" ? new Map() : parseAnnouncementOverrides(interaction.fields.getTextInputValue("announcement-overrides"), targetEvents);
-    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), {
+    const page = Number(draft.announcementPage || 0);
+    const pageEvents = announcementScope === "series"
+      ? targetEvents.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE)
+      : [];
+    const overrides = new Map(draft.announcementOverrides || []);
+    for (const target of pageEvents) {
+      const value = normalizeCalendarAnnouncementBody(interaction.fields.getTextInputValue(`announcement-override-${target.id}`)) || null;
+      overrides.set(String(target.id), value);
+    }
+    const announcementMessage = announcementScope === "series" && page > 0
+      ? draft.announcementMessage
+      : interaction.fields.getTextInputValue("announcement-message").trim();
+    if (!announcementMessage) {
+      await interaction.reply({ content: "Please provide a series/default announcement message.", flags: 64 });
+      return;
+    }
+    const nextPage = announcementScope === "series" && (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE < targetEvents.length;
+    const nextDraft = {
       ...draft,
       announcementScope,
-      announcementMessage: interaction.fields.getTextInputValue("announcement-message").trim(),
+      announcementMessage,
       announcementOverrides: overrides,
-    });
+    };
+    if (nextPage) {
+      nextDraft.announcementPage = page + 1;
+      managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), nextDraft);
+      await interaction.reply({
+        content: `Saved occurrence page ${page + 1}. Continue to edit the next occurrences.`,
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`harmony-manager:community:ysannouncepage:${eventId}:${page + 1}`).setLabel("Save & Continue").setStyle(ButtonStyle.Primary)
+        )],
+        flags: 64,
+      });
+      return;
+    }
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), nextDraft);
     await interaction.reply({ content: "Choose the separate announcement channel.", components: announcementChannelMenu("ysannouncechannel", eventId), flags: 64 });
     return;
   }
@@ -2251,7 +2310,7 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementChannelId: interaction.values[0] });
-    const scopeText = draft.announcementScope === "this" ? "this occurrence only" : draft.announcementScope === "future" ? "this and future occurrences" : "the entire recurring series";
+    const scopeText = draft.announcementScope === "this" ? "this occurrence only" : "the entire recurring series";
     await interaction.update({ content: `Announcement settings apply to ${scopeText}. Choose one or more announcement timings.`, components: announcementTimingMenu("ysannouncetiming", eventId) });
     return;
   }
@@ -2289,8 +2348,8 @@ async function handleManagerInteraction(interaction) {
     for (const id of targetIds) {
       const event = store.getEvent(interaction.guildId, id);
       if (!event) continue;
-      const override = announcementOverrides.has(event.event_date) ? announcementOverrides.get(event.event_date) : null;
-      const body = recurring && announcementScope !== "this" ? (override || announcementMessage) : announcementMessage;
+      const override = announcementOverrides.has(String(event.id)) ? announcementOverrides.get(String(event.id)) : event.announcement_message_override;
+      const body = recurring && announcementScope !== "this" ? (override != null ? override : announcementMessage) : announcementMessage;
       const items = calendarAnnouncementItems({ ...event, announcement_message: body }, offsets);
       if (recurring) {
         store.updateEvent(interaction.guildId, event.id, { announcement_message_override: announcementScope === "this" ? announcementMessage : override });
@@ -2459,7 +2518,7 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "editannouncementpick" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.reply({ content: "That event is no longer available.", flags: 64 }); return; }
-    if (event.recurrence_series_id) await interaction.update({ content: "Apply announcement changes to:", components: recurrenceScopeMenu("announcements", event.id) });
+    if (event.recurrence_series_id) await interaction.update({ content: "Apply announcement changes to:", components: announcementScopeMenu(event.id) });
     else {
       managerDrafts.delete(draftKey(interaction, calendarType, event.id));
       await beginCanonicalAnnouncementFlow(interaction, event);
