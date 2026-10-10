@@ -711,6 +711,7 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
   const scope = draft?.announcementScope || (recurring ? "series" : "this");
   const targetGuildId = draft?.guildId || guildId || event?.guild_id;
   const targets = (draft?.eventIds || [event?.id]).map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
+  const seriesAnchor = recurring ? (store.listSeriesEvents(targetGuildId, event.recurrence_series_id).find((item) => Number(item.recurrence_index) === 0) || event) : event;
   const modal = new ModalBuilder()
     .setCustomId(`harmony-manager:community:ysannouncemodal:${eventId}`)
     .setTitle(scope === "this" || !recurring ? "Schedule event announcements" : "Schedule series announcements");
@@ -720,7 +721,7 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true)
     .setMaxLength(1800);
-  const currentBody = effectiveCalendarAnnouncementBody(event, event?.announcement_message);
+  const currentBody = effectiveCalendarAnnouncementBody(scope === "this" || !recurring ? event : seriesAnchor, seriesAnchor?.announcement_message);
   if (currentBody) messageInput.setValue(normalizeCalendarAnnouncementBody(currentBody).slice(0, 1800));
   modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
   if (recurring && scope !== "this") {
