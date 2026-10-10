@@ -2155,4 +2155,3 @@ test("occurrence override refreshes only pending reminder messages", () => {
   assert.equal(sentRow.status, "sent");
   assert.equal(rows.length, 2);
 });
-
