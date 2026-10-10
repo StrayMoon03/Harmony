@@ -1917,9 +1917,9 @@ test("scheduled announcement countdown labels use the configured offset and pres
   const source = require("../src/services/eventSchedulerService");
   const items = source.calendarAnnouncementItems(event, [259200, 86400, 3600]);
   assert.equal(items.length, 3);
-  assert.equal(items[0].message, "@everyone\n✨ 3 days to go!\nBring your lightstick!");
-  assert.equal(items[1].message, "@everyone\n✨ Tomorrow!\nBring your lightstick!");
-  assert.equal(items[2].message, "@everyone\n✨ 1 hour to go!\nBring your lightstick!");
+  assert.equal(items[0].message, "@everyone\n✨ 3 days to go!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
+  assert.equal(items[1].message, "@everyone\n✨ Tomorrow!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
+  assert.equal(items[2].message, "@everyone\n✨ 1 hour to go!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
 });
 
 test("scheduled announcement offsets remain unchanged when countdown labels are generated", () => {
@@ -1944,9 +1944,9 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
   const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", offsets, items, "Countdown event details");
   assert.deepEqual(JSON.parse(saved.announcement_offsets), offsets);
   assert.deepEqual(store.listAnnouncements(eventId).map((item) => item.message), [
-    "@everyone\n✨ 3 days to go!\nCountdown event details",
-    "@everyone\n✨ Tomorrow!\nCountdown event details",
-    "@everyone\n✨ 1 hour to go!\nCountdown event details",
+    "@everyone\n✨ 3 days to go!\n🗓️ <t:4096047600:F>\nCountdown event details",
+    "@everyone\n✨ Tomorrow!\n🗓️ <t:4096047600:F>\nCountdown event details",
+    "@everyone\n✨ 1 hour to go!\n🗓️ <t:4096047600:F>\nCountdown event details",
   ]);
 });
 
@@ -2024,4 +2024,39 @@ test("announcement timing keeps the event's non-midnight instant when subtractin
   assert.deepEqual(items.map((item) => item.scheduledFor), [
     "2099-09-30T19:00:00.000Z", "2099-10-02T19:00:00.000Z", "2099-10-03T18:00:00.000Z",
   ]);
+});
+
+
+test("calendar announcements include each event's localized timestamp", () => {
+  const source = require("../src/services/eventSchedulerService");
+  const event = { event_at: "2099-10-03T19:00:00.000Z", title: "Timed event", announcement_message: "Details" };
+  const items = source.calendarAnnouncementItems(event, [86400]);
+  assert.equal(items[0].message, "@everyone\n✨ Tomorrow!\n🗓️ <t:4094737200:F>\nDetails");
+  assert.equal((items[0].message.match(/@everyone/g) || []).length, 1);
+});
+
+test("recurring occurrence message overrides survive projection and can return to the series default", async () => {
+  const guildId = `native-override-${Date.now()}`;
+  const native = {
+    guildId,
+    id: "native-override-series",
+    name: "Recurring Watch Party",
+    description: "Series description",
+    scheduledStartAt: new Date("2099-10-02T23:00:00.000Z"),
+    scheduledEndAt: new Date("2099-10-03T00:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-10-02T23:00:00.000Z"), endAt: null, frequency: 2, interval: 1, byWeekday: [4], byNWeekday: null, byMonth: null, byMonthDay: null, byYearDay: null, count: 3 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native, create: async () => { throw new Error("must not create native events"); } } };
+  const anchorId = await addNativeEventToCalendar({ guildId, user: { id: "admin" }, guild }, native.id);
+  const anchor = store.getEvent(guildId, anchorId.id);
+  const occurrence = store.listSeriesEvents(guildId, anchor.recurrence_series_id)[1];
+  store.saveEventAnnouncements(guildId, anchor.id, "cinema", [86400], [], "Series default");
+  store.updateEvent(guildId, occurrence.id, { announcement_message_override: "Episodes 1 & 2!" });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, "Episodes 1 & 2!");
+  const body = store.listAnnouncements(occurrence.id)[0]?.message || "";
+  assert.match(body, /Episodes 1 & 2!/);
+  store.updateEvent(guildId, occurrence.id, { announcement_message_override: null });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, null);
 });
