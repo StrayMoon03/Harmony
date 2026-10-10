@@ -30,6 +30,7 @@ const {
   formatAnnouncementCountdown,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
+const { getDb } = require("../src/db/sqlite");
 const { normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
 
 test("Youtiful Stays event types use the approved custom emoji set", () => {
@@ -2053,4 +2054,33 @@ test("recurring occurrence message overrides survive projection and can return t
   await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
   assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, null);
   assert.equal(store.listAnnouncements(occurrence.id)[0].message, "Series default");
+});
+
+
+test("occurrence override refreshes only pending reminder messages", () => {
+  const guildId = `override-pending-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Override event", eventDate: "2099-10-03",
+    eventAt: "2099-10-03T19:00:00.000Z", eventTimezone: "UTC", timezone: "UTC",
+    calendarType: "community", category: "community", createdBy: "admin",
+  });
+  const pendingAt = "2099-10-02T19:00:00.000Z";
+  const sentAt = "2099-10-01T19:00:00.000Z";
+  store.saveEventAnnouncements(guildId, eventId, "cinema", [86400, 172800], [
+    { scheduledFor: pendingAt, message: "old pending" },
+    { scheduledFor: sentAt, message: "old sent" },
+  ], "Series default");
+  const sent = getDb().prepare("SELECT * FROM scheduled_announcements WHERE event_id = ? AND scheduled_for = ?").get(eventId, sentAt);
+  store.markSending(sent.id);
+  store.markSent(sent.id, "discord-message");
+  store.refreshPendingAnnouncementMessages(eventId, [
+    { scheduledFor: pendingAt, message: "occurrence override" },
+    { scheduledFor: sentAt, message: "should not replace" },
+  ]);
+  const rows = getDb().prepare("SELECT * FROM scheduled_announcements WHERE event_id = ? ORDER BY scheduled_for").all(eventId);
+  assert.equal(rows.find((row) => row.scheduled_for === pendingAt).message, "occurrence override");
+  const sentRow = rows.find((row) => row.scheduled_for === sentAt);
+  assert.equal(sentRow.message, "old sent");
+  assert.equal(sentRow.status, "sent");
+  assert.equal(rows.length, 2);
 });
