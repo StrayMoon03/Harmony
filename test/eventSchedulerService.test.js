@@ -1267,52 +1267,67 @@ test("announcement setup carries the original recurring edit scope without a sec
   assert.equal(modal.components[0].components[0].custom_id, "announcement-message");
 });
 
-test("announcement future scope only updates the selected occurrence forward", async () => {
-  const guildId = `announcement-future-ux-${Date.now()}`;
+test("recurring announcement UX offers only event/series scopes and uses separate paged occurrence fields", async () => {
+  const guildId = `announcement-series-ux-${Date.now()}`;
   const seriesId = `series-${Date.now()}`;
-  const ids = ["2099-10-02", "2099-10-09", "2099-10-16"].map((date, index) => store.createCalendarEvent({
+  const dates = ["2099-10-02", "2099-10-09", "2099-10-16", "2099-10-23", "2099-10-30", "2099-11-06"];
+  const ids = dates.map((date, index) => store.createCalendarEvent({
     guildId, calendarChannelId: "community-calendar", title: "Weekly", eventDate: date,
     eventAt: `${date}T23:00:00.000Z`, eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
     category: "kdrama", calendarEventType: "kdrama", recurrenceSeriesId: seriesId,
     recurrenceRule: JSON.stringify({ source: "discord", frequency: 2, interval: 1, count: 3 }),
     recurrenceIndex: index, recurrenceNativeEnabled: index === 0 ? 2 : 0, createdBy: "admin",
   }));
-  store.saveEventAnnouncements(guildId, ids[0], "old-channel", [86400], [{
-    scheduledFor: "2099-10-01T23:00:00.000Z", message: "Earlier occurrence's existing reminder",
-  }], "Original series default");
-  const earlierReminder = store.listAnnouncements(ids[0])[0];
-  const scope = fakeInteraction({ customId: `harmony-manager:community:recurrencescope:announcements:${ids[1]}`, kind: "select", guildId, values: ["future"] });
+  store.updateEvent(guildId, ids[2], { announcement_message_override: "Existing October 16 override" });
+  const pick = fakeInteraction({ customId: `harmony-manager:community:editannouncementpick:${ids[2]}`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(pick);
+  const scopeOptions = pick.responses[0].payload.components[0].toJSON().components[0].options;
+  assert.deepEqual(scopeOptions.map((option) => option.label), ["This event", "Entire series"]);
+  assert.equal(scopeOptions.some((option) => option.label === "This and future events"), false);
+  const scope = fakeInteraction({ customId: `harmony-manager:community:recurrencescope:announcements:${ids[2]}`, kind: "select", guildId, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const open = fakeInteraction({ customId: `harmony-manager:community:ysannounce:${ids[1]}`, kind: "button", guildId });
+  const open = fakeInteraction({ customId: `harmony-manager:community:ysannounce:${ids[2]}`, kind: "button", guildId });
   await handleEventSchedulerInteraction(open);
-  const seriesModal = open.responses.at(-1).modal.toJSON();
-  assert.equal(seriesModal.components.length, 2);
-  assert.match(seriesModal.components[1].components[0].value, /2099-10-09:/);
-  assert.match(seriesModal.components[1].components[0].value, /2099-10-16:/);
-  const submit = fakeInteraction({
-    customId: `harmony-manager:community:ysannouncemodal:${ids[1]}`, kind: "modal", guildId,
-    fields: { "announcement-message": "Future default", "announcement-overrides": "2099-10-16: Episodes 3 & 4" },
+  const firstPage = open.responses.at(-1).modal.toJSON();
+  assert.equal(firstPage.components.length, 5);
+  assert.equal(firstPage.components[0].components[0].custom_id, "announcement-message");
+  assert.deepEqual(firstPage.components.slice(1).map((row) => row.components[0].custom_id), ids.slice(0, 4).map((id) => `announcement-override-${id}`));
+  assert.match(firstPage.components[3].components[0].label, /Friday, October 16/);
+  assert.equal(firstPage.components[3].components[0].value, "Existing October 16 override");
+  const submitFirst = fakeInteraction({
+    customId: `harmony-manager:community:ysannouncemodal:${ids[2]}`, kind: "modal", guildId,
+    fields: {
+      "announcement-message": "Series default",
+      [`announcement-override-${ids[0]}`]: "October 2 special",
+      [`announcement-override-${ids[1]}`]: "",
+      [`announcement-override-${ids[2]}`]: "October 16 special",
+      [`announcement-override-${ids[3]}`]: "",
+    },
   });
-  await handleEventSchedulerInteraction(submit);
-  const channel = fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${ids[1]}`, kind: "channel", guildId, values: ["cinema"] });
+  await handleEventSchedulerInteraction(submitFirst);
+  assert.match(submitFirst.responses[0].payload.content, /Continue/);
+  const next = fakeInteraction({ customId: `harmony-manager:community:ysannouncepage:${ids[2]}:1`, kind: "button", guildId });
+  await handleEventSchedulerInteraction(next);
+  const secondPage = next.responses.at(-1).modal.toJSON();
+  assert.deepEqual(secondPage.components.map((row) => row.components[0].custom_id), ids.slice(4).map((id) => `announcement-override-${id}`));
+  const submitSecond = fakeInteraction({
+    customId: `harmony-manager:community:ysannouncemodal:${ids[2]}`, kind: "modal", guildId,
+    fields: { [`announcement-override-${ids[4]}`]: "", [`announcement-override-${ids[5]}`]: "November 6 special" },
+  });
+  await handleEventSchedulerInteraction(submitSecond);
+  const channel = fakeInteraction({ customId: `harmony-manager:community:ysannouncechannel:${ids[2]}`, kind: "channel", guildId, values: ["cinema"] });
   await handleEventSchedulerInteraction(channel);
-  const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${ids[1]}`, kind: "select", guildId, values: ["86400"] });
+  const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${ids[2]}`, kind: "select", guildId, values: ["86400"] });
   await handleEventSchedulerInteraction(timing);
-  // The series metadata may change for the selected/future scope, but an
-  // earlier occurrence's existing reminder/history must remain untouched.
-  const earlierAfter = store.listAnnouncements(ids[0])[0];
-  assert.equal(earlierAfter.id, earlierReminder.id);
-  assert.equal(earlierAfter.scheduled_for, earlierReminder.scheduled_for);
-  assert.equal(earlierAfter.message, earlierReminder.message);
-  assert.equal(earlierAfter.status, "pending");
+  assert.equal(store.getEvent(guildId, ids[0]).announcement_message_override, "October 2 special");
   assert.equal(store.getEvent(guildId, ids[1]).announcement_message_override, null);
-  assert.equal(store.getEvent(guildId, ids[2]).announcement_message_override, "Episodes 3 & 4");
-  assert.equal(store.getEvent(guildId, ids[1]).announcement_channel_id, "cinema");
-  assert.equal(store.getEvent(guildId, ids[2]).announcement_channel_id, "cinema");
-  assert.match(store.listAnnouncements(ids[1])[0].message, /Future default/);
-  assert.match(store.listAnnouncements(ids[2])[0].message, /Episodes 3 & 4/);
-  assert.equal(new Set(store.listAnnouncements(ids[1]).map((row) => row.scheduled_for)).size, 1);
-  assert.equal(new Set(store.listAnnouncements(ids[2]).map((row) => row.scheduled_for)).size, 1);
+  assert.equal(store.getEvent(guildId, ids[2]).announcement_message_override, "October 16 special");
+  assert.equal(store.getEvent(guildId, ids[3]).announcement_message_override, null);
+  assert.equal(store.getEvent(guildId, ids[4]).announcement_message_override, null);
+  assert.equal(store.getEvent(guildId, ids[5]).announcement_message_override, "November 6 special");
+  assert.match(store.listAnnouncements(ids[1])[0].message, /Series default/);
+  assert.match(store.listAnnouncements(ids[4])[0].message, /Series default/);
+  assert.match(store.listAnnouncements(ids[5])[0].message, /November 6 special/);
 });
 
 test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
