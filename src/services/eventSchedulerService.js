@@ -2492,7 +2492,8 @@ async function handleManagerInteraction(interaction) {
         const parsed = parseManagerDraft({ ...draft, timezone }, calendarType);
         const saved = store.updateEvent(interaction.guildId, Number(selectedEventId), {
           title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt,
-          event_timezone: parsed.eventTimezone, timezone: parsed.timezone,
+          event_timezone: parsed.eventTimezone,
+          timezone: parsed.timezone || existing.timezone || existing.event_timezone,
           event_location: parsed.eventLocation, link: parsed.link, description: parsed.description,
           all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
         });
