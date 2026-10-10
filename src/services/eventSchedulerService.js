@@ -3025,4 +3025,3 @@ module.exports = {
   candidateReviewPayload,
   candidateNoticePayload,
 };
-
