@@ -2238,6 +2238,7 @@ async function handleManagerInteraction(interaction) {
       if (announcementScope === "occurrence" && Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
         store.updateEvent(interaction.guildId, event.id, { announcement_message_override: announcementMessage });
         store.mergeEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items);
+        store.refreshPendingAnnouncementMessages(event.id, items);
       } else {
         store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, announcementMessage);
       }
