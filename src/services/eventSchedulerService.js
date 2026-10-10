@@ -745,8 +745,8 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
     if (page === 0) {
       const defaultInput = new TextInputBuilder()
         .setCustomId("announcement-message")
-        .setLabel("Series/default message")
-        .setPlaceholder("Used when an occurrence has no custom message")
+        .setLabel("Message for all dates")
+        .setPlaceholder("Used for every occurrence unless you enter a different message for a specific date.")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
         .setMaxLength(1800);
@@ -758,7 +758,7 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
       const input = new TextInputBuilder()
         .setCustomId(`announcement-override-${target.id}`)
         .setLabel(announcementOccurrenceLabel(target).slice(0, 45))
-        .setPlaceholder("Optional custom message; blank uses series default")
+        .setPlaceholder("Optional — replace the message for this date")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(false)
         .setMaxLength(1800);
