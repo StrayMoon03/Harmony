@@ -47,3 +47,46 @@ test('an empty browser result uses the exact-message preview and still fails if 
     getDiscordEmbedFallback: async () => null,
   }), /browser returned no media/);
 });
+
+test('accepts a small Threads image only after it decodes as real post media', async (t) => {
+  const modulePath = path.join(__dirname, 'threadsDownloader.js');
+  const localRequire = createRequire(modulePath);
+  const post = 'https://www.threads.com/@author/post/REAL123';
+  const cdn = 'https://scontent-a.fbcdn.net/verified-small.jpg';
+  const exec = () => {};
+  exec[promisify.custom] = async (file) => {
+    if (String(file).includes('python')) {
+      return {
+        stdout: 'HARMONY_THREADS_BROWSER:' + JSON.stringify({
+          candidates: [cdn],
+          finalUrl: post,
+        }),
+      };
+    }
+    if (String(file).includes('ffprobe')) {
+      return { stdout: '640x640\n' };
+    }
+    if (String(file).includes('ffmpeg')) {
+      return { stdout: Buffer.alloc(64, 255) };
+    }
+    throw new Error(`unexpected executable: ${file}`);
+  };
+  const module = { exports: {} };
+  const context = {
+    module, exports: module.exports, __dirname, process, console, Buffer, URL, AbortSignal,
+    require: (id) => id === 'node:child_process' ? { execFile: exec } : localRequire(id),
+    fetch: async (url) => {
+      assert.equal(url, cdn);
+      return new Response(Buffer.alloc(20 * 1024), {
+        headers: { 'content-type': 'image/jpeg' },
+      });
+    },
+  };
+
+  vm.runInNewContext(fs.readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
+  const result = await module.exports.downloadThreadsMedia(post);
+  t.after(() => fsp.rm(result.rawDir, { recursive: true, force: true }));
+
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].isImage, true);
+});

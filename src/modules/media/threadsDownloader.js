@@ -934,7 +934,12 @@ async function downloadThreadsMedia(url, options = {}) {
       const bytes = Buffer.from(
         await response.arrayBuffer()
       );
-      if (bytes.length < 30 * 1024) continue;
+      // A compressed Threads photo can legitimately be smaller than 30 KB.
+      // Images are validated below by decoding their dimensions and rejecting
+      // known placeholder artwork, which is stronger evidence than file size.
+      // Keep the existing minimum for videos, where no equivalent image
+      // validation is available here.
+      if (isVideo && bytes.length < 30 * 1024) continue;
 
       const ext = isVideo
         ? ".mp4"
