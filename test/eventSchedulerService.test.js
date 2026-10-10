@@ -2037,26 +2037,20 @@ test("calendar announcements include each event's localized timestamp", () => {
 
 test("recurring occurrence message overrides survive projection and can return to the series default", async () => {
   const guildId = `native-override-${Date.now()}`;
-  const native = {
-    guildId,
-    id: "native-override-series",
-    name: "Recurring Watch Party",
-    description: "Series description",
-    scheduledStartAt: new Date("2099-10-02T23:00:00.000Z"),
-    scheduledEndAt: new Date("2099-10-03T00:00:00.000Z"),
-    recurrenceRule: { startAt: new Date("2099-10-02T23:00:00.000Z"), endAt: null, frequency: 2, interval: 1, byWeekday: [4], byNWeekday: null, byMonth: null, byMonthDay: null, byYearDay: null, count: 3 },
-  };
-  const guild = { scheduledEvents: { fetch: async () => native, create: async () => { throw new Error("must not create native events"); } } };
-  const anchorId = await addNativeEventToCalendar({ guildId, user: { id: "admin" }, guild }, native.id);
-  const anchor = store.getEvent(guildId, anchorId.id);
-  const occurrence = store.listSeriesEvents(guildId, anchor.recurrence_series_id)[1];
+  const seriesId = `series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Recurring Watch Party", eventDate: "2099-10-02", eventAt: "2099-10-02T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "community", createdBy: "admin", discordEventId: "native-override-series", recurrenceSeriesId: seriesId, recurrenceRule: JSON.stringify({ source: "discord", startAt: "2099-10-02T23:00:00.000Z", frequency: 2, interval: 1, byWeekday: [4], count: 3 }), recurrenceIndex: 0, recurrenceNativeEnabled: 2 });
+  const anchor = store.getEvent(guildId, anchorId);
+  const occurrence = store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2099-10-09T23:00:00.000Z", eventEndAt: "2099-10-10T00:00:00.000Z" }, anchor);
   store.saveEventAnnouncements(guildId, anchor.id, "cinema", [86400], [], "Series default");
+  store.saveEventAnnouncements(guildId, occurrence.id, "cinema", [86400], [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "old default" }], "Series default");
   store.updateEvent(guildId, occurrence.id, { announcement_message_override: "Episodes 1 & 2!" });
+  store.refreshPendingAnnouncementMessages(occurrence.id, [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "Episodes 1 & 2!" }]);
   await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
   assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, "Episodes 1 & 2!");
-  const body = store.listAnnouncements(occurrence.id)[0]?.message || "";
-  assert.match(body, /Episodes 1 & 2!/);
+  assert.match(store.listAnnouncements(occurrence.id)[0].message, /Episodes 1 & 2!/);
   store.updateEvent(guildId, occurrence.id, { announcement_message_override: null });
+  store.refreshPendingAnnouncementMessages(occurrence.id, [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "Series default" }]);
   await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
   assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, null);
+  assert.equal(store.listAnnouncements(occurrence.id)[0].message, "Series default");
 });
