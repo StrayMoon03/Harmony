@@ -1275,8 +1275,12 @@ test("announcement future scope only updates the selected occurrence forward", a
     eventAt: `${date}T23:00:00.000Z`, eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
     category: "kdrama", calendarEventType: "kdrama", recurrenceSeriesId: seriesId,
     recurrenceRule: JSON.stringify({ source: "discord", frequency: 2, interval: 1, count: 3 }),
-    recurrenceIndex: index, recurrenceNativeEnabled: 2, createdBy: "admin",
+    recurrenceIndex: index, recurrenceNativeEnabled: index === 0 ? 2 : 0, createdBy: "admin",
   }));
+  store.saveEventAnnouncements(guildId, ids[0], "old-channel", [86400], [{
+    scheduledFor: "2099-10-01T23:00:00.000Z", message: "Earlier occurrence's existing reminder",
+  }], "Original series default");
+  const earlierReminder = store.listAnnouncements(ids[0])[0];
   const scope = fakeInteraction({ customId: `harmony-manager:community:recurrencescope:announcements:${ids[1]}`, kind: "select", guildId, values: ["future"] });
   await handleEventSchedulerInteraction(scope);
   const open = fakeInteraction({ customId: `harmony-manager:community:ysannounce:${ids[1]}`, kind: "button", guildId });
@@ -1294,12 +1298,21 @@ test("announcement future scope only updates the selected occurrence forward", a
   await handleEventSchedulerInteraction(channel);
   const timing = fakeInteraction({ customId: `harmony-manager:community:ysannouncetiming:${ids[1]}`, kind: "select", guildId, values: ["86400"] });
   await handleEventSchedulerInteraction(timing);
-  assert.equal(store.getEvent(guildId, ids[0]).announcement_message, "Future default");
+  // The series metadata may change for the selected/future scope, but an
+  // earlier occurrence's existing reminder/history must remain untouched.
+  const earlierAfter = store.listAnnouncements(ids[0])[0];
+  assert.equal(earlierAfter.id, earlierReminder.id);
+  assert.equal(earlierAfter.scheduled_for, earlierReminder.scheduled_for);
+  assert.equal(earlierAfter.message, earlierReminder.message);
+  assert.equal(earlierAfter.status, "pending");
   assert.equal(store.getEvent(guildId, ids[1]).announcement_message_override, null);
   assert.equal(store.getEvent(guildId, ids[2]).announcement_message_override, "Episodes 3 & 4");
-  assert.equal(store.getEvent(guildId, ids[0]).announcement_channel_id, "cinema");
   assert.equal(store.getEvent(guildId, ids[1]).announcement_channel_id, "cinema");
   assert.equal(store.getEvent(guildId, ids[2]).announcement_channel_id, "cinema");
+  assert.match(store.listAnnouncements(ids[1])[0].message, /Future default/);
+  assert.match(store.listAnnouncements(ids[2])[0].message, /Episodes 3 & 4/);
+  assert.equal(new Set(store.listAnnouncements(ids[1]).map((row) => row.scheduled_for)).size, 1);
+  assert.equal(new Set(store.listAnnouncements(ids[2]).map((row) => row.scheduled_for)).size, 1);
 });
 
 test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
