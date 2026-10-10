@@ -314,6 +314,7 @@ function migrate(database) {
       announcement_channel_id TEXT,
       announcement_offsets TEXT NOT NULL DEFAULT '[]',
       announcement_message TEXT,
+      announcement_message_override TEXT,
       all_day                 INTEGER NOT NULL DEFAULT 0,
       created_by              TEXT NOT NULL,
       created_at              TEXT NOT NULL,
@@ -532,6 +533,9 @@ function migrate(database) {
   }
   if (!scheduledEventColumns.has("announcement_message")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_message TEXT");
+  }
+  if (!scheduledEventColumns.has("announcement_message_override")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_message_override TEXT");
   }
 
   const candidateColumns = new Set(

@@ -30,6 +30,7 @@ const {
   formatAnnouncementCountdown,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
+const { getDb } = require("../src/db/sqlite");
 const { normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences, MAX_RECURRENCE_OCCURRENCES } = require("../src/services/recurrenceService");
 
 test("Youtiful Stays event types use the approved custom emoji set", () => {
@@ -1917,9 +1918,9 @@ test("scheduled announcement countdown labels use the configured offset and pres
   const source = require("../src/services/eventSchedulerService");
   const items = source.calendarAnnouncementItems(event, [259200, 86400, 3600]);
   assert.equal(items.length, 3);
-  assert.equal(items[0].message, "@everyone\n✨ 3 days to go!\nBring your lightstick!");
-  assert.equal(items[1].message, "@everyone\n✨ Tomorrow!\nBring your lightstick!");
-  assert.equal(items[2].message, "@everyone\n✨ 1 hour to go!\nBring your lightstick!");
+  assert.equal(items[0].message, "@everyone\n✨ 3 days to go!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
+  assert.equal(items[1].message, "@everyone\n✨ Tomorrow!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
+  assert.equal(items[2].message, "@everyone\n✨ 1 hour to go!\n🗓️ <t:4096047600:F>\nBring your lightstick!");
 });
 
 test("scheduled announcement offsets remain unchanged when countdown labels are generated", () => {
@@ -1944,9 +1945,9 @@ test("scheduled announcement offsets remain unchanged when countdown labels are 
   const saved = store.saveEventAnnouncements(guildId, eventId, "announcements", offsets, items, "Countdown event details");
   assert.deepEqual(JSON.parse(saved.announcement_offsets), offsets);
   assert.deepEqual(store.listAnnouncements(eventId).map((item) => item.message), [
-    "@everyone\n✨ 3 days to go!\nCountdown event details",
-    "@everyone\n✨ Tomorrow!\nCountdown event details",
-    "@everyone\n✨ 1 hour to go!\nCountdown event details",
+    "@everyone\n✨ 3 days to go!\n🗓️ <t:4096047600:F>\nCountdown event details",
+    "@everyone\n✨ Tomorrow!\n🗓️ <t:4096047600:F>\nCountdown event details",
+    "@everyone\n✨ 1 hour to go!\n🗓️ <t:4096047600:F>\nCountdown event details",
   ]);
 });
 
@@ -2009,11 +2010,11 @@ test("Announce Now automatically sends exactly one real everyone mention", async
     isSendable: () => true,
     send: async (payload) => { sent.push(payload); return { id: "msg", channelId: "cinema" }; },
   };
-  const event = { id: 1, title: "K-Drama", event_channel_id: null, discord_event_id: null };
+  const event = { id: 1, title: "K-Drama", event_at: "2099-10-03T19:00:00.000Z", event_channel_id: null, discord_event_id: null };
   assert.equal(normalizeCalendarAnnouncementBody("@everyone\nDon't forget!"), "Don't forget!");
   assert.equal(await sendImmediateCalendarAnnouncement(channel, event, "guild", "@everyone\nDon't forget!"), true);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].content, /^@everyone\nDon't forget!/);
+  assert.match(sent[0].content, /^@everyone\n🗓️ <t:4094737200:F>\nDon't forget!/);
   assert.equal((sent[0].content.match(/@everyone/g) || []).length, 1);
   assert.deepEqual(sent[0].allowedMentions, { parse: ["everyone"] });
 });
@@ -2024,4 +2025,62 @@ test("announcement timing keeps the event's non-midnight instant when subtractin
   assert.deepEqual(items.map((item) => item.scheduledFor), [
     "2099-09-30T19:00:00.000Z", "2099-10-02T19:00:00.000Z", "2099-10-03T18:00:00.000Z",
   ]);
+});
+
+
+test("calendar announcements include each event's localized timestamp", () => {
+  const source = require("../src/services/eventSchedulerService");
+  const event = { event_at: "2099-10-03T19:00:00.000Z", title: "Timed event", announcement_message: "Details" };
+  const items = source.calendarAnnouncementItems(event, [86400]);
+  assert.equal(items[0].message, "@everyone\n✨ Tomorrow!\n🗓️ <t:4094737200:F>\nDetails");
+  assert.equal((items[0].message.match(/@everyone/g) || []).length, 1);
+});
+
+test("recurring occurrence message overrides survive projection and can return to the series default", async () => {
+  const guildId = `native-override-${Date.now()}`;
+  const seriesId = `series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Recurring Watch Party", eventDate: "2099-10-02", eventAt: "2099-10-02T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "community", createdBy: "admin", discordEventId: "native-override-series", recurrenceSeriesId: seriesId, recurrenceRule: JSON.stringify({ source: "discord", startAt: "2099-10-02T23:00:00.000Z", frequency: 2, interval: 1, byWeekday: [4], count: 3 }), recurrenceIndex: 0, recurrenceNativeEnabled: 2 });
+  const anchor = store.getEvent(guildId, anchorId);
+  const occurrence = store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2099-10-09T23:00:00.000Z", eventEndAt: "2099-10-10T00:00:00.000Z" }, anchor);
+  store.saveEventAnnouncements(guildId, anchor.id, "cinema", [86400], [], "Series default");
+  store.saveEventAnnouncements(guildId, occurrence.id, "cinema", [86400], [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "old default" }], "Series default");
+  store.updateEvent(guildId, occurrence.id, { announcement_message_override: "Episodes 1 & 2!" });
+  store.refreshPendingAnnouncementMessages(occurrence.id, [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "Episodes 1 & 2!" }]);
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, "Episodes 1 & 2!");
+  assert.match(store.listAnnouncements(occurrence.id)[0].message, /Episodes 1 & 2!/);
+  store.updateEvent(guildId, occurrence.id, { announcement_message_override: null });
+  store.refreshPendingAnnouncementMessages(occurrence.id, [{ scheduledFor: "2099-10-08T23:00:00.000Z", message: "Series default" }]);
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  assert.equal(store.getEvent(guildId, occurrence.id).announcement_message_override, null);
+  assert.equal(store.listAnnouncements(occurrence.id)[0].message, "Series default");
+});
+
+
+test("occurrence override refreshes only pending reminder messages", () => {
+  const guildId = `override-pending-${Date.now()}`;
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Override event", eventDate: "2099-10-03",
+    eventAt: "2099-10-03T19:00:00.000Z", eventTimezone: "UTC", timezone: "UTC",
+    calendarType: "community", category: "community", createdBy: "admin",
+  });
+  const pendingAt = "2099-10-02T19:00:00.000Z";
+  const sentAt = "2099-10-01T19:00:00.000Z";
+  store.saveEventAnnouncements(guildId, eventId, "cinema", [86400, 172800], [
+    { scheduledFor: pendingAt, message: "old pending" },
+    { scheduledFor: sentAt, message: "old sent" },
+  ], "Series default");
+  const sent = getDb().prepare("SELECT * FROM scheduled_announcements WHERE event_id = ? AND scheduled_for = ?").get(eventId, sentAt);
+  store.markSending(sent.id);
+  store.markSent(sent.id, "discord-message");
+  store.refreshPendingAnnouncementMessages(eventId, [
+    { scheduledFor: pendingAt, message: "occurrence override" },
+    { scheduledFor: sentAt, message: "should not replace" },
+  ]);
+  const rows = getDb().prepare("SELECT * FROM scheduled_announcements WHERE event_id = ? ORDER BY scheduled_for").all(eventId);
+  assert.equal(rows.find((row) => row.scheduled_for === pendingAt).message, "occurrence override");
+  const sentRow = rows.find((row) => row.scheduled_for === sentAt);
+  assert.equal(sentRow.message, "old sent");
+  assert.equal(sentRow.status, "sent");
+  assert.equal(rows.length, 2);
 });

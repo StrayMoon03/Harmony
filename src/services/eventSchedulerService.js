@@ -598,9 +598,21 @@ function normalizeCalendarAnnouncementBody(value) {
     .replace(/\n{3,}/g, "\n\n");
 }
 
+function effectiveCalendarAnnouncementBody(event, seriesDefault = null) {
+  if (event?.announcement_message_override != null) return event.announcement_message_override;
+  return seriesDefault == null ? event?.announcement_message : seriesDefault;
+}
+
+function calendarAnnouncementTimestamp(event) {
+  const timestamp = event?.event_at ? new Date(event.event_at).getTime() : NaN;
+  return Number.isFinite(timestamp) ? `🗓️ <t:${Math.floor(timestamp / 1000)}:F>` : null;
+}
+
 function calendarAnnouncementMessage(event, offsetSeconds = null, body = null) {
   const lines = ["@everyone"];
   if (offsetSeconds != null) lines.push(formatAnnouncementCountdown(offsetSeconds));
+  const localizedDateTime = calendarAnnouncementTimestamp(event);
+  if (localizedDateTime) lines.push(localizedDateTime);
   const cleanBody = normalizeCalendarAnnouncementBody(body == null ? event?.announcement_message : body);
   if (cleanBody) lines.push(cleanBody);
   else lines.push(`📅 Reminder: **${event?.title || "Calendar event"}**${event?.event_channel_id ? ` in <#${event.event_channel_id}>` : ""} is coming up.`);
@@ -636,6 +648,17 @@ function announcementChannelMenu(action, eventId = "new") {
     .setCustomId(`harmony-manager:community:${action}:${eventId}`)
     .setPlaceholder("Choose the announcement channel")
     .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildVoice))];
+}
+
+function announcementScopeMenu(eventId) {
+  return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(`harmony-manager:community:ysannouncescope:${eventId}`)
+    .setPlaceholder("Choose announcement scope")
+    .setMinValues(1).setMaxValues(1)
+    .addOptions(
+      { label: "Entire recurring series", value: "series", description: "Use this message for this and future occurrences." },
+      { label: "This occurrence only", value: "occurrence", description: "Override the message for this occurrence." },
+    ))];
 }
 
 async function sendImmediateCalendarAnnouncement(channel, event, guildId, message) {
@@ -693,6 +716,7 @@ async function beginCanonicalAnnouncementFlow(interaction, event, eventIds = [ev
     linked: Boolean(event.discord_event_id),
     title: event.title,
     editing: true,
+    announcementScope: "series",
   });
   await interaction.update({
     content: `Would you like to schedule announcements for **${event.title}**?`,
@@ -702,10 +726,11 @@ async function beginCanonicalAnnouncementFlow(interaction, event, eventIds = [ev
 
 function applyAnnouncementConfig(guildId, event, scope, offsets, channelId) {
   return announcementTargets(guildId, event, scope).map((item) => {
+    const body = effectiveCalendarAnnouncementBody(item, event.announcement_message);
     if (Number(item.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
-      return store.mergeEventAnnouncements(guildId, item.id, channelId, offsets, calendarAnnouncementItems({ ...item, announcement_message: event.announcement_message }, offsets), event.announcement_message);
+      return store.mergeEventAnnouncements(guildId, item.id, channelId, offsets, calendarAnnouncementItems({ ...item, announcement_message: body }, offsets), scope === "series" && item.id === event.id ? event.announcement_message : undefined);
     }
-    return persistCalendarAnnouncements(guildId, item, offsets, channelId);
+    return store.saveEventAnnouncements(guildId, item.id, channelId, offsets, calendarAnnouncementItems({ ...item, announcement_message: body }, offsets), body);
   });
 }
 
@@ -840,8 +865,9 @@ function materializeNativeSeriesAnnouncements(guildId, anchor, occurrences) {
   for (const occurrence of occurrences) {
     const target = store.getSeriesEvent(guildId, anchor.recurrence_series_id, occurrence.occurrenceIndex);
     if (!target) continue;
-    const items = calendarAnnouncementItems(target, offsets);
-    store.mergeEventAnnouncements(guildId, target.id, anchor.announcement_channel_id, offsets, items, anchor.announcement_message);
+    const body = effectiveCalendarAnnouncementBody(target, anchor.announcement_message);
+    const items = calendarAnnouncementItems({ ...target, announcement_message: body }, offsets);
+    store.mergeEventAnnouncements(guildId, target.id, anchor.announcement_channel_id, offsets, items, target.id === anchor.id ? anchor.announcement_message : undefined);
   }
 }
 
@@ -2171,6 +2197,18 @@ async function handleManagerInteraction(interaction) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementChannelId: interaction.values[0] });
+    const configured = store.getEvent(interaction.guildId, Number(eventId));
+    if (configured?.recurrence_series_id && Number(configured.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+      await interaction.update({ content: "This is a recurring series. Choose whether this message applies to the entire series or this occurrence only. Existing occurrence overrides are preserved unless you choose the series default.", components: announcementScopeMenu(eventId) });
+    } else {
+      await interaction.update({ content: "Choose one or more announcement timings.", components: announcementTimingMenu("ysannouncetiming", eventId) });
+    }
+    return;
+  }
+  if (calendarType === "community" && action === "ysannouncescope" && interaction.isStringSelectMenu()) {
+    const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
+    if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementScope: interaction.values[0] === "occurrence" ? "occurrence" : "series" });
     await interaction.update({ content: "Choose one or more announcement timings.", components: announcementTimingMenu("ysannouncetiming", eventId) });
     return;
   }
@@ -2183,16 +2221,27 @@ async function handleManagerInteraction(interaction) {
     const first = store.getEvent(interaction.guildId, eventIds[0]);
     if (!first) { await interaction.update({ content: "The event is no longer active.", components: [] }); return; }
     const announcementMessage = normalizeCalendarAnnouncementBody(draft.announcementMessage);
+    const announcementScope = draft.announcementScope || "series";
     const offsets = selected.filter((value) => value !== "now").map(Number).filter((value) => [3600, 86400, 259200, 604800].includes(value));
     console.log(`[scheduler-announcements] timing-submit guild=${interaction.guildId} eventIds=${eventIds.join(",")} selected=${selected.join(",")} channel=${draft.announcementChannelId}`);
+    const recurring = Number(first.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && first.recurrence_series_id;
+    const seriesEvents = recurring ? store.listSeriesEvents(interaction.guildId, first.recurrence_series_id) : [];
+    const seriesAnchor = recurring ? (seriesEvents.find((item) => Number(item.recurrence_index) === 0) || first) : first;
     let immediatePosted = false;
     let immediateFailed = false;
     let immediateAttempted = false;
-    for (const id of eventIds) {
+    const targetIds = announcementScope === "series" && recurring ? [seriesAnchor.id] : eventIds;
+    for (const id of targetIds) {
       const event = store.getEvent(interaction.guildId, id);
       if (!event) continue;
       const items = calendarAnnouncementItems({ ...event, announcement_message: announcementMessage }, offsets);
-      store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, announcementMessage);
+      if (announcementScope === "occurrence" && Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+        store.updateEvent(interaction.guildId, event.id, { announcement_message_override: announcementMessage });
+        store.mergeEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items);
+        store.refreshPendingAnnouncementMessages(event.id, items);
+      } else {
+        store.saveEventAnnouncements(interaction.guildId, event.id, draft.announcementChannelId, offsets, items, announcementMessage);
+      }
       if (selected.includes("now") && !immediateAttempted) {
         immediateAttempted = true;
         const channel = interaction.guild?.channels?.cache?.get(draft.announcementChannelId) || await interaction.guild?.channels?.fetch(draft.announcementChannelId).catch(() => null);
@@ -2201,8 +2250,13 @@ async function handleManagerInteraction(interaction) {
         console.log(`[scheduler-announcements] timing-immediate-result guild=${interaction.guildId} event=${event.id} channel=${draft.announcementChannelId} posted=${immediatePosted}`);
       }
     }
-    const configured = store.getEvent(interaction.guildId, eventIds[0]);
-    if (configured && Number(configured.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
+    const configured = store.getEvent(interaction.guildId, announcementScope === "series" && recurring ? seriesAnchor.id : eventIds[0]);
+    if (configured && Number(configured.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && announcementScope === "series") {
+      if (first.id !== seriesAnchor.id && first.announcement_message_override != null) {
+        store.updateEvent(interaction.guildId, first.id, { announcement_message_override: null });
+        const inheritedItems = calendarAnnouncementItems({ ...first, announcement_message: configured.announcement_message }, offsets);
+        store.refreshPendingAnnouncementMessages(first.id, inheritedItems);
+      }
       applyAnnouncementConfig(interaction.guildId, configured, "series", offsets, draft.announcementChannelId);
     }
     managerDrafts.delete(draftKey(interaction, calendarType, `announce-${eventId}`));

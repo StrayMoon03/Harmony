@@ -479,7 +479,7 @@ function cancelSeriesEvents(guildId, seriesId, cancelledBy, fromIndex = null) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "announcement_channel_id", "announcement_offsets", "announcement_message"];
+  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "announcement_channel_id", "announcement_offsets", "announcement_message", "announcement_message_override"];
   const normalizedChanges = { ...changes };
   // event_timezone is nullable for all-day events, but the legacy timezone
   // column is NOT NULL. Preserve its compatibility value when an edit clears
@@ -557,6 +557,19 @@ function mergeEventAnnouncements(guildId, eventId, channelId, offsets, items, an
     db.exec("COMMIT");
     return getEvent(guildId, eventId);
   } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+function refreshPendingAnnouncementMessages(eventId, items) {
+  const db = getDb();
+  const update = db.prepare("UPDATE scheduled_announcements SET message = ? WHERE event_id = ? AND scheduled_for = ? AND status = 'pending'");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const item of items || []) update.run(item.message, eventId, item.scheduledFor);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function getDiscordEventReconciliation(guildId, discordEventId) {
@@ -650,6 +663,7 @@ module.exports = {
   markFailed,
   saveEventAnnouncements,
   mergeEventAnnouncements,
+  refreshPendingAnnouncementMessages,
   getDiscordEventReconciliation,
   saveDiscordEventReconciliation,
   claimDiscordEventReconciliation,
