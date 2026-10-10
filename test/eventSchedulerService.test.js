@@ -1291,8 +1291,11 @@ test("recurring announcement UX offers only event/series scopes and uses separat
   const firstPage = open.responses.at(-1).modal.toJSON();
   assert.equal(firstPage.components.length, 5);
   assert.equal(firstPage.components[0].components[0].custom_id, "announcement-message");
+  assert.equal(firstPage.components[0].components[0].label, "Message for all dates");
+  assert.equal(firstPage.components[0].components[0].placeholder, "Used for every occurrence unless you enter a different message for a specific date.");
   assert.deepEqual(firstPage.components.slice(1).map((row) => row.components[0].custom_id), ids.slice(0, 4).map((id) => `announcement-override-${id}`));
   assert.match(firstPage.components[3].components[0].label, /Friday, October 16/);
+  assert.equal(firstPage.components[3].components[0].placeholder, "Optional — replace the message for this date");
   assert.equal(firstPage.components[3].components[0].value, "Existing October 16 override");
   const submitFirst = fakeInteraction({
     customId: `harmony-manager:community:ysannouncemodal:${ids[2]}`, kind: "modal", guildId,
