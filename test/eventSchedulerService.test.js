@@ -2009,11 +2009,11 @@ test("Announce Now automatically sends exactly one real everyone mention", async
     isSendable: () => true,
     send: async (payload) => { sent.push(payload); return { id: "msg", channelId: "cinema" }; },
   };
-  const event = { id: 1, title: "K-Drama", event_channel_id: null, discord_event_id: null };
+  const event = { id: 1, title: "K-Drama", event_at: "2099-10-03T19:00:00.000Z", event_channel_id: null, discord_event_id: null };
   assert.equal(normalizeCalendarAnnouncementBody("@everyone\nDon't forget!"), "Don't forget!");
   assert.equal(await sendImmediateCalendarAnnouncement(channel, event, "guild", "@everyone\nDon't forget!"), true);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].content, /^@everyone\nDon't forget!/);
+  assert.match(sent[0].content, /^@everyone\n🗓️ <t:4094737200:F>\nDon't forget!/);
   assert.equal((sent[0].content.match(/@everyone/g) || []).length, 1);
   assert.deepEqual(sent[0].allowedMentions, { parse: ["everyone"] });
 });
