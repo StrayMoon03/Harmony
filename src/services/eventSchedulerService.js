@@ -2199,7 +2199,7 @@ async function handleManagerInteraction(interaction) {
     managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), { ...draft, announcementChannelId: interaction.values[0] });
     const configured = store.getEvent(interaction.guildId, Number(eventId));
     if (configured?.recurrence_series_id && Number(configured.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) {
-      await interaction.update({ content: "This is a recurring series. Choose whether this message applies to the entire series or this occurrence only.", components: announcementScopeMenu(eventId) });
+      await interaction.update({ content: "This is a recurring series. Choose whether this message applies to the entire series or this occurrence only. Existing occurrence overrides are preserved unless you choose the series default.", components: announcementScopeMenu(eventId) });
     } else {
       await interaction.update({ content: "Choose one or more announcement timings.", components: announcementTimingMenu("ysannouncetiming", eventId) });
     }
