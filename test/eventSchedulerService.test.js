@@ -2183,22 +2183,39 @@ test("monthly publication filters events to the requested month", async () => {
   assert.doesNotMatch(message.payload.embeds[0].description, /November event/);
 });
 
-test("monthly publication collapses duplicate rows for one recurring occurrence", async () => {
-  const guildId = `calendar-duplicate-occurrence-${Date.now()}`;
-  const control = fakeChannel("duplicate-control");
-  const calendar = fakeChannel("duplicate-calendar");
+test("editing recurring events updates existing rows and refreshes one published month", async () => {
+  const guildId = `calendar-edit-idempotent-${Date.now()}`;
+  const control = fakeChannel("edit-idempotent-control");
+  const calendar = fakeChannel("edit-idempotent-calendar");
   store.setCalendarChannels(guildId, null, calendar.id);
   store.setManagerChannel(guildId, control.id);
   const guild = fakeGuild(guildId, [control, calendar]);
   const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
-  const seriesId = `duplicate-series-${Date.now()}`;
-  const values = { guildId, calendarChannelId: calendar.id, title: "Friday K-Drama", eventDate: "2026-10-17", eventAt: "2026-10-17T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "kdrama", recurrenceSeriesId: seriesId, recurrenceIndex: 0, createdBy: "admin" };
-  store.createCalendarEvent(values);
-  store.createCalendarEvent(values);
+  const seriesId = `edit-idempotent-series-${Date.now()}`;
+  const eventValues = (index, date) => ({
+    guildId, calendarChannelId: calendar.id, title: "Friday K-Drama", eventDate: date,
+    eventAt: `${date}T23:00:00.000Z`, eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "kdrama", recurrenceSeriesId: seriesId, recurrenceIndex: index,
+    recurrenceRule: JSON.stringify({ source: "discord" }), createdBy: "admin",
+  });
+  const firstId = store.createCalendarEvent(eventValues(0, "2026-10-17"));
+  store.createCalendarEvent(eventValues(1, "2026-10-24"));
+  store.createCalendarEvent(eventValues(2, "2026-10-31"));
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
+
+  applyRecurringChanges(guildId, store.getEvent(guildId, firstId), "this", { description: "Updated first occurrence" });
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
+  applyRecurringChanges(guildId, store.getEvent(guildId, firstId), "series", { category: "games", calendar_event_type: "games" });
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
+  assert.equal(store.listSeriesEvents(guildId, seriesId).filter((event) => event.category === "games").length, 3);
+
   await publishMonthlyCalendar(client, guildId, "community", "2026-10");
-  const message = await calendar.messages.fetch("duplicate-calendar-message-1");
-  const text = message.payload.embeds[0].description;
-  assert.equal((text.match(/Friday K-Drama/g) || []).length, 1);
+  const firstMessage = await calendar.messages.fetch("edit-idempotent-calendar-message-1");
+  await refreshPublishedCalendar(client, guildId, "community", "2026-10-17");
+  await refreshPublishedCalendar(client, guildId, "community", "2026-10-24");
+  assert.equal(calendar.messageCount(), 1);
+  assert.deepEqual(store.listPublishedCalendars(guildId, "community", "2026-10").map((row) => row.message_id), [firstMessage.id]);
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
 });
 
 test("adopting a recurring occurrence already projected in Harmony reuses its series anchor", async () => {

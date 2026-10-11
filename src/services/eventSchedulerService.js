@@ -1179,20 +1179,6 @@ function youtifulBirthdayEvents(guildId, monthKey) {
     }));
 }
 
-function dedupeCalendarEvents(events) {
-  const seen = new Set();
-  return (events || []).filter((event) => {
-    const key = event.recurrence_series_id
-      ? `series:${event.recurrence_series_id}:${event.recurrence_index}`
-      : event.discord_event_id
-        ? `discord:${event.discord_event_id}`
-        : `event:${event.id}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 function youtifulEventBlock(event) {
   const icon = YOUTIFUL_EVENT_TYPE_ICONS[event.calendar_event_type] || YOUTIFUL_EVENT_TYPE_ICONS.other;
   const date = event.event_date || (event.event_at || "").slice(0, 10);
@@ -1276,7 +1262,7 @@ async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, {
   const [year, month] = monthKey.split("-").map(Number);
   const start = `${monthKey}-01T00:00:00.000Z`;
   const next = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
-  let events = dedupeCalendarEvents(store.listCalendarEvents(guildId, calendarType, start, `${next}-01T00:00:00.000Z`));
+  let events = store.listCalendarEvents(guildId, calendarType, start, `${next}-01T00:00:00.000Z`);
   if (calendarType === "community") {
     events = [...events, ...youtifulBirthdayEvents(guildId, monthKey)].sort((a, b) => String(a.event_date || a.event_at).localeCompare(String(b.event_date || b.event_at)));
   }

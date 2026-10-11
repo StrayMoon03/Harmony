@@ -291,44 +291,78 @@ function listNativeRecurringSeriesAnchors() {
 }
 
 function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
-  const existing = getSeriesEvent(guildId, seriesId, occurrence.occurrenceIndex);
-  if (existing) return existing;
+  // The projection worker can be reached by startup sync and the recurring
+  // interval close together. Recheck under the write lock so two callers
+  // cannot both observe a missing occurrence and insert duplicate rows.
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
   try {
-    const id = createCalendarEvent({
+    const existing = db.prepare(`
+      SELECT * FROM scheduled_events
+      WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = ? AND cancelled_at IS NULL
+      LIMIT 1
+    `).get(guildId, seriesId, occurrence.occurrenceIndex);
+    if (existing) {
+      db.exec("COMMIT");
+      return existing;
+    }
+    const now = new Date().toISOString();
+    const storedTimezone = template.timezone || "UTC";
+    const description = Number(template.recurrence_native_enabled) === 2 && template.recurrence_exception
+      ? null
+      : template.description;
+    const announcementOffsets = (() => {
+      try { return JSON.parse(template.announcement_offsets || "[]"); } catch { return []; }
+    })();
+    const result = db.prepare(`
+      INSERT INTO scheduled_events (
+        guild_id, source_channel_id, destination_channel_id, title,
+        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone,
+        event_location, description, category, member, all_day, calendar_event_type,
+        event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule,
+        recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception,
+        recurrence_native_enabled, announcement_channel_id, announcement_offsets,
+        announcement_message, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
       guildId,
-      calendarChannelId: template.destination_channel_id || template.source_channel_id || null,
-      title: template.title,
-      link: template.link || "",
-      timezone: template.timezone || "UTC",
-      eventAt: occurrence.eventAt,
-      eventEndAt: occurrence.eventEndAt,
-      eventDate: occurrence.eventAt.slice(0, 10),
-      eventTimezone: template.event_timezone || template.timezone || "UTC",
-      eventLocation: template.event_location,
-      calendarType: template.calendar_type,
-      category: template.category,
-      member: template.member,
-      allDay: Boolean(template.all_day),
-      // Imported recurring anchors may carry an occurrence-specific
-      // description; never use that exception as a future-series template.
-      description: Number(template.recurrence_native_enabled) === 2 && template.recurrence_exception
-        ? null
-        : template.description,
-      createdBy: template.created_by,
-      calendarEventType: template.calendar_event_type,
-      eventChannelId: template.event_channel_id,
-      recurrenceSeriesId: seriesId,
-      recurrenceRule: template.recurrence_rule,
-      recurrenceIndex: occurrence.occurrenceIndex,
-      recurrenceEndDate: template.recurrence_end_date,
-      recurrenceEndCount: template.recurrence_end_count,
-      recurrenceNativeEnabled: false,
-      announcementChannelId: template.announcement_channel_id,
-      announcementOffsets: (() => { try { return JSON.parse(template.announcement_offsets || "[]"); } catch { return []; } })(),
-      announcementMessage: template.announcement_message,
-    });
-    return getEvent(guildId, id);
-  } catch (error) { throw error; }
+      template.source_channel_id || template.destination_channel_id || "",
+      template.destination_channel_id || template.source_channel_id || "",
+      template.title,
+      template.link || "",
+      storedTimezone,
+      template.calendar_type,
+      occurrence.eventAt,
+      occurrence.eventEndAt,
+      occurrence.eventAt.slice(0, 10),
+      template.event_timezone || storedTimezone,
+      template.event_location || null,
+      description || null,
+      template.category || null,
+      template.member || null,
+      template.all_day ? 1 : 0,
+      template.calendar_event_type || null,
+      template.event_channel_id || null,
+      null,
+      seriesId,
+      template.recurrence_rule,
+      occurrence.occurrenceIndex,
+      template.recurrence_end_date || null,
+      template.recurrence_end_count || null,
+      0,
+      0,
+      template.announcement_channel_id || null,
+      JSON.stringify(announcementOffsets),
+      template.announcement_message || null,
+      template.created_by,
+      now,
+    );
+    db.exec("COMMIT");
+    return getEvent(guildId, Number(result.lastInsertRowid));
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function listRecurringNativeCandidates(nowIso, untilIso, limit = 100) {
