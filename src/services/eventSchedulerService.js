@@ -947,11 +947,17 @@ async function syncChangedNativeEvents(client, events) {
   }
 }
 
-function nativeRecurrencePayload(nativeEvent) {
+function nativeRecurrencePayload(nativeEvent, effectiveAnchorAt = null) {
   const rule = nativeEvent?.recurrenceRule;
   if (!rule) return null;
+  const anchorAt = effectiveAnchorAt || nativeEvent.scheduledStartAt || rule.startAt;
   return JSON.stringify({
     source: "discord",
+    // Discord's recurrence rule can describe the historical beginning of a
+    // long-running series. Harmony adopts the occurrence currently selected
+    // by Discord, so keep that effective anchor explicitly and never project
+    // occurrences before it.
+    anchorAt: anchorAt?.toISOString?.() || anchorAt || null,
     startAt: rule.startAt?.toISOString?.() || nativeEvent.scheduledStartAt?.toISOString?.() || null,
     endAt: rule.endAt?.toISOString?.() || null,
     frequency: Number(rule.frequency),
@@ -975,7 +981,8 @@ function parseNativeRecurrence(event) {
 function nativeSeriesOccurrences(event, until = null) {
   const rule = parseNativeRecurrence(event);
   if (!rule) return [];
-  const anchorMs = Date.parse(rule.startAt || event.event_at);
+  const effectiveStartAt = rule.anchorAt || event.event_at || rule.startAt;
+  const anchorMs = Date.parse(effectiveStartAt);
   const configuredUntil = parseManagerDate(event.recurrence_end_date)
     ? new Date(`${event.recurrence_end_date}T23:59:59.999Z`)
     : null;
@@ -983,7 +990,7 @@ function nativeSeriesOccurrences(event, until = null) {
     ? new Date(Math.min(configuredUntil.getTime(), new Date(until).getTime()))
     : configuredUntil || until || new Date(Math.max(Date.now(), anchorMs) + 180 * 24 * 60 * 60 * 1000);
   return generateDiscordRecurringOccurrences({
-    startAt: rule.startAt || event.event_at,
+    startAt: effectiveStartAt,
     endAt: event.event_end_at,
     recurrenceRule: rule,
     until: horizon,
@@ -1940,13 +1947,23 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
   if (!event.scheduledStartAt) return;
-  const nextNativeRule = nativeRecurrencePayload(event);
+  const existingRule = parseNativeRecurrence(linked);
+  const effectiveAnchorAt = existingRule?.anchorAt || linked.event_at || event.scheduledStartAt;
+  const nextNativeRule = nativeRecurrencePayload(event, effectiveAnchorAt);
   const recurrenceChanged = Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule !== linked.recurrence_rule;
   if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime() && !recurrenceChanged) return;
   const timezone = linked.event_timezone || linked.timezone;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
   const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  const changes = { title: event.name, event_at: event.scheduledStartAt.toISOString(), event_end_at: event.scheduledEndAt?.toISOString() || null, event_date: `${localDate.year}-${localDate.month}-${localDate.day}` };
+  const isNativeSeriesAnchor = Boolean(linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE);
+  const changes = {
+    title: event.name,
+    // A recurring native event's scheduledStartAt advances to the selected
+    // occurrence. Keep Harmony's adopted anchor stable across reconciliation.
+    event_at: isNativeSeriesAnchor ? linked.event_at : event.scheduledStartAt.toISOString(),
+    event_end_at: isNativeSeriesAnchor ? linked.event_end_at : event.scheduledEndAt?.toISOString() || null,
+    event_date: isNativeSeriesAnchor ? linked.event_date : `${localDate.year}-${localDate.month}-${localDate.day}`,
+  };
   if (Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) changes.recurrence_rule = nextNativeRule;
   const updated = store.updateEvent(event.guildId, linked.id, changes);
   if (updated?.recurrence_series_id && Number(updated.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule) await syncDiscordRecurringSeries(event.guildId, updated).catch((error) => console.error("Discord recurring series update failed:", error));
@@ -1965,7 +1982,7 @@ async function handleGuildScheduledEventDelete(client, event) {
 }
 
 async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, description, descriptions = null, cutoffDate = null, adoptSeries = true, genericDescription = null) {
-  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(nativeEvent) : null;
+  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt) : null;
   const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
   const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
   let target = existing;
@@ -2011,7 +2028,7 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
   const alreadyLinked = store.getEventByDiscordId(interaction.guildId, discordEventId);
   if (alreadyLinked) return alreadyLinked;
   const eventAt = event.scheduledStartAt.toISOString();
-  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event) : null;
+  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event, event.scheduledStartAt) : null;
   const existingOccurrence = recurrenceRule
     ? store.findAdoptableNativeEventByTitleAndAt(interaction.guildId, event.name, eventAt)
     : store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
@@ -2030,7 +2047,7 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
 }
 
 async function attachNativeRecurrence(interaction, nativeEvent, linked, cutoffDate = null) {
-  const recurrenceRule = nativeRecurrencePayload(nativeEvent);
+  const recurrenceRule = nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt);
   if (!recurrenceRule) return linked;
   const seriesId = linked.recurrence_series_id || randomUUID();
   const updated = store.updateEvent(interaction.guildId, linked.id, {
