@@ -311,7 +311,9 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
       allDay: Boolean(template.all_day),
       // Imported recurring anchors may carry an occurrence-specific
       // description; never use that exception as a future-series template.
-      description: template.recurrence_exception ? null : template.description,
+      description: Number(template.recurrence_native_enabled) === 2 && template.recurrence_exception
+        ? null
+        : template.description,
       createdBy: template.created_by,
       calendarEventType: template.calendar_event_type,
       eventChannelId: template.event_channel_id,
