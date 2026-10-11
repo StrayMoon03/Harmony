@@ -91,6 +91,10 @@ const SKZ_TIMEZONE_OPTIONS = [
   { label: "China / Beijing Time", value: "Asia/Shanghai" },
   YOUTIFUL_TIMEZONE_OPTIONS.at(-1),
 ];
+// Community calendar presentation defaults to the existing Eastern Time
+// option. Individual calendar events continue to use their persisted IANA
+// timezone when one is available.
+const DEFAULT_YOUTIFUL_TIMEZONE = YOUTIFUL_TIMEZONE_OPTIONS[0].value;
 
 function calendarLabel(calendarType) {
   return calendarType === "stray_kids" ? "STRAY KIDS" : "YOUTIFUL STAYS";
@@ -768,11 +772,25 @@ function announcementTargets(guildId, event, scope) {
   return scope === "series" ? series : scope === "future" ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
 }
 
-function announcementOccurrenceLabel(event) {
-  const date = event?.event_date || (event?.event_at || "").slice(0, 10);
+function calendarPresentationTimezone(event, fallback = DEFAULT_YOUTIFUL_TIMEZONE) {
+  const candidate = event?.event_timezone || event?.timezone;
+  // Older adopted native rows used UTC as a storage placeholder. Their
+  // absolute event_at remains authoritative, but labels use the community
+  // calendar's existing Eastern Time default until an event timezone is set.
+  if (event?.discord_event_origin === "adopted" && candidate === "UTC") return fallback;
+  return validTimezone(candidate) ? candidate : fallback;
+}
+
+function announcementOccurrenceLabel(event, seriesAnchor = null) {
+  const timezone = calendarPresentationTimezone(seriesAnchor || event);
+  if (event?.event_at && !Number.isNaN(new Date(event.event_at).getTime())) {
+    return new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long", month: "long", day: "numeric" })
+      .format(new Date(event.event_at));
+  }
+  const date = event?.event_date || "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Occurrence date pending";
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "long", month: "long", day: "numeric" })
-    .format(new Date(`${date}T00:00:00Z`));
+  return new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long", month: "long", day: "numeric" })
+    .format(new Date(`${date}T12:00:00Z`));
 }
 
 const ANNOUNCEMENT_OCCURRENCES_PER_PAGE = 4;
@@ -820,7 +838,7 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
     for (const target of targets) {
       const input = new TextInputBuilder()
         .setCustomId(`announcement-override-${target.id}`)
-        .setLabel(announcementOccurrenceLabel(target).slice(0, 45))
+        .setLabel(announcementOccurrenceLabel(target, seriesAnchor).slice(0, 45))
         .setPlaceholder("Optional — replace the message for this date")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(false)
@@ -1715,49 +1733,14 @@ function nativeDescriptionOccurrences(nativeEvent, cutoffDate = null) {
   });
 }
 
-function nativeRecurrenceDiagnosticSnapshot(nativeEvent) {
-  if (nativeEvent && Object.prototype.hasOwnProperty.call(nativeEvent, "recurrenceRuleStartAt")) return { ...nativeEvent };
-  const rule = nativeEvent?.recurrenceRule;
-  const iso = (value) => value?.toISOString?.() || (typeof value === "string" ? value : null);
-  return {
-    id: nativeEvent?.id || null,
-    name: nativeEvent?.name || null,
-    scheduledStartAt: iso(nativeEvent?.scheduledStartAt),
-    recurrenceRuleStartAt: iso(rule?.startAt),
-    byWeekday: Array.isArray(rule?.byWeekday) ? rule.byWeekday : null,
-    frequency: rule?.frequency ?? null,
-    interval: rule?.interval ?? null,
-  };
-}
-
-function logNativeRecurrenceDiagnostic(stage, nativeEvent, details = {}) {
-  console.log(`[Native Recurrence Diagnostic] ${JSON.stringify({
-    stage,
-    ...nativeRecurrenceDiagnosticSnapshot(nativeEvent),
-    ...details,
-  })}`);
-}
-
-function logNativeDescriptionModalDiagnostic(stage, nativeId, nativeSnapshot, occurrences) {
-  const eventAt = (occurrences || []).slice(0, 4).map((occurrence) => occurrence.eventAt);
-  logNativeRecurrenceDiagnostic(stage, {
-    ...nativeSnapshot,
-    id: nativeSnapshot?.id || nativeId,
-  }, {
-    nativeId,
-    firstFourEventAt: eventAt,
-    labels: (occurrences || []).slice(0, 4).map(nativeDescriptionOccurrenceLabel),
-  });
-}
-
-function nativeDescriptionOccurrenceLabel(occurrence) {
+function nativeDescriptionOccurrenceLabel(occurrence, timezone = DEFAULT_YOUTIFUL_TIMEZONE) {
   const date = new Date(occurrence.eventAt);
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: "UTC", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    timeZone: timezone, weekday: "long", month: "long", day: "numeric", year: "numeric",
   }).format(date).slice(0, 45);
 }
 
-function nativeSeriesDescriptionModal(customId, nativeEvent, occurrences, page, descriptions = {}, genericDescription = "") {
+function nativeSeriesDescriptionModal(customId, nativeEvent, occurrences, page, descriptions = {}, genericDescription = "", presentationTimezone = DEFAULT_YOUTIFUL_TIMEZONE) {
   const start = page * NATIVE_DESCRIPTION_PAGE_SIZE;
   const targets = occurrences.slice(start, start + NATIVE_DESCRIPTION_PAGE_SIZE);
   const modal = new ModalBuilder()
@@ -1778,7 +1761,7 @@ function nativeSeriesDescriptionModal(customId, nativeEvent, occurrences, page, 
     const index = Number(occurrence.occurrenceIndex);
     const input = new TextInputBuilder()
       .setCustomId(`description-${index}`)
-      .setLabel(nativeDescriptionOccurrenceLabel(occurrence))
+      .setLabel(nativeDescriptionOccurrenceLabel(occurrence, presentationTimezone))
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(false)
       .setMaxLength(4000)
@@ -1839,18 +1822,11 @@ function nativeCutoffDate(value, nativeEvent) {
 function nativeDescriptionDraft(nativeEvent, linkedId, cutoffDate, interaction) {
   const occurrences = nativeDescriptionOccurrences(nativeEvent, cutoffDate);
   const key = nativeDescriptionDraftKey(interaction, nativeEvent.id, linkedId || "add");
-  const nativeSnapshot = nativeRecurrenceDiagnosticSnapshot(nativeEvent);
-  logNativeRecurrenceDiagnostic("description-draft", nativeEvent, {
-    nativeId: nativeEvent.id,
-    draftKey: key,
-    storedNativeId: nativeEvent.id,
-    effectiveStartAt: nativeSnapshot.scheduledStartAt,
-    firstFourEventAt: occurrences.slice(0, 4).map((occurrence) => occurrence.eventAt),
-    cutoff: cutoffDate,
-  });
+  const linked = linkedId ? store.getEvent(interaction.guildId, Number(linkedId)) : null;
   const draft = {
     nativeId: nativeEvent.id, linkedId, cutoffDate,
-    nativeEvent: { description: nativeEvent.description || "" }, nativeDiagnostic: nativeSnapshot,
+    nativeEvent: { description: nativeEvent.description || "" },
+    presentationTimezone: calendarPresentationTimezone(linked),
     occurrences, descriptions: {}, genericDescription: "",
   };
   managerDrafts.set(key, draft);
@@ -1860,22 +1836,13 @@ function nativeDescriptionDraft(nativeEvent, linkedId, cutoffDate, interaction) 
 async function showNativeDescriptionFlow(interaction, nativeEvent, linkedId = null) {
   const occurrences = nativeDescriptionOccurrences(nativeEvent);
   const key = nativeDescriptionDraftKey(interaction, nativeEvent.id, linkedId || "add");
-  const nativeSnapshot = nativeRecurrenceDiagnosticSnapshot(nativeEvent);
-  logNativeRecurrenceDiagnostic("description-draft", nativeEvent, {
-    nativeId: nativeEvent.id,
-    draftKey: key,
-    storedNativeId: nativeEvent.id,
-    effectiveStartAt: nativeSnapshot.scheduledStartAt,
-    firstFourEventAt: occurrences.slice(0, 4).map((occurrence) => occurrence.eventAt),
-    cutoff: null,
-  });
-  const draft = { nativeId: nativeEvent.id, linkedId, nativeEvent: { description: nativeEvent.description || "" }, nativeDiagnostic: nativeSnapshot, occurrences, descriptions: {}, genericDescription: "" };
+  const linked = linkedId ? store.getEvent(interaction.guildId, Number(linkedId)) : null;
+  const draft = { nativeId: nativeEvent.id, linkedId, nativeEvent: { description: nativeEvent.description || "" }, presentationTimezone: calendarPresentationTimezone(linked), occurrences, descriptions: {}, genericDescription: "" };
   managerDrafts.set(key, draft);
   const page = linkedId == null
     ? `harmony-manager:community:nativeaddseriesmodal:${nativeEvent.id}:0`
     : `harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeEvent.id}:0`;
-  logNativeDescriptionModalDiagnostic("description-modal", nativeEvent.id, nativeSnapshot, occurrences);
-  await interaction.showModal(nativeSeriesDescriptionModal(page, nativeEvent, occurrences, 0));
+  await interaction.showModal(nativeSeriesDescriptionModal(page, nativeEvent, occurrences, 0, {}, "", draft.presentationTimezone));
 }
 
 function nativeDescriptionPageCount(occurrences) {
@@ -2349,7 +2316,6 @@ async function handleManagerInteraction(interaction) {
       await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 });
       return;
     }
-    logNativeRecurrenceDiagnostic("findnativeselect", native, { selectedNativeId: nativeId });
     const linked = store.getEventByDiscordId(interaction.guildId, nativeId);
     if (linked) {
       await interaction.reply({ content: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.`, flags: 64 });
@@ -2459,7 +2425,7 @@ async function handleManagerInteraction(interaction) {
     const key = nativeDescriptionDraftKey(interaction, nativeId, linkedId);
     const draft = managerDrafts.get(key);
     if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
-    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions, draft.genericDescription));
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions, draft.genericDescription, draft.presentationTimezone));
     return;
   }
   if (calendarType === "community" && action === "nativelinkseriescontinue" && interaction.isButton()) {
@@ -2469,7 +2435,7 @@ async function handleManagerInteraction(interaction) {
     const key = nativeDescriptionDraftKey(interaction, nativeId, linkedId);
     const draft = managerDrafts.get(key);
     if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
-    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions, draft.genericDescription));
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions, draft.genericDescription, draft.presentationTimezone));
     return;
   }
   if (calendarType === "community" && action === "nativelinkseriesmodal" && interaction.isModalSubmit()) {
@@ -2513,7 +2479,6 @@ async function handleManagerInteraction(interaction) {
     let native = null;
     try { native = await interaction.guild?.scheduledEvents?.fetch(eventId); } catch { native = null; }
     if (!native) { await interaction.update({ content: "That Discord Scheduled Event is no longer available.", components: [] }); return; }
-    logNativeRecurrenceDiagnostic("nativeadd", native, { nativeId: eventId });
     if (store.getEventByDiscordId(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
     if (isRecurringNativeEvent(native)) await interaction.update({ content: "Bring this Discord event into Harmony as:", components: nativeAdoptionScopeMenu(eventId) });
     else await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativeaddmodal:${eventId}`, native));
@@ -2524,7 +2489,6 @@ async function handleManagerInteraction(interaction) {
     let native = null;
     try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
     if (!native) { await interaction.update({ content: "That Discord Scheduled Event is no longer available.", components: [] }); return; }
-    logNativeRecurrenceDiagnostic("nativeaddscope", native, { nativeId, selectedScope: interaction.values[0] });
     if (interaction.values[0] === "this") await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativeaddsinglemodal:${nativeId}`, native));
     else await interaction.showModal(nativeSeriesCutoffModal(`harmony-manager:community:nativeaddcutoff:${nativeId}`, native));
     return;
@@ -2534,7 +2498,6 @@ async function handleManagerInteraction(interaction) {
     let native = null;
     try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
     if (!native) { await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 }); return; }
-    logNativeRecurrenceDiagnostic("nativeaddcutoff", native, { nativeId });
     try {
       const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native);
       nativeDescriptionDraft(native, null, cutoffDate, interaction);
@@ -2547,8 +2510,7 @@ async function handleManagerInteraction(interaction) {
     const key = nativeDescriptionDraftKey(interaction, nativeId);
     const draft = managerDrafts.get(key);
     if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
-    logNativeDescriptionModalDiagnostic("nativeaddcutoffcontinue", nativeId, draft.nativeDiagnostic, draft.occurrences);
-    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions, draft.genericDescription));
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions, draft.genericDescription, draft.presentationTimezone));
     return;
   }
   if (calendarType === "community" && action === "nativeaddseriescontinue" && interaction.isButton()) {
@@ -2557,8 +2519,7 @@ async function handleManagerInteraction(interaction) {
     const key = nativeDescriptionDraftKey(interaction, nativeId);
     const draft = managerDrafts.get(key);
     if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
-    logNativeDescriptionModalDiagnostic("nativeaddseriescontinue", nativeId, draft.nativeDiagnostic, draft.occurrences.slice(page * NATIVE_DESCRIPTION_PAGE_SIZE));
-    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions, draft.genericDescription));
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions, draft.genericDescription, draft.presentationTimezone));
     return;
   }
   if (calendarType === "community" && action === "nativeaddseriesmodal" && interaction.isModalSubmit()) {
