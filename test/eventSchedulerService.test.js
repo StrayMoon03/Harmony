@@ -23,6 +23,7 @@ const {
   markPendingNativeDelete,
   announcementChannelMenu,
   announcementEventIds,
+  announcementEditorModal,
   sendImmediateCalendarAnnouncement,
   addNativeEventToCalendar,
   syncDiscordRecurringSeries,
@@ -2173,18 +2174,71 @@ test("recurring native import hands the complete bounded series to announcements
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.description), ["Episodes 1 & 2", "Episodes 3 & 4", "K-Drama with Us"]);
   assert.equal(added.recurrence_default_description, "K-Drama with Us");
-  store.updateEvent(guildId, added.id, {
-    recurrence_end_date: "2026-11-07",
-    recurrence_rule: JSON.stringify({ source: "discord", startAt: "2026-10-17T01:00:00.000Z", frequency: 2, interval: 1, byWeekday: [5], count: 4 }),
-  });
-  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
-  assert.equal(store.getSeriesEvent(guildId, added.recurrence_series_id, 3).description, "K-Drama with Us");
   const prompt = submit.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const announce = fakeInteraction({ customId: prompt, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(announce);
   const modal = announce.responses[0].modal.toJSON();
   assert.deepEqual(modal.components.slice(1).map((row) => row.components[0].label), ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
   assert.doesNotMatch(JSON.stringify(modal), /November 7/);
+
+  const modalFields = Object.fromEntries(modal.components.slice(1).map((row) => [row.components[0].custom_id, ""]));
+  modalFields["announcement-message"] = "K-Drama announcements";
+  const announcementSubmit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: modalFields });
+  await handleEventSchedulerInteraction(announcementSubmit);
+  assert.match(announcementSubmit.responses[0].payload.content, /Choose the separate announcement channel/);
+  const channel = fakeInteraction({
+    customId: "harmony-manager:community:ysannouncechannel:" + added.id,
+    kind: "channel", guildId, guild, client, values: ["announcements"],
+  });
+  await handleEventSchedulerInteraction(channel);
+  const timing = fakeInteraction({
+    customId: "harmony-manager:community:ysannouncetiming:" + added.id,
+    kind: "select", guildId, guild, client, values: ["86400"],
+  });
+  await handleEventSchedulerInteraction(timing);
+  assert.match(timing.responses[0].payload.content, /announcements scheduled/);
+});
+
+test("native series announcements use only the bounded persisted recurrence timeline", () => {
+  const guildId = `native-announcement-cutoff-${Date.now()}`;
+  const seriesId = `native-series-${Date.now()}`;
+  const rule = JSON.stringify({ source: "discord", startAt: "2026-10-17T01:00:00.000Z", frequency: 2, interval: 1, byWeekday: [5], count: 8 });
+  const anchorId = store.createCalendarEvent({
+    guildId, title: "K-Drama", eventDate: "2026-10-17", eventAt: "2026-10-17T01:00:00.000Z", eventTimezone: "UTC", timezone: "UTC",
+    calendarType: "community", category: "other", createdBy: "admin", recurrenceSeriesId: seriesId, recurrenceRule: rule,
+    recurrenceIndex: 0, recurrenceEndDate: "2026-10-31", recurrenceNativeEnabled: 2,
+  });
+  const anchor = store.getEvent(guildId, anchorId);
+  for (const [index, date] of [[1, "2026-08-29"], [2, "2026-09-05"], [3, "2026-10-24"], [4, "2026-10-31"], [5, "2026-11-07"]]) {
+    store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: index, eventAt: `${date}T01:00:00.000Z`, eventEndAt: null }, anchor);
+  }
+  return syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchorId)).then(() => {
+  const ids = announcementEventIds(guildId, store.getEvent(guildId, anchorId));
+  assert.deepEqual(ids.map((id) => store.getEvent(guildId, id).event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+  });
+});
+
+test("series announcement modal rebuilds occurrence fields from the persisted adopted series", () => {
+  const guildId = `native-announcement-modal-refresh-${Date.now()}`;
+  const seriesId = `series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({
+    guildId, calendarChannelId: null, title: "October K-Drama", eventDate: "2026-10-17",
+    eventAt: "2026-10-17T01:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", createdBy: "admin", recurrenceSeriesId: seriesId, recurrenceIndex: 0,
+  });
+  const anchor = store.getEvent(guildId, anchorId);
+  const oct24 = store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2026-10-24T01:00:00.000Z", eventEndAt: null }, anchor);
+  store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 2, eventAt: "2026-10-31T01:00:00.000Z", eventEndAt: null }, anchor);
+  const unrelatedAug = store.createCalendarEvent({
+    guildId, calendarChannelId: null, title: "Old K-Drama", eventDate: "2026-08-22", eventAt: "2026-08-22T01:00:00.000Z",
+    eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin",
+  });
+  const modal = announcementEditorModal(anchorId, {
+    guildId, eventIds: [unrelatedAug, oct24.id], announcementScope: "series", announcementPage: 0,
+  }, store.getEvent(guildId, anchorId), guildId).toJSON();
+  const labels = modal.components.slice(1).map((row) => row.components[0].label);
+  assert.deepEqual(labels, ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
+  assert.doesNotMatch(JSON.stringify(modal), /August|September/);
 });
 
 test("fresh recurring adoption canonicalizes a stale series and hands only its bounded IDs to announcements", async () => {

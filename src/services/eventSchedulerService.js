@@ -468,9 +468,34 @@ function announcementPrompt(eventId) {
 
 function announcementEventIds(guildId, event) {
   if (!event?.recurrence_series_id) return event?.id == null ? [] : [event.id];
-  return store.listSeriesEvents(guildId, event.recurrence_series_id)
-    .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index))
+  const rows = store.listSeriesEvents(guildId, event.recurrence_series_id)
+    .filter((item) => !item.cancelled_at)
+    .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index));
+
+  // Native imports can be attached to a pre-existing Harmony series whose old
+  // rows are still present.  For announcement setup, the native recurrence
+  // timeline (and its Harmony cutoff) is authoritative; do not expose those
+  // stale rows or let their IDs drift away from the persisted occurrences.
+  if (Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && parseNativeRecurrence(event)) {
+    const byIndex = new Map(rows.map((item) => [Number(item.recurrence_index), item]));
+    return nativeSeriesOccurrences(event)
+      .map((occurrence) => byIndex.get(Number(occurrence.occurrenceIndex)))
+      .filter(Boolean)
+      .map((item) => item.id);
+  }
+
+  const cutoff = parseManagerDate(event.recurrence_end_date);
+  return rows
+    .filter((item) => !cutoff || !item.event_date || item.event_date <= event.recurrence_end_date)
     .map((item) => item.id);
+}
+
+function announcementDraftEventIds(guildId, event, draft) {
+  const persistedIds = announcementEventIds(guildId, event);
+  // Draft IDs are only a transient handoff snapshot.  Rebuild from the
+  // bounded persisted series every time so stale IDs cannot repopulate the
+  // modal or the final submit after a reconciliation.
+  return persistedIds;
 }
 
 function recurrenceMenu() {
@@ -756,7 +781,13 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
   const recurring = Boolean(event?.recurrence_series_id);
   const scope = draft?.announcementScope || (recurring ? "series" : "this");
   const targetGuildId = draft?.guildId || guildId || event?.guild_id;
-  const allTargets = (draft?.eventIds || [event?.id]).map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
+  // The persisted series is authoritative at the moment the modal opens.
+  // Draft event IDs can outlive an adoption/projection reconciliation and may
+  // otherwise point the editor at stale or unrelated occurrence rows.
+  const currentEventIds = recurring && scope === "series"
+    ? announcementDraftEventIds(targetGuildId, event, draft)
+    : (draft?.eventIds || [event?.id]);
+  const allTargets = currentEventIds.map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
   const page = Number(draft?.announcementPage || 0);
   const targets = allTargets.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE);
   const seriesAnchor = recurring ? (store.listSeriesEvents(targetGuildId, event.recurrence_series_id).find((item) => Number(item.recurrence_index) === 0) || event) : event;
@@ -2675,7 +2706,11 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    await interaction.showModal(announcementEditorModal(eventId, draft, event, interaction.guildId));
+    const currentDraft = event.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? { ...draft, eventIds: announcementDraftEventIds(interaction.guildId, event, draft), announcementPage: 0 }
+      : draft;
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), currentDraft);
+    await interaction.showModal(announcementEditorModal(eventId, currentDraft, event, interaction.guildId));
     return;
   }
   if (calendarType === "community" && action === "ysannouncepage" && interaction.isButton()) {
@@ -2684,8 +2719,11 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!draft || !event) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     const page = Number(parts[4]);
-    managerDrafts.set(key, { ...draft, announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 });
-    await interaction.showModal(announcementEditorModal(eventId, managerDrafts.get(key), event, interaction.guildId));
+    const currentDraft = event.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? { ...draft, eventIds: announcementDraftEventIds(interaction.guildId, event, draft), announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 }
+      : { ...draft, announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 };
+    managerDrafts.set(key, currentDraft);
+    await interaction.showModal(announcementEditorModal(eventId, currentDraft, event, interaction.guildId));
     return;
   }
   if (calendarType === "community" && action === "ysannounce-no" && interaction.isButton()) {
@@ -2702,7 +2740,10 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.reply({ content: "That announcement setup expired. The event was saved successfully.", flags: 64 }); return; }
     const event = store.getEvent(interaction.guildId, Number(eventId));
     const announcementScope = draft.announcementScope || (event?.recurrence_series_id ? "series" : "this");
-    const targetEvents = (draft.eventIds || [Number(eventId)]).map((id) => store.getEvent(interaction.guildId, Number(id))).filter(Boolean);
+    const targetEventIds = event?.recurrence_series_id && announcementScope === "series"
+      ? announcementDraftEventIds(interaction.guildId, event, draft)
+      : (draft.eventIds || [Number(eventId)]);
+    const targetEvents = targetEventIds.map((id) => store.getEvent(interaction.guildId, Number(id))).filter(Boolean);
     const page = Number(draft.announcementPage || 0);
     const pageEvents = announcementScope === "series"
       ? targetEvents.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE)
@@ -2753,7 +2794,10 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "ysannouncetiming" && interaction.isStringSelectMenu()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
-    const eventIds = draft.eventIds || [Number(eventId)];
+    const draftEvent = store.getEvent(interaction.guildId, Number(eventId));
+    const eventIds = draftEvent?.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? announcementDraftEventIds(interaction.guildId, draftEvent, draft)
+      : (draft.eventIds || [Number(eventId)]);
     const editing = Boolean(draft.editing);
     const selected = interaction.values.includes("none") ? [] : interaction.values;
     const first = store.getEvent(interaction.guildId, eventIds[0]);
@@ -3529,6 +3573,7 @@ module.exports = {
   nativeDeleteKey,
   announcementChannelMenu,
   announcementEventIds,
+  announcementEditorModal,
   sendImmediateCalendarAnnouncement,
   CALENDAR_ANNOUNCEMENT_OPTIONS,
   offerEventReminder,
