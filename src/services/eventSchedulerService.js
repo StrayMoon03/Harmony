@@ -290,12 +290,16 @@ function editManagerFields(event = {}) {
 }
 
 function youtifulEditFields(event = {}) {
-  return [
+  const fields = [
     { id: "title", label: "Event name", required: true, maxLength: 120, value: event.title },
     { id: "event-date", label: "Event date (YYYY-MM-DD)", required: true, maxLength: 10, value: event.event_date },
     { id: "event-time", label: "Event time HH:MM, blank = all-day", maxLength: 5, value: eventLocalTime(event) },
     { id: "description", label: "Description + Link (optional)", maxLength: 4000, paragraph: true, value: [event.description, event.link].filter(Boolean).join("\n") },
   ];
+  if (Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && event.recurrence_series_id) {
+    fields.push({ id: "recurrence-end-date", label: "Last Harmony occurrence YYYY-MM-DD", maxLength: 10, value: event.recurrence_end_date || "" });
+  }
+  return fields;
 }
 
 function eventEndLocalTime(event = {}) {
@@ -914,7 +918,12 @@ function nativeSeriesOccurrences(event, until = null) {
   const rule = parseNativeRecurrence(event);
   if (!rule) return [];
   const anchorMs = Date.parse(rule.startAt || event.event_at);
-  const horizon = until || new Date(Math.max(Date.now(), anchorMs) + 180 * 24 * 60 * 60 * 1000);
+  const configuredUntil = parseManagerDate(event.recurrence_end_date)
+    ? new Date(`${event.recurrence_end_date}T23:59:59.999Z`)
+    : null;
+  const horizon = configuredUntil && until
+    ? new Date(Math.min(configuredUntil.getTime(), new Date(until).getTime()))
+    : configuredUntil || until || new Date(Math.max(Date.now(), anchorMs) + 180 * 24 * 60 * 60 * 1000);
   return generateDiscordRecurringOccurrences({
     startAt: rule.startAt || event.event_at,
     endAt: event.event_end_at,
@@ -1601,13 +1610,17 @@ function nativeHarmonyDescriptionModal(customId, nativeEvent) {
   ]);
 }
 
-function nativeDescriptionOccurrences(nativeEvent) {
+function nativeDescriptionOccurrences(nativeEvent, cutoffDate = null) {
   const recurrenceRule = nativeEvent?.recurrenceRule;
   if (!recurrenceRule || !nativeEvent?.scheduledStartAt) return [];
+  const until = parseManagerDate(cutoffDate)
+    ? new Date(`${cutoffDate}T23:59:59.999Z`)
+    : null;
   return generateDiscordRecurringOccurrences({
     startAt: nativeEvent.scheduledStartAt,
     endAt: nativeEvent.scheduledEndAt || null,
     recurrenceRule,
+    until,
   });
 }
 
@@ -1656,6 +1669,36 @@ function collectNativeDescriptionPage(interaction, occurrences, page, descriptio
 
 function isRecurringNativeEvent(nativeEvent) {
   return Boolean(nativeEvent?.recurrenceRule && nativeDescriptionOccurrences(nativeEvent).length);
+}
+
+function nativeSeriesCutoffModal(customId, nativeEvent) {
+  return managerModal(customId, "Last Harmony occurrence", [{
+    id: "last-date",
+    label: "Last Harmony occurrence YYYY-MM-DD",
+    required: true,
+    maxLength: 10,
+    value: nativeEvent?.recurrenceRule?.endAt?.toISOString?.().slice(0, 10) || "",
+  }]);
+}
+
+function nativeCutoffDate(value, nativeEvent) {
+  const cutoff = parseManagerDate(String(value || "").trim());
+  if (!cutoff) throw new Error("Enter the last Harmony occurrence as YYYY-MM-DD.");
+  const start = nativeEvent?.scheduledStartAt?.toISOString?.().slice(0, 10);
+  if (start && cutoff < start) throw new Error("The Harmony cutoff cannot be before the first Discord occurrence.");
+  if (!nativeDescriptionOccurrences(nativeEvent, cutoff).length) throw new Error("That cutoff does not include any Discord occurrences.");
+  return cutoff;
+}
+
+function nativeDescriptionDraft(nativeEvent, linkedId, cutoffDate, interaction) {
+  const occurrences = nativeDescriptionOccurrences(nativeEvent, cutoffDate);
+  const key = nativeDescriptionDraftKey(interaction, nativeEvent.id, linkedId || "add");
+  const draft = {
+    nativeId: nativeEvent.id, linkedId, cutoffDate,
+    nativeEvent: { description: nativeEvent.description || "" }, occurrences, descriptions: {},
+  };
+  managerDrafts.set(key, draft);
+  return draft;
 }
 
 async function showNativeDescriptionFlow(interaction, nativeEvent, linkedId = null) {
@@ -1817,7 +1860,7 @@ async function handleGuildScheduledEventDelete(client, event) {
   if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${linked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
 }
 
-async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, description, descriptions = null) {
+async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, description, descriptions = null, cutoffDate = null) {
   const recurrenceRule = nativeRecurrencePayload(nativeEvent);
   let target = existing;
   // A title/time match can be a projected occurrence. Native identity belongs
@@ -1832,10 +1875,11 @@ async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, 
     discord_event_id: nativeEvent.id,
     description: description !== undefined ? (description.trim() || null) : (nativeEvent.description || null),
     ...(recurrenceRule && descriptions ? { recurrence_exception: 1 } : {}),
+    ...(recurrenceRule ? { recurrence_end_date: cutoffDate || null } : {}),
   });
   if (!updated) throw new Error("That Harmony calendar event is no longer active.");
   if (recurrenceRule) {
-    const adopted = await attachNativeRecurrence(interaction, nativeEvent, store.getEvent(interaction.guildId, target.id));
+    const adopted = await attachNativeRecurrence(interaction, nativeEvent, store.getEvent(interaction.guildId, target.id), cutoffDate);
     applyNativeOccurrenceDescriptions(interaction.guildId, adopted, descriptions);
     return store.getEvent(interaction.guildId, adopted.id);
   }
@@ -1851,18 +1895,18 @@ function applyNativeOccurrenceDescriptions(guildId, anchor, descriptions) {
   }
 }
 
-async function addNativeEventToCalendar(interaction, discordEventId, description = undefined, descriptions = null) {
+async function addNativeEventToCalendar(interaction, discordEventId, description = undefined, descriptions = null, cutoffDate = null) {
   const event = await interaction.guild.scheduledEvents.fetch(discordEventId);
   if (!event?.scheduledStartAt) throw new Error("The Discord event is no longer available.");
   const alreadyLinked = store.getEventByDiscordId(interaction.guildId, discordEventId);
   if (alreadyLinked) return alreadyLinked;
   const eventAt = event.scheduledStartAt.toISOString();
   const existingOccurrence = store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
-  if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions);
+  if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions, cutoffDate);
   const eventDate = eventAt.slice(0, 10);
   const recurrenceRule = nativeRecurrencePayload(event);
   const seriesId = recurrenceRule ? randomUUID() : null;
-  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: description !== undefined ? (description.trim() || null) : (event.description || null), createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: description !== undefined ? (description.trim() || null) : (event.description || null), createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: recurrenceRule ? cutoffDate : null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
   const saved = store.getEvent(interaction.guildId, id);
   if (seriesId) {
     await syncDiscordRecurringSeries(interaction.guildId, saved);
@@ -1871,7 +1915,7 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
   return store.getEvent(interaction.guildId, id);
 }
 
-async function attachNativeRecurrence(interaction, nativeEvent, linked) {
+async function attachNativeRecurrence(interaction, nativeEvent, linked, cutoffDate = null) {
   const recurrenceRule = nativeRecurrencePayload(nativeEvent);
   if (!recurrenceRule) return linked;
   if (linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) return linked;
@@ -1881,12 +1925,13 @@ async function attachNativeRecurrence(interaction, nativeEvent, linked) {
     recurrence_rule: recurrenceRule,
     recurrence_index: 0,
     recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+    recurrence_end_date: cutoffDate || linked.recurrence_end_date || null,
   });
   await syncDiscordRecurringSeries(interaction.guildId, updated);
   return store.getEvent(interaction.guildId, linked.id);
 }
 
-async function linkNativeEventToHarmony(interaction, nativeId, linkedId, description, descriptions = null) {
+async function linkNativeEventToHarmony(interaction, nativeId, linkedId, description, descriptions = null, cutoffDate = null) {
   if (!store.claimDiscordEventReconciliation(interaction.guildId, nativeId)) {
     throw new Error("That Discord Scheduled Event has already been reviewed.");
   }
@@ -1896,7 +1941,7 @@ async function linkNativeEventToHarmony(interaction, nativeId, linkedId, descrip
   let native = null;
   try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
   if (!native) throw new Error("That Discord Scheduled Event is no longer available.");
-  const adopted = await adoptNativeIntoExistingEvent(interaction, native, linked, description, descriptions);
+  const adopted = await adoptNativeIntoExistingEvent(interaction, native, linked, description, descriptions, cutoffDate);
   store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
   await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
   managerDrafts.set(draftKey(interaction, "community", `announce-${adopted.id}`), { eventIds: [adopted.id], linked: true, title: adopted.title });
@@ -2195,8 +2240,30 @@ async function handleManagerInteraction(interaction) {
     try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
     if (!native) { await interaction.update({ content: "That Discord Scheduled Event is no longer available.", components: [] }); return; }
     if (store.getEventByDiscordId(interaction.guildId, nativeId)) { await interaction.update({ content: "That native event is already linked.", components: [] }); return; }
-    if (isRecurringNativeEvent(native)) await showNativeDescriptionFlow(interaction, native, linked.id);
+    if (isRecurringNativeEvent(native)) await interaction.showModal(nativeSeriesCutoffModal(`harmony-manager:community:nativelinkcutoff:${linked.id}:${nativeId}`, native));
     else await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativelinkmodal:${linked.id}:${nativeId}`, native));
+    return;
+  }
+  if (calendarType === "community" && action === "nativelinkcutoff" && interaction.isModalSubmit()) {
+    const linkedId = parts[3];
+    const nativeId = parts[4];
+    let native = null;
+    try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+    if (!native) { await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 }); return; }
+    try {
+      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native);
+      nativeDescriptionDraft(native, linkedId, cutoffDate, interaction);
+      await interaction.reply({ content: `Harmony will manage occurrences through **${cutoffDate}**. Continue to enter each occurrence description.`, components: nativeDescriptionContinueComponents(`harmony-manager:community:nativelinkcutoffcontinue:${linkedId}:${nativeId}`), flags: 64 });
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    return;
+  }
+  if (calendarType === "community" && action === "nativelinkcutoffcontinue" && interaction.isButton()) {
+    const linkedId = parts[3];
+    const nativeId = parts[4];
+    const key = nativeDescriptionDraftKey(interaction, nativeId, linkedId);
+    const draft = managerDrafts.get(key);
+    if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions));
     return;
   }
   if (calendarType === "community" && action === "nativelinkseriescontinue" && interaction.isButton()) {
@@ -2225,7 +2292,7 @@ async function handleManagerInteraction(interaction) {
     managerDrafts.delete(key);
     const description = draft.descriptions["0"] || "";
     try {
-      const adopted = await linkNativeEventToHarmony(interaction, nativeId, linkedId, description, draft.descriptions);
+      const adopted = await linkNativeEventToHarmony(interaction, nativeId, linkedId, description, draft.descriptions, draft.cutoffDate);
       await interaction.reply({ content: `Linked the native Discord event to **${adopted.title}**. Would you like to schedule announcements for this event?`, components: announcementPrompt(adopted.id), flags: 64 });
     } catch (error) {
       store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
@@ -2251,8 +2318,28 @@ async function handleManagerInteraction(interaction) {
     try { native = await interaction.guild?.scheduledEvents?.fetch(eventId); } catch { native = null; }
     if (!native) { await interaction.update({ content: "That Discord Scheduled Event is no longer available.", components: [] }); return; }
     if (store.getEventByDiscordId(interaction.guildId, eventId)) { await staleReconciliationInteraction(interaction, "update"); return; }
-    if (isRecurringNativeEvent(native)) await showNativeDescriptionFlow(interaction, native);
+    if (isRecurringNativeEvent(native)) await interaction.showModal(nativeSeriesCutoffModal(`harmony-manager:community:nativeaddcutoff:${eventId}`, native));
     else await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativeaddmodal:${eventId}`, native));
+    return;
+  }
+  if (calendarType === "community" && action === "nativeaddcutoff" && interaction.isModalSubmit()) {
+    const nativeId = eventId;
+    let native = null;
+    try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+    if (!native) { await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 }); return; }
+    try {
+      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native);
+      nativeDescriptionDraft(native, null, cutoffDate, interaction);
+      await interaction.reply({ content: `Harmony will manage occurrences through **${cutoffDate}**. Continue to enter each occurrence description.`, components: nativeDescriptionContinueComponents(`harmony-manager:community:nativeaddcutoffcontinue:${nativeId}`), flags: 64 });
+    } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
+    return;
+  }
+  if (calendarType === "community" && action === "nativeaddcutoffcontinue" && interaction.isButton()) {
+    const nativeId = eventId;
+    const key = nativeDescriptionDraftKey(interaction, nativeId);
+    const draft = managerDrafts.get(key);
+    if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:0`, draft.nativeEvent || { description: "" }, draft.occurrences, 0, draft.descriptions));
     return;
   }
   if (calendarType === "community" && action === "nativeaddseriescontinue" && interaction.isButton()) {
@@ -2279,7 +2366,7 @@ async function handleManagerInteraction(interaction) {
     managerDrafts.delete(key);
     if (!store.claimDiscordEventReconciliation(interaction.guildId, nativeId)) { await interaction.reply({ content: "That Discord Scheduled Event has already been reviewed.", flags: 64 }); return; }
     try {
-      const added = await addNativeEventToCalendar(interaction, nativeId, draft.descriptions["0"] || "", draft.descriptions);
+      const added = await addNativeEventToCalendar(interaction, nativeId, draft.descriptions["0"] || "", draft.descriptions, draft.cutoffDate);
       store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "added");
       await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
       managerDrafts.set(draftKey(interaction, calendarType, `announce-${added.id}`), { eventIds: [added.id], linked: true, title: added.title });
@@ -2778,15 +2865,28 @@ async function handleManagerInteraction(interaction) {
         timezone,
         description: interaction.fields.getTextInputValue("description"),
       }, calendarType);
+      let recurrenceEndDate;
+      if (Number(existing.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && interaction.fields.fields?.has?.("recurrence-end-date")) {
+        recurrenceEndDate = interaction.fields.getTextInputValue("recurrence-end-date").trim() || null;
+        if (recurrenceEndDate && (!parseManagerDate(recurrenceEndDate) || recurrenceEndDate < existing.event_date)) {
+          throw new Error("Last Harmony occurrence must be a valid date on or after the event date.");
+        }
+      }
       const draftState = managerDrafts.get(draftKey(interaction, calendarType, eventId));
       const changed = applyRecurringChanges(interaction.guildId, existing, draftState?.scope || "this", {
         title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt,
         event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link,
         description: parsed.description, all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
+        ...(recurrenceEndDate !== undefined ? { recurrence_end_date: recurrenceEndDate } : {}),
       });
       const saved = changed.find((item) => item.id === existing.id) || changed[0];
       await interaction.reply({ ...youtifulEditPanel(saved), flags: 64 });
       await syncChangedNativeEvents(interaction.client, changed);
+      for (const item of changed) {
+        if (Number(item.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && item.recurrence_series_id) {
+          await syncDiscordRecurringSeries(interaction.guildId, item).catch((error) => console.error("Discord recurring series resync after edit failed:", error));
+        }
+      }
       refreshEventAnnouncementSchedules(interaction.guildId, changed);
       await refreshRecurringMonths(interaction.client, interaction.guildId, changed).catch((error) => console.error("Calendar refresh after details edit failed:", error));
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
