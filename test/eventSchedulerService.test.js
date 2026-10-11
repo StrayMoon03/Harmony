@@ -1515,11 +1515,14 @@ test("Find Discord Event routes Add to Calendar into canonical announcements wit
   await handleEventSchedulerInteraction(choose);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
+  assert.equal(add.responses[0].type, "modal");
+  const submit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  await handleEventSchedulerInteraction(submit);
 
   const linked = store.getEventByDiscordId(guildId, native.id);
   assert.ok(linked);
   assert.equal(linked.discord_event_id, native.id);
-  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
+  assert.match(submit.responses[0].payload.content, /Would you like to schedule announcements/);
   assert.equal(createCalls, 0);
   assert.deepEqual(native, { guildId, id: "existing-native-add", name: "Existing Event", scheduledStartAt: native.scheduledStartAt });
 });
@@ -1705,8 +1708,11 @@ test("Review Event keeps reconciliation controls private and stale reviewers are
 
   const link = fakeInteraction({ customId: linkId, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(link);
-  assert.equal(link.responses[0].type, "update");
-  assert.match(link.responses[0].payload.content, /Linked/);
+  assert.equal(link.responses[0].type, "modal");
+  const linkSubmit = fakeInteraction({ customId: link.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  await handleEventSchedulerInteraction(linkSubmit);
+  assert.equal(linkSubmit.responses[0].type, "reply");
+  assert.match(linkSubmit.responses[0].payload.content, /Linked/);
   assert.ok(store.getEvent(guildId, candidateId).discord_event_id);
 
   const stale = fakeInteraction({ customId: `harmony-manager:community:reviewnative:${native.id}`, kind: "button", guildId, guild, client });
@@ -1739,8 +1745,10 @@ test("Review Event Add to Calendar and Ignore remain private and durable", async
   assert.deepEqual(reviewLabels, ["Add to Calendar", "Ignore"]);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  assert.equal(add.responses[0].type, "update");
-  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
+  assert.equal(add.responses[0].type, "modal");
+  const addSubmit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "From Discord" } });
+  await handleEventSchedulerInteraction(addSubmit);
+  assert.match(addSubmit.responses[0].payload.content, /Would you like to schedule announcements/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "added");
 
   await handleGuildScheduledEventCreate(client, ignored);
@@ -1779,7 +1787,9 @@ test("reconciliation Add to Calendar enters the canonical announcement flow", as
   await handleEventSchedulerInteraction(review);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  assert.match(add.responses[0].payload.content, /Would you like to schedule announcements/);
+  const addSubmit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Watch together" } });
+  await handleEventSchedulerInteraction(addSubmit);
+  assert.match(addSubmit.responses[0].payload.content, /Would you like to schedule announcements/);
 
   const added = store.getEventByDiscordId(guildId, native.id);
   assert.ok(added);
@@ -1820,7 +1830,9 @@ test("reconciliation Link Existing enters the canonical flow and preserves futur
   const linkId = review.responses[0].payload.components[0].toJSON().components[0].custom_id;
   const link = fakeInteraction({ customId: linkId, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(link);
-  assert.match(link.responses[0].payload.content, /Would you like to schedule announcements/);
+  const linkSubmit = fakeInteraction({ customId: link.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Link announcement" } });
+  await handleEventSchedulerInteraction(linkSubmit);
+  assert.match(linkSubmit.responses[0].payload.content, /Would you like to schedule announcements/);
 
   await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannounce:${candidateId}`, kind: "button", guildId, guild, client }));
   await handleEventSchedulerInteraction(fakeInteraction({ customId: `harmony-manager:community:ysannouncemodal:${candidateId}`, kind: "modal", guildId, guild, client, fields: { "announcement-message": "Link announcement" } }));
@@ -1862,8 +1874,10 @@ test("multiple Review Event matches open the private candidate selector only aft
 
   const selected = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [selector.options[0].value] });
   await handleEventSchedulerInteraction(selected);
-  assert.equal(selected.responses[0].type, "update");
-  assert.match(selected.responses[0].payload.content, /Linked/);
+  assert.equal(selected.responses[0].type, "modal");
+  const selectedSubmit = fakeInteraction({ customId: selected.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  await handleEventSchedulerInteraction(selectedSubmit);
+  assert.match(selectedSubmit.responses[0].payload.content, /Linked/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "linked");
 });
 
@@ -1933,10 +1947,63 @@ test("Add to Calendar links the existing Discord event without creating another 
   store.setManagerChannel(guildId, "control");
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   await handleEventSchedulerInteraction(interaction);
+  assert.equal(interaction.responses[0].type, "modal");
+  const submit = fakeInteraction({ customId: interaction.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
+  await handleEventSchedulerInteraction(submit);
   const linked = store.getEventByDiscordId(guildId, native.id);
   assert.ok(linked);
+  assert.equal(linked.description, "Episodes 5 & 6");
   assert.equal(creates, 0);
-  assert.match(interaction.responses[0].payload.content, /Would you like to schedule announcements/);
+  assert.match(submit.responses[0].payload.content, /Would you like to schedule announcements/);
+});
+
+test("Discord adoption pre-fills and stores a Harmony-only description without editing Discord", async () => {
+  const guildId = `native-description-${Date.now()}`;
+  const native = {
+    id: "native-description-event",
+    name: "Doom at Your Service",
+    description: "Hello! Bring snacks and tissues!",
+    scheduledStartAt: new Date("2099-12-10T23:00:00Z"),
+  };
+  let nativeEdits = 0;
+  native.edit = async () => { nativeEdits += 1; };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const modal = add.responses[0].modal.toJSON();
+  assert.equal(modal.title, "Harmony calendar description");
+  assert.equal(modal.components[0].components[0].value, native.description);
+  const submit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
+  await handleEventSchedulerInteraction(submit);
+  assert.equal(store.getEventByDiscordId(guildId, native.id).description, "Episodes 5 & 6");
+  assert.equal(native.description, "Hello! Bring snacks and tissues!");
+  assert.equal(nativeEdits, 0);
+});
+
+test("adopting a recurring occurrence already projected in Harmony reuses its series anchor", async () => {
+  const guildId = `native-dedupe-series-${Date.now()}`;
+  const seriesId = `existing-series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Friday K-Drama", eventDate: "2099-12-03",
+    eventAt: "2099-12-03T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "community", createdBy: "admin", recurrenceSeriesId: seriesId,
+    recurrenceRule: JSON.stringify({ source: "discord", startAt: "2099-12-03T23:00:00.000Z", frequency: 2, interval: 1, byWeekday: [4], count: 3 }), recurrenceIndex: 0,
+  });
+  const anchor = store.getEvent(guildId, anchorId);
+  const projected = store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2099-12-10T23:00:00.000Z", eventEndAt: null }, anchor);
+  const native = { id: "native-recurring-dedupe", name: "Friday K-Drama", description: "Native details", scheduledStartAt: new Date(projected.event_at), recurrenceRule: { startAt: new Date("2099-12-03T23:00:00Z"), frequency: 2, interval: 1, byWeekday: [4], count: 3 } };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const interaction = { guildId, user: { id: "admin" }, guild };
+  const adopted = await addNativeEventToCalendar(interaction, native.id, "Episodes 3 & 4");
+  assert.equal(adopted.id, anchor.id);
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
+  assert.equal(store.getEventByDiscordId(guildId, native.id).id, anchor.id);
+  assert.equal(store.getEvent(guildId, anchor.id).description, "Episodes 3 & 4");
+  const repeated = await addNativeEventToCalendar(interaction, native.id, "Different text");
+  assert.equal(repeated.id, anchor.id);
+  assert.equal(store.listSeriesEvents(guildId, seriesId).length, 3);
 });
 
 
