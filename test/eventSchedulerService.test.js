@@ -2008,7 +2008,12 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
     "description-2": "Episodes 5 & 6", "description-3": "Episodes 7 & 8",
   } });
   await handleEventSchedulerInteraction(pageOne);
-  const secondModal = pageOne.responses[0].modal.toJSON();
+  assert.equal(pageOne.responses[0].type, "reply");
+  assert.match(pageOne.responses[0].payload.content, /Continue to the next occurrence descriptions/);
+  const continueId = pageOne.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const continuePage = fakeInteraction({ customId: continueId, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(continuePage);
+  const secondModal = continuePage.responses[0].modal.toJSON();
   assert.match(secondModal.custom_id, /nativeaddseriesmodal/);
   assert.equal(secondModal.components.length, 2);
   assert.equal(secondModal.components[0].components[0].value, native.description);
