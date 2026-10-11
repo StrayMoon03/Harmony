@@ -2661,12 +2661,24 @@ test("independent native recurring intake workflows keep their own date timeline
   const bButton = fakeInteraction({ customId: bContinue, kind: "button", guildId, guild, client, userId: "admin-b" });
   await handleEventSchedulerInteraction(aButton);
   await handleEventSchedulerInteraction(bButton);
-  assert.deepEqual(aButton.responses[0].modal.toJSON().components.slice(1).map((row) => row.components[0].label), [
+  const assertDates = (interaction, expected) => assert.deepEqual(interaction.responses[0].modal.toJSON().components.slice(1).map((row) => row.components[0].label), expected);
+  const saturdayDates = [
     "Saturday, October 17, 2026", "Saturday, October 24, 2026", "Saturday, October 31, 2026",
-  ]);
-  assert.deepEqual(bButton.responses[0].modal.toJSON().components.slice(1).map((row) => row.components[0].label), [
+  ];
+  const fridayDates = [
     "Friday, October 16, 2026", "Friday, October 23, 2026", "Friday, October 30, 2026",
-  ]);
+  ];
+  assertDates(aButton, saturdayDates);
+  assertDates(bButton, fridayDates);
+
+  const sameAdminA = await startCutoff(events.A, "same-admin");
+  const sameAdminB = await startCutoff(events.B, "same-admin");
+  const sameAdminBButton = fakeInteraction({ customId: sameAdminB, kind: "button", guildId, guild, client, userId: "same-admin" });
+  const sameAdminAButton = fakeInteraction({ customId: sameAdminA, kind: "button", guildId, guild, client, userId: "same-admin" });
+  await handleEventSchedulerInteraction(sameAdminBButton);
+  await handleEventSchedulerInteraction(sameAdminAButton);
+  assertDates(sameAdminBButton, fridayDates);
+  assertDates(sameAdminAButton, saturdayDates);
 });
 
 test("adopted Discord recurring events project future calendar rows and reminders idempotently", async () => {
