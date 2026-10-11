@@ -2022,6 +2022,18 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   assert.deepEqual(rows.sort((left, right) => left.recurrence_index - right.recurrence_index).map((row) => row.description), [
     "Episodes 1 & 2", "Episodes 3 & 4", "Episodes 5 & 6", "Episodes 7 & 8", "Episodes 9 & 10", "Episodes 11 & 12",
   ]);
+  const anchor = store.getEventByDiscordId(guildId, native.id);
+  assert.equal(anchor.recurrence_exception, 1);
+  // A later recurrence sync may discover dates that were not present when
+  // the import modal was submitted. The occurrence-specific anchor text must
+  // never become the template for those newly projected dates.
+  store.updateEvent(guildId, anchor.id, {
+    recurrence_rule: JSON.stringify({ source: "discord", startAt: "2099-12-04T23:00:00.000Z", frequency: 2, interval: 1, byWeekday: [4], count: 7 }),
+  });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchor.id));
+  const future = store.getSeriesEvent(guildId, anchor.recurrence_series_id, 6);
+  assert.ok(future);
+  assert.equal(future.description, null);
   assert.equal(native.description, "Native recurring description");
   assert.equal(store.getEventByDiscordId(guildId, native.id).discord_event_id, native.id);
 });
