@@ -176,14 +176,16 @@ function getEventByDiscordId(guildId, discordEventId) {
 }
 
 // Projected recurring rows intentionally have no native Discord ID. During
-// explicit adoption, an exact title + start instant is the strongest local
-// occurrence identity available before the series anchor is linked.
+// explicit adoption, an exact title + start instant is a fallback only for an
+// existing Harmony recurrence series; ordinary one-off events must never be
+// hijacked by this comparison.
 function findActiveCommunityEventByTitleAndAt(guildId, title, eventAt) {
   if (!title || !eventAt) return null;
   return getDb().prepare(`
     SELECT * FROM scheduled_events
     WHERE guild_id = ? AND calendar_type = 'community'
-      AND title = ? AND event_at = ? AND cancelled_at IS NULL
+      AND title = ? AND event_at = ? AND recurrence_series_id IS NOT NULL
+      AND recurrence_index IS NOT NULL AND cancelled_at IS NULL
     ORDER BY CASE WHEN discord_event_id IS NOT NULL THEN 0 ELSE 1 END, id
     LIMIT 1
   `).get(guildId, title, eventAt) || null;
@@ -193,8 +195,7 @@ function getSeriesAnchor(guildId, seriesId) {
   if (!seriesId) return null;
   return getDb().prepare(`
     SELECT * FROM scheduled_events
-    WHERE guild_id = ? AND recurrence_series_id = ? AND cancelled_at IS NULL
-    ORDER BY recurrence_index IS NULL, recurrence_index, event_at, id
+    WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = 0 AND cancelled_at IS NULL
     LIMIT 1
   `).get(guildId, seriesId) || null;
 }
