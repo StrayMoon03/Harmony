@@ -31,6 +31,10 @@ const {
   normalizeCalendarAnnouncementBody,
   processScheduledAnnouncements,
   formatAnnouncementCountdown,
+  calendarDateInTimezone,
+  calendarCutoffBoundary,
+  nativeCutoffDate,
+  nativeDescriptionOccurrences,
 } = require("../src/services/eventSchedulerService");
 const store = require("../src/stores/eventSchedulerStore");
 const { getDb } = require("../src/db/sqlite");
@@ -2193,6 +2197,61 @@ test("recurring import description pages stop at the selected Harmony cutoff", a
   assert.match(descriptionModal.components[2].components[0].label, /Friday/);
 });
 
+test("native recurring cutoff uses the local calendar date across the DST boundary", async () => {
+  const guildId = `native-cutoff-dst-${Date.now()}`;
+  const native = {
+    id: "native-cutoff-dst-series", name: "DST K-Drama", description: "Native details",
+    scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-08-22T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 12 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
+  await handleEventSchedulerInteraction(scope);
+  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-11-06" } });
+  await handleEventSchedulerInteraction(cutoff);
+  const start = fakeInteraction({ customId: cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(start);
+  const descriptionModal = start.responses[0].modal.toJSON();
+  assert.deepEqual(descriptionModal.components.slice(1).map((row) => row.components[0].label), [
+    "Friday, October 16, 2026", "Friday, October 23, 2026", "Friday, October 30, 2026", "Friday, November 6, 2026",
+  ]);
+
+  const submit = fakeInteraction({ customId: descriptionModal.custom_id, kind: "modal", guildId, guild, client, fields: {
+    "calendar-generic": "DST series", "description-0": "One", "description-1": "Two", "description-2": "Three", "description-3": "Four",
+  } });
+  await handleEventSchedulerInteraction(submit);
+  const added = store.getEventByDiscordId(guildId, native.id);
+  assert.ok(added);
+  const persisted = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.deepEqual(persisted.map((row) => row.event_at), [
+    "2026-10-17T01:00:00.000Z", "2026-10-24T01:00:00.000Z", "2026-10-31T01:00:00.000Z", "2026-11-07T01:00:00.000Z",
+  ]);
+  assert.deepEqual(announcementEventIds(guildId, added), persisted.map((row) => row.id));
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  assert.equal(store.listSeriesEvents(guildId, added.recurrence_series_id).length, 4);
+  assert.equal(native.scheduledStartAt.toISOString(), "2026-10-17T01:00:00.000Z");
+});
+
+test("native cutoff comparisons use localized dates and preserve UTC instants", () => {
+  const native = {
+    scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-08-22T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 12 },
+  };
+  assert.equal(calendarDateInTimezone("2026-11-07T01:00:00.000Z", "America/New_York"), "2026-11-06");
+  assert.equal(calendarDateInTimezone("2026-11-08T05:30:00.000Z", "America/New_York"), "2026-11-08");
+  assert.equal(nativeCutoffDate("2026-10-16", native, "America/New_York"), "2026-10-16");
+  assert.equal(nativeCutoffDate("2026-11-06", native, "America/New_York"), "2026-11-06");
+  assert.equal(nativeDescriptionOccurrences(native, "2026-11-05", "America/New_York").length, 3);
+  assert.equal(nativeDescriptionOccurrences(native, "2026-11-06", "America/New_York").at(-1).eventAt, "2026-11-07T01:00:00.000Z");
+  assert.equal(calendarCutoffBoundary("2026-11-06", "America/New_York").toISOString(), "2026-11-07T04:59:59.999Z");
+  assert.equal(calendarCutoffBoundary("2026-11-08", "America/New_York").toISOString(), "2026-11-09T04:59:59.999Z");
+});
+
 test("recurring native import hands the complete bounded series to announcements", async () => {
   const guildId = `native-announcement-scope-${Date.now()}`;
   const native = {
@@ -2820,3 +2879,4 @@ test("occurrence override refreshes only pending reminder messages", () => {
   assert.equal(sentRow.status, "sent");
   assert.equal(rows.length, 2);
 });
+

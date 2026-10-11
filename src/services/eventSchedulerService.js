@@ -781,6 +781,33 @@ function calendarPresentationTimezone(event, fallback = DEFAULT_YOUTIFUL_TIMEZON
   return validTimezone(candidate) ? candidate : fallback;
 }
 
+function calendarDateInTimezone(value, timezone = DEFAULT_YOUTIFUL_TIMEZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime()) || !validTimezone(timezone)) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date)
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function nextCalendarDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const date = new Date(0);
+  date.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1);
+  date.setUTCHours(0, 0, 0, 0);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function calendarCutoffBoundary(cutoffDate, timezone = DEFAULT_YOUTIFUL_TIMEZONE) {
+  const nextDate = nextCalendarDate(cutoffDate);
+  if (!nextDate) return null;
+  const nextMidnight = localToUtc(nextDate, "00:00", timezone);
+  return nextMidnight ? new Date(nextMidnight.getTime() - 1) : null;
+}
+
 function announcementOccurrenceLabel(event, seriesAnchor = null) {
   const timezone = calendarPresentationTimezone(seriesAnchor || event);
   if (event?.event_at && !Number.isNaN(new Date(event.event_at).getTime())) {
@@ -1001,8 +1028,9 @@ function nativeSeriesOccurrences(event, until = null) {
   if (!rule) return [];
   const effectiveStartAt = rule.anchorAt || event.event_at || rule.startAt;
   const anchorMs = Date.parse(effectiveStartAt);
+  const presentationTimezone = calendarPresentationTimezone(event);
   const configuredUntil = parseManagerDate(event.recurrence_end_date)
-    ? new Date(`${event.recurrence_end_date}T23:59:59.999Z`)
+    ? calendarCutoffBoundary(event.recurrence_end_date, presentationTimezone)
     : null;
   const horizon = configuredUntil && until
     ? new Date(Math.min(configuredUntil.getTime(), new Date(until).getTime()))
@@ -1719,18 +1747,21 @@ function nativeHarmonyDescriptionModal(customId, nativeEvent) {
   ]);
 }
 
-function nativeDescriptionOccurrences(nativeEvent, cutoffDate = null) {
+function nativeDescriptionOccurrences(nativeEvent, cutoffDate = null, presentationTimezone = DEFAULT_YOUTIFUL_TIMEZONE) {
   const recurrenceRule = nativeEvent?.recurrenceRule;
   if (!recurrenceRule || !nativeEvent?.scheduledStartAt) return [];
   const until = parseManagerDate(cutoffDate)
-    ? new Date(`${cutoffDate}T23:59:59.999Z`)
+    ? calendarCutoffBoundary(cutoffDate, presentationTimezone)
     : null;
-  return generateDiscordRecurringOccurrences({
+  const occurrences = generateDiscordRecurringOccurrences({
     startAt: nativeEvent.scheduledStartAt,
     endAt: nativeEvent.scheduledEndAt || null,
     recurrenceRule,
     until,
   });
+  return parseManagerDate(cutoffDate)
+    ? occurrences.filter((occurrence) => (calendarDateInTimezone(occurrence.eventAt, presentationTimezone) || "") <= cutoffDate)
+    : occurrences;
 }
 
 function nativeDescriptionOccurrenceLabel(occurrence, timezone = DEFAULT_YOUTIFUL_TIMEZONE) {
@@ -1810,23 +1841,24 @@ function nativeSeriesCutoffModal(customId, nativeEvent) {
   }]);
 }
 
-function nativeCutoffDate(value, nativeEvent) {
+function nativeCutoffDate(value, nativeEvent, presentationTimezone = DEFAULT_YOUTIFUL_TIMEZONE) {
   const cutoff = parseManagerDate(String(value || "").trim());
   if (!cutoff) throw new Error("Enter the last Harmony occurrence as YYYY-MM-DD.");
-  const start = nativeEvent?.scheduledStartAt?.toISOString?.().slice(0, 10);
+  const start = calendarDateInTimezone(nativeEvent?.scheduledStartAt, presentationTimezone);
   if (start && cutoff < start) throw new Error("The Harmony cutoff cannot be before the first Discord occurrence.");
-  if (!nativeDescriptionOccurrences(nativeEvent, cutoff).length) throw new Error("That cutoff does not include any Discord occurrences.");
+  if (!nativeDescriptionOccurrences(nativeEvent, cutoff, presentationTimezone).length) throw new Error("That cutoff does not include any Discord occurrences.");
   return cutoff;
 }
 
-function nativeDescriptionDraft(nativeEvent, linkedId, cutoffDate, interaction) {
-  const occurrences = nativeDescriptionOccurrences(nativeEvent, cutoffDate);
+function nativeDescriptionDraft(nativeEvent, linkedId, cutoffDate, interaction, presentationTimezone = null) {
   const key = nativeDescriptionDraftKey(interaction, nativeEvent.id, linkedId || "add");
   const linked = linkedId ? store.getEvent(interaction.guildId, Number(linkedId)) : null;
+  const timezone = presentationTimezone || calendarPresentationTimezone(linked);
+  const occurrences = nativeDescriptionOccurrences(nativeEvent, cutoffDate, timezone);
   const draft = {
     nativeId: nativeEvent.id, linkedId, cutoffDate,
     nativeEvent: { description: nativeEvent.description || "" },
-    presentationTimezone: calendarPresentationTimezone(linked),
+    presentationTimezone: timezone,
     occurrences, descriptions: {}, genericDescription: "",
   };
   managerDrafts.set(key, draft);
@@ -2413,8 +2445,10 @@ async function handleManagerInteraction(interaction) {
     try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
     if (!native) { await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 }); return; }
     try {
-      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native);
-      nativeDescriptionDraft(native, linkedId, cutoffDate, interaction);
+      const linked = store.getEvent(interaction.guildId, Number(linkedId));
+      const presentationTimezone = calendarPresentationTimezone(linked);
+      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native, presentationTimezone);
+      nativeDescriptionDraft(native, linkedId, cutoffDate, interaction, presentationTimezone);
       await interaction.reply({ content: `Harmony will manage occurrences through **${cutoffDate}**. Continue to enter each occurrence description.`, components: nativeDescriptionContinueComponents(`harmony-manager:community:nativelinkcutoffcontinue:${linkedId}:${nativeId}`), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
@@ -2499,8 +2533,9 @@ async function handleManagerInteraction(interaction) {
     try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
     if (!native) { await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 }); return; }
     try {
-      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native);
-      nativeDescriptionDraft(native, null, cutoffDate, interaction);
+      const presentationTimezone = DEFAULT_YOUTIFUL_TIMEZONE;
+      const cutoffDate = nativeCutoffDate(interaction.fields.getTextInputValue("last-date"), native, presentationTimezone);
+      nativeDescriptionDraft(native, null, cutoffDate, interaction, presentationTimezone);
       await interaction.reply({ content: `Harmony will manage occurrences through **${cutoffDate}**. Continue to enter each occurrence description.`, components: nativeDescriptionContinueComponents(`harmony-manager:community:nativeaddcutoffcontinue:${nativeId}`), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, flags: 64 }); }
     return;
@@ -3592,6 +3627,11 @@ module.exports = {
   YOUTIFUL_EVENT_TYPE_ICONS,
   YOUTIFUL_EVENT_TYPE_LABELS,
   YOUTIFUL_TIMEZONE_OPTIONS,
+  calendarDateInTimezone,
+  calendarCutoffBoundary,
+  nativeCutoffDate,
+  nativeDescriptionOccurrences,
+  nativeSeriesOccurrences,
   SKZ_TIMEZONE_OPTIONS,
   buildYoutifulCalendarMessages,
   recurrenceOccurrences,
@@ -3629,3 +3669,4 @@ module.exports = {
   candidateReviewPayload,
   candidateNoticePayload,
 };
+
