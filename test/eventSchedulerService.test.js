@@ -2566,6 +2566,121 @@ test("Discord recurrence rules expand into deterministic Harmony occurrences wit
   ]);
 });
 
+test("Discord recurrence projection re-anchors arbitrary patterns to the selected occurrence", () => {
+  const cases = [
+    {
+      name: "weekly Friday with stale Saturday selector",
+      startAt: "2026-10-16T01:00:00.000Z",
+      rule: { frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+      until: "2026-11-06T23:59:59.999Z",
+      expected: ["2026-10-16", "2026-10-23", "2026-10-30", "2026-11-06"],
+    },
+    {
+      name: "weekly Saturday with stale Friday selector",
+      startAt: "2026-10-17T19:00:00.000Z",
+      rule: { frequency: 2, interval: 1, byWeekday: [4], count: 4 },
+      until: "2026-11-07T23:59:59.999Z",
+      expected: ["2026-10-17", "2026-10-24", "2026-10-31", "2026-11-07"],
+    },
+    {
+      name: "weekly Tuesday with historical selector",
+      startAt: "2026-10-20T19:00:00.000Z",
+      rule: { frequency: 2, interval: 1, byWeekday: [0], count: 3 },
+      until: "2026-11-03T23:59:59.999Z",
+      expected: ["2026-10-20", "2026-10-27", "2026-11-03"],
+    },
+    {
+      name: "biweekly Friday with historical selector",
+      startAt: "2026-10-16T01:00:00.000Z",
+      rule: { frequency: 2, interval: 2, byWeekday: [5], count: 3 },
+      until: "2026-11-30T23:59:59.999Z",
+      expected: ["2026-10-16", "2026-10-30", "2026-11-13"],
+    },
+  ];
+  for (const scenario of cases) {
+    const occurrences = generateDiscordRecurringOccurrences({ startAt: scenario.startAt, recurrenceRule: scenario.rule, until: scenario.until });
+    assert.deepEqual(occurrences.map((item) => item.eventAt.slice(0, 10)), scenario.expected, scenario.name);
+    assert.equal(occurrences[0].eventAt, scenario.startAt, `${scenario.name} must begin at the selected occurrence`);
+    assert.ok(occurrences.every((item) => item.eventAt >= scenario.startAt), `${scenario.name} projected before the anchor`);
+  }
+});
+
+test("native recurring cutoff modal uses the approved series-end wording", async () => {
+  const guildId = `native-cutoff-wording-${Date.now()}`;
+  const native = {
+    id: `native-${guildId}`,
+    name: "Weekly event",
+    scheduledStartAt: new Date("2026-10-16T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-08-21T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 3 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, null, "open");
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, values: ["series"] });
+  await handleEventSchedulerInteraction(scope);
+  const modal = scope.responses[0].modal.toJSON();
+  assert.equal(modal.title, "When should this series end?");
+  assert.equal(modal.components[0].components[0].label, "Last event date (YYYY-MM-DD)");
+});
+
+test("independent native recurring intake workflows keep their own date timelines", async () => {
+  const guildId = `native-independent-series-${Date.now()}`;
+  const events = {
+    A: {
+      id: `native-a-${guildId}`, name: "Saturday series",
+      scheduledStartAt: new Date("2026-10-17T19:00:00.000Z"),
+      recurrenceRule: { startAt: new Date("2026-08-22T19:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [4], count: 4 },
+    },
+    B: {
+      id: `native-b-${guildId}`, name: "Friday series",
+      scheduledStartAt: new Date("2026-10-16T01:00:00.000Z"),
+      recurrenceRule: { startAt: new Date("2026-08-21T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+    },
+  };
+  const guild = { scheduledEvents: { fetch: async (id) => Object.values(events).find((event) => event.id === id) } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  for (const native of Object.values(events)) store.saveDiscordEventReconciliation(guildId, native.id, null, "open");
+
+  async function startCutoff(native, userId) {
+    const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client, userId });
+    await handleEventSchedulerInteraction(add);
+    const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
+    const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, userId, values: ["series"] });
+    await handleEventSchedulerInteraction(scope);
+    const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, userId, fields: { "last-date": "2026-10-31" } });
+    await handleEventSchedulerInteraction(cutoff);
+    return cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  }
+
+  const aContinue = await startCutoff(events.A, "admin-a");
+  const bContinue = await startCutoff(events.B, "admin-b");
+  const aButton = fakeInteraction({ customId: aContinue, kind: "button", guildId, guild, client, userId: "admin-a" });
+  const bButton = fakeInteraction({ customId: bContinue, kind: "button", guildId, guild, client, userId: "admin-b" });
+  await handleEventSchedulerInteraction(aButton);
+  await handleEventSchedulerInteraction(bButton);
+  const assertDates = (interaction, expected) => assert.deepEqual(interaction.responses[0].modal.toJSON().components.slice(1).map((row) => row.components[0].label), expected);
+  const saturdayDates = [
+    "Saturday, October 17, 2026", "Saturday, October 24, 2026", "Saturday, October 31, 2026",
+  ];
+  const fridayDates = [
+    "Friday, October 16, 2026", "Friday, October 23, 2026", "Friday, October 30, 2026",
+  ];
+  assertDates(aButton, saturdayDates);
+  assertDates(bButton, fridayDates);
+
+  const sameAdminA = await startCutoff(events.A, "same-admin");
+  const sameAdminB = await startCutoff(events.B, "same-admin");
+  const sameAdminBButton = fakeInteraction({ customId: sameAdminB, kind: "button", guildId, guild, client, userId: "same-admin" });
+  const sameAdminAButton = fakeInteraction({ customId: sameAdminA, kind: "button", guildId, guild, client, userId: "same-admin" });
+  await handleEventSchedulerInteraction(sameAdminBButton);
+  await handleEventSchedulerInteraction(sameAdminAButton);
+  assertDates(sameAdminBButton, fridayDates);
+  assertDates(sameAdminAButton, saturdayDates);
+});
+
 test("adopted Discord recurring events project future calendar rows and reminders idempotently", async () => {
   const guildId = `native-series-${Date.now()}`;
   const native = {
