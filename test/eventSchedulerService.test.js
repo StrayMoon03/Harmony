@@ -2681,6 +2681,61 @@ test("independent native recurring intake workflows keep their own date timeline
   assertDates(sameAdminAButton, saturdayDates);
 });
 
+test("native recurring intake diagnostics trace one selected event without message content", async () => {
+  const guildId = `native-diagnostic-${Date.now()}`;
+  const native = {
+    id: "native-diagnostic-event",
+    name: "Friday diagnostic series",
+    description: "Do not log this description",
+    scheduledStartAt: new Date("2026-10-16T01:00:00.000Z"),
+    recurrenceRule: {
+      startAt: new Date("2026-08-21T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 6,
+    },
+  };
+  const events = new Map([[native.id, native]]);
+  const guild = { scheduledEvents: { fetch: async (id) => id ? events.get(id) : events } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const diagnostics = [];
+  const originalLog = console.log;
+  console.log = (...args) => {
+    if (String(args[0]).startsWith("[Native Recurrence Diagnostic]")) diagnostics.push(String(args[0]));
+  };
+  try {
+    const find = fakeInteraction({ customId: "harmony-manager:community:findnative", kind: "button", guildId, guild, client });
+    await handleEventSchedulerInteraction(find);
+    const selector = find.responses[0].payload.components[0].toJSON().components[0];
+    const choose = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [native.id] });
+    await handleEventSchedulerInteraction(choose);
+    const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+    await handleEventSchedulerInteraction(add);
+    const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
+    await handleEventSchedulerInteraction(scope);
+    const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
+    await handleEventSchedulerInteraction(cutoff);
+    const continueId = cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
+    const continueButton = fakeInteraction({ customId: continueId, kind: "button", guildId, guild, client });
+    await handleEventSchedulerInteraction(continueButton);
+
+    const records = diagnostics.map((line) => JSON.parse(line.slice("[Native Recurrence Diagnostic] ".length)));
+    assert.deepEqual(records.map((record) => record.stage), [
+      "findnativeselect", "nativeadd", "nativeaddscope", "nativeaddcutoff",
+      "description-draft", "nativeaddcutoffcontinue",
+    ]);
+    assert.ok(records.every((record) => record.id === native.id));
+    assert.ok(records.every((record) => record.scheduledStartAt === native.scheduledStartAt.toISOString()));
+    assert.equal(records[0].selectedNativeId, native.id);
+    assert.deepEqual(records.find((record) => record.stage === "description-draft").firstFourEventAt, [
+      "2026-10-16T01:00:00.000Z", "2026-10-23T01:00:00.000Z", "2026-10-30T01:00:00.000Z",
+    ]);
+    assert.deepEqual(records.find((record) => record.stage === "nativeaddcutoffcontinue").labels, [
+      "Friday, October 16, 2026", "Friday, October 23, 2026", "Friday, October 30, 2026",
+    ]);
+    assert.ok(diagnostics.every((line) => !line.includes(native.description)));
+  } finally {
+    console.log = originalLog;
+  }
+});
+
 test("adopted Discord recurring events project future calendar rows and reminders idempotently", async () => {
   const guildId = `native-series-${Date.now()}`;
   const native = {
