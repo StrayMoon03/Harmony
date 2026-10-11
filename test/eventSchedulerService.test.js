@@ -1997,7 +1997,14 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const firstModal = add.responses[0].modal.toJSON();
+  const cutoffModal = add.responses[0].modal.toJSON();
+  assert.match(cutoffModal.custom_id, /nativeaddcutoff/);
+  const cutoff = fakeInteraction({ customId: cutoffModal.custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2100-01-31" } });
+  await handleEventSchedulerInteraction(cutoff);
+  const cutoffContinue = cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const startDescriptions = fakeInteraction({ customId: cutoffContinue, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(startDescriptions);
+  const firstModal = startDescriptions.responses[0].modal.toJSON();
   assert.match(firstModal.custom_id, /nativeaddseriesmodal/);
   assert.equal(firstModal.components.length, 4);
   assert.match(firstModal.components[0].components[0].label, /Friday/);
@@ -2041,6 +2048,46 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   assert.equal(future.description, null);
   assert.equal(native.description, "Native recurring description");
   assert.equal(store.getEventByDiscordId(guildId, native.id).discord_event_id, native.id);
+});
+
+test("native recurring import cutoff bounds projection and can be extended without duplicates", async () => {
+  const guildId = `native-cutoff-${Date.now()}`;
+  const native = {
+    id: "native-cutoff-series", name: "Cutoff K-Drama", description: "Native description",
+    scheduledStartAt: new Date("2099-12-04T23:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-12-04T23:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [4], count: 7 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const interaction = fakeInteraction({ customId: "harmony-manager:community:nativeadd", kind: "button", guildId, guild });
+  const descriptions = { 0: "Episodes 1 & 2", 1: "Episodes 3 & 4" };
+  const added = await addNativeEventToCalendar(interaction, native.id, descriptions[0], descriptions, "2099-12-11");
+  let rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.deepEqual(rows.map((row) => row.recurrence_index), [0, 1]);
+  assert.equal(added.recurrence_end_date, "2099-12-11");
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  assert.equal(store.listSeriesEvents(guildId, added.recurrence_series_id).length, 2);
+  store.updateEvent(guildId, added.id, { recurrence_end_date: "2099-12-18" });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.deepEqual(rows.map((row) => row.recurrence_index), [0, 1, 2]);
+  assert.equal(rows.filter((row) => row.recurrence_index === 2).length, 1);
+  assert.equal(native.description, "Native description");
+});
+
+test("monthly publication filters events to the requested month", async () => {
+  const guildId = `calendar-month-boundary-${Date.now()}`;
+  const control = fakeChannel("month-control");
+  const calendar = fakeChannel("month-calendar");
+  store.setCalendarChannels(guildId, calendar.id, null);
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control, calendar]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  store.createCalendarEvent({ guildId, calendarChannelId: calendar.id, title: "October event", eventDate: "2026-10-31", calendarType: "stray_kids", category: "content", createdBy: "admin" });
+  store.createCalendarEvent({ guildId, calendarChannelId: calendar.id, title: "November event", eventDate: "2026-11-01", calendarType: "stray_kids", category: "content", createdBy: "admin" });
+  await publishMonthlyCalendar(client, guildId, "stray_kids", "2026-10");
+  const message = await calendar.messages.fetch("month-calendar-message-1");
+  assert.match(message.payload.embeds[0].description, /October event/);
+  assert.doesNotMatch(message.payload.embeds[0].description, /November event/);
 });
 
 test("adopting a recurring occurrence already projected in Harmony reuses its series anchor", async () => {
