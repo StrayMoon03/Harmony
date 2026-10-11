@@ -1783,9 +1783,9 @@ function isRecurringNativeEvent(nativeEvent) {
 }
 
 function nativeSeriesCutoffModal(customId, nativeEvent) {
-  return managerModal(customId, "Last Harmony occurrence", [{
+  return managerModal(customId, "When should this series end?", [{
     id: "last-date",
-    label: "Last Harmony occurrence YYYY-MM-DD",
+    label: "Last event date (YYYY-MM-DD)",
     required: true,
     maxLength: 10,
     value: nativeEvent?.recurrenceRule?.endAt?.toISOString?.().slice(0, 10) || "",
