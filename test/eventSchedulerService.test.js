@@ -16,6 +16,7 @@ const {
   reconciliationPayload,
   reconciliationReviewPayload,
   handleGuildScheduledEventCreate,
+  handleGuildScheduledEventUpdate,
   handleGuildScheduledEventDelete,
   registerScheduledEventListeners,
   markPendingNativeCreate,
@@ -2148,9 +2149,12 @@ test("recurring import description pages stop at the selected Harmony cutoff", a
 test("recurring native import hands the complete bounded series to announcements", async () => {
   const guildId = `native-announcement-scope-${Date.now()}`;
   const native = {
+    guildId,
     id: "native-announcement-scope", name: "October K-Drama", description: "Native details",
     scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
-    recurrenceRule: { startAt: new Date("2026-10-17T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+    // Discord can retain the historical series start while exposing the
+    // currently selected/upcoming occurrence through scheduledStartAt.
+    recurrenceRule: { startAt: new Date("2026-08-22T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 12 },
   };
   const guild = { scheduledEvents: { fetch: async () => native } };
   const client = { guilds: { cache: new Map([[guildId, guild]]) } };
@@ -2171,8 +2175,23 @@ test("recurring native import hands the complete bounded series to announcements
   await handleEventSchedulerInteraction(submit);
   const added = store.getEventByDiscordId(guildId, native.id);
   assert.ok(added);
+  const storedRule = JSON.parse(added.recurrence_rule);
+  assert.equal(storedRule.anchorAt, "2026-10-17T01:00:00.000Z");
+  assert.equal(storedRule.startAt, "2026-08-22T01:00:00.000Z");
+  const persisted = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.deepEqual(persisted.map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+  assert.deepEqual(persisted.map((row) => row.recurrence_index), [0, 1, 2]);
+  assert.deepEqual(persisted.map((row) => row.description), ["Episodes 1 & 2", "Episodes 3 & 4", "K-Drama with Us"]);
+  assert.equal(persisted.some((row) => row.event_date < "2026-10-17"), false);
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
-  assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.description), ["Episodes 1 & 2", "Episodes 3 & 4", "K-Drama with Us"]);
+  const nextNativeOccurrence = {
+    ...native,
+    scheduledStartAt: new Date("2026-10-24T01:00:00.000Z"),
+  };
+  await handleGuildScheduledEventUpdate(client, native, nextNativeOccurrence);
+  assert.equal(store.getEvent(guildId, added.id).event_at, "2026-10-17T01:00:00.000Z");
+  assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
   assert.equal(added.recurrence_default_description, "K-Drama with Us");
   const prompt = submit.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const announce = fakeInteraction({ customId: prompt, kind: "button", guildId, guild, client });
