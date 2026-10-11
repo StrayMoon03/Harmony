@@ -175,6 +175,30 @@ function getEventByDiscordId(guildId, discordEventId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? AND cancelled_at IS NULL").get(guildId, discordEventId) || null;
 }
 
+// Projected recurring rows intentionally have no native Discord ID. During
+// explicit adoption, an exact title + start instant is the strongest local
+// occurrence identity available before the series anchor is linked.
+function findActiveCommunityEventByTitleAndAt(guildId, title, eventAt) {
+  if (!title || !eventAt) return null;
+  return getDb().prepare(`
+    SELECT * FROM scheduled_events
+    WHERE guild_id = ? AND calendar_type = 'community'
+      AND title = ? AND event_at = ? AND cancelled_at IS NULL
+    ORDER BY CASE WHEN discord_event_id IS NOT NULL THEN 0 ELSE 1 END, id
+    LIMIT 1
+  `).get(guildId, title, eventAt) || null;
+}
+
+function getSeriesAnchor(guildId, seriesId) {
+  if (!seriesId) return null;
+  return getDb().prepare(`
+    SELECT * FROM scheduled_events
+    WHERE guild_id = ? AND recurrence_series_id = ? AND cancelled_at IS NULL
+    ORDER BY recurrence_index IS NULL, recurrence_index, event_at, id
+    LIMIT 1
+  `).get(guildId, seriesId) || null;
+}
+
 function getCalendarCandidate(guildId, candidateId) {
   return getDb().prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND id = ?").get(guildId, candidateId) || null;
 }
@@ -634,6 +658,8 @@ module.exports = {
   createCalendarEvent,
   getEvent,
   getEventByDiscordId,
+  findActiveCommunityEventByTitleAndAt,
+  getSeriesAnchor,
   normalizeCandidateUrl,
   getCalendarCandidate,
   listCalendarCandidates,
