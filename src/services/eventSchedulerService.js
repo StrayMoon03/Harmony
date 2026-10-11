@@ -1825,6 +1825,7 @@ async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, 
   const updated = store.updateEvent(interaction.guildId, target.id, {
     discord_event_id: nativeEvent.id,
     description: description !== undefined ? (description.trim() || null) : (nativeEvent.description || null),
+    ...(recurrenceRule && descriptions ? { recurrence_exception: 1 } : {}),
   });
   if (!updated) throw new Error("That Harmony calendar event is no longer active.");
   if (recurrenceRule) {
@@ -1855,7 +1856,7 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
   const eventDate = eventAt.slice(0, 10);
   const recurrenceRule = nativeRecurrencePayload(event);
   const seriesId = recurrenceRule ? randomUUID() : null;
-  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: description !== undefined ? (description.trim() || null) : (event.description || null), createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: null, recurrenceEndCount: null, recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: description !== undefined ? (description.trim() || null) : (event.description || null), createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
   const saved = store.getEvent(interaction.guildId, id);
   if (seriesId) {
     await syncDiscordRecurringSeries(interaction.guildId, saved);
