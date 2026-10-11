@@ -1673,6 +1673,12 @@ function nativeDescriptionPageCount(occurrences) {
   return Math.max(1, Math.ceil(occurrences.length / NATIVE_DESCRIPTION_PAGE_SIZE));
 }
 
+function nativeDescriptionContinueComponents(customId) {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(customId).setLabel("Save & Continue").setStyle(ButtonStyle.Primary),
+  )];
+}
+
 async function disableReconciliationNotice(client, guildId, discordEventId) {
   const record = store.getDiscordEventReconciliation(guildId, discordEventId);
   if (!record?.notice_message_id) return;
@@ -2193,6 +2199,16 @@ async function handleManagerInteraction(interaction) {
     else await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativelinkmodal:${linked.id}:${nativeId}`, native));
     return;
   }
+  if (calendarType === "community" && action === "nativelinkseriescontinue" && interaction.isButton()) {
+    const linkedId = parts[3];
+    const nativeId = parts[4];
+    const page = Number(parts[5]) || 0;
+    const key = nativeDescriptionDraftKey(interaction, nativeId, linkedId);
+    const draft = managerDrafts.get(key);
+    if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions));
+    return;
+  }
   if (calendarType === "community" && action === "nativelinkseriesmodal" && interaction.isModalSubmit()) {
     const linkedId = parts[3];
     const nativeId = parts[4];
@@ -2203,7 +2219,7 @@ async function handleManagerInteraction(interaction) {
     draft.descriptions = collectNativeDescriptionPage(interaction, draft.occurrences, page, draft.descriptions);
     if (page + 1 < nativeDescriptionPageCount(draft.occurrences)) {
       managerDrafts.set(key, draft);
-      await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativelinkseriesmodal:${linkedId}:${nativeId}:${page + 1}`, draft.nativeEvent || { description: "" }, draft.occurrences, page + 1, draft.descriptions));
+      await interaction.reply({ content: "Saved this page. Continue to the next occurrence descriptions:", components: nativeDescriptionContinueComponents(`harmony-manager:community:nativelinkseriescontinue:${linkedId}:${nativeId}:${page + 1}`), flags: 64 });
       return;
     }
     managerDrafts.delete(key);
@@ -2239,6 +2255,15 @@ async function handleManagerInteraction(interaction) {
     else await interaction.showModal(nativeHarmonyDescriptionModal(`harmony-manager:community:nativeaddmodal:${eventId}`, native));
     return;
   }
+  if (calendarType === "community" && action === "nativeaddseriescontinue" && interaction.isButton()) {
+    const nativeId = eventId;
+    const page = Number(parts[4]) || 0;
+    const key = nativeDescriptionDraftKey(interaction, nativeId);
+    const draft = managerDrafts.get(key);
+    if (!draft) { await interaction.reply({ content: "That description workflow expired. Please start again.", flags: 64 }); return; }
+    await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:${page}`, draft.nativeEvent || { description: "" }, draft.occurrences, page, draft.descriptions));
+    return;
+  }
   if (calendarType === "community" && action === "nativeaddseriesmodal" && interaction.isModalSubmit()) {
     const nativeId = eventId;
     const page = Number(parts[4]) || 0;
@@ -2248,7 +2273,7 @@ async function handleManagerInteraction(interaction) {
     draft.descriptions = collectNativeDescriptionPage(interaction, draft.occurrences, page, draft.descriptions);
     if (page + 1 < nativeDescriptionPageCount(draft.occurrences)) {
       managerDrafts.set(key, draft);
-      await interaction.showModal(nativeSeriesDescriptionModal(`harmony-manager:community:nativeaddseriesmodal:${nativeId}:${page + 1}`, draft.nativeEvent || { description: "" }, draft.occurrences, page + 1, draft.descriptions));
+      await interaction.reply({ content: "Saved this page. Continue to the next occurrence descriptions:", components: nativeDescriptionContinueComponents(`harmony-manager:community:nativeaddseriescontinue:${nativeId}:${page + 1}`), flags: 64 });
       return;
     }
     managerDrafts.delete(key);
