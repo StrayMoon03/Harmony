@@ -2074,6 +2074,29 @@ test("native recurring import cutoff bounds projection and can be extended witho
   assert.equal(native.description, "Native description");
 });
 
+test("recurring import description pages stop at the selected Harmony cutoff", async () => {
+  const guildId = `native-cutoff-modal-${Date.now()}`;
+  const native = {
+    id: "native-cutoff-modal", name: "Cutoff modal series", description: "Native details",
+    scheduledStartAt: new Date("2099-12-04T23:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-12-04T23:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [4], count: 6 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const cutoff = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2099-12-11" } });
+  await handleEventSchedulerInteraction(cutoff);
+  const continueId = cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const next = fakeInteraction({ customId: continueId, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(next);
+  const descriptionModal = next.responses[0].modal.toJSON();
+  assert.equal(descriptionModal.components.length, 2);
+  assert.match(descriptionModal.components[0].components[0].label, /Friday/);
+  assert.match(descriptionModal.components[1].components[0].label, /Friday/);
+});
+
 test("monthly publication filters events to the requested month", async () => {
   const guildId = `calendar-month-boundary-${Date.now()}`;
   const control = fakeChannel("month-control");
