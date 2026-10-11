@@ -1307,6 +1307,7 @@ test("recurring announcement UX offers only event/series scopes and uses separat
   assert.equal(firstPage.components.length, 5);
   assert.equal(firstPage.components[0].components[0].custom_id, "announcement-message");
   assert.equal(firstPage.components[0].components[0].label, "Message for all dates");
+  assert.equal(firstPage.components[0].components[0].required, false);
   assert.equal(firstPage.components[0].components[0].placeholder, "Used for every occurrence unless you enter a different message for a specific date.");
   assert.deepEqual(firstPage.components.slice(1).map((row) => row.components[0].custom_id), ids.slice(0, 4).map((id) => `announcement-override-${id}`));
   assert.match(firstPage.components[3].components[0].label, /Friday, October 16/);
@@ -1346,6 +1347,52 @@ test("recurring announcement UX offers only event/series scopes and uses separat
   assert.match(store.listAnnouncements(ids[1])[0].message, /Series default/);
   assert.match(store.listAnnouncements(ids[4])[0].message, /Series default/);
   assert.match(store.listAnnouncements(ids[5])[0].message, /November 6 special/);
+});
+
+test("series announcements allow all individual messages without a generic fallback and reject uncovered dates", async () => {
+  const startSeriesFlow = async (guildId, suffix) => {
+    const seriesId = `series-${guildId}`;
+    const ids = ["2099-12-05", "2099-12-12"].map((date, index) => store.createCalendarEvent({
+      guildId, calendarChannelId: "community-calendar", title: `Weekly ${suffix}`, eventDate: date,
+      eventAt: `${date}T23:00:00.000Z`, eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+      category: "kdrama", calendarEventType: "kdrama", recurrenceSeriesId: seriesId,
+      recurrenceRule: JSON.stringify({ source: "discord", frequency: 2, interval: 1, count: 2 }),
+      recurrenceIndex: index, recurrenceNativeEnabled: index === 0 ? 2 : 0, createdBy: "admin",
+    }));
+    const pick = fakeInteraction({ customId: `harmony-manager:community:editannouncementpick:${ids[0]}`, kind: "button", guildId });
+    await handleEventSchedulerInteraction(pick);
+    const scope = fakeInteraction({ customId: `harmony-manager:community:recurrencescope:announcements:${ids[0]}`, kind: "select", guildId, values: ["series"] });
+    await handleEventSchedulerInteraction(scope);
+    const open = fakeInteraction({ customId: `harmony-manager:community:ysannounce:${ids[0]}`, kind: "button", guildId });
+    await handleEventSchedulerInteraction(open);
+    return { ids, modalId: `harmony-manager:community:ysannouncemodal:${ids[0]}` };
+  };
+
+  const allIndividualGuild = `announcement-all-individual-${Date.now()}`;
+  const allIndividual = await startSeriesFlow(allIndividualGuild, "all individual");
+  const allIndividualSubmit = fakeInteraction({
+    customId: allIndividual.modalId, kind: "modal", guildId: allIndividualGuild,
+    fields: {
+      "announcement-message": "",
+      [`announcement-override-${allIndividual.ids[0]}`]: "December 5 special",
+      [`announcement-override-${allIndividual.ids[1]}`]: "December 12 special",
+    },
+  });
+  await handleEventSchedulerInteraction(allIndividualSubmit);
+  assert.match(allIndividualSubmit.responses[0].payload.content, /separate announcement channel/i);
+
+  const uncoveredGuild = `announcement-uncovered-${Date.now()}`;
+  const uncovered = await startSeriesFlow(uncoveredGuild, "uncovered");
+  const uncoveredSubmit = fakeInteraction({
+    customId: uncovered.modalId, kind: "modal", guildId: uncoveredGuild,
+    fields: {
+      "announcement-message": "",
+      [`announcement-override-${uncovered.ids[0]}`]: "December 5 special",
+      [`announcement-override-${uncovered.ids[1]}`]: "",
+    },
+  });
+  await handleEventSchedulerInteraction(uncoveredSubmit);
+  assert.match(uncoveredSubmit.responses[0].payload.content, /message for every occurrence/i);
 });
 
 test("unexpected Schedule Manager interaction failures are logged and acknowledged", async () => {
