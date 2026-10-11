@@ -2097,6 +2097,39 @@ test("recurring import description pages stop at the selected Harmony cutoff", a
   assert.match(descriptionModal.components[1].components[0].label, /Friday/);
 });
 
+test("recurring native import hands the complete bounded series to announcements", async () => {
+  const guildId = `native-announcement-scope-${Date.now()}`;
+  const native = {
+    id: "native-announcement-scope", name: "October K-Drama", description: "Native details",
+    scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-10-17T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const cutoff = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
+  await handleEventSchedulerInteraction(cutoff);
+  const start = fakeInteraction({ customId: cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(start);
+  const descriptions = start.responses[0].modal.toJSON();
+  assert.equal(descriptions.components.length, 3);
+  const submit = fakeInteraction({ customId: descriptions.custom_id, kind: "modal", guildId, guild, client, fields: {
+    "description-0": "Episodes 1 & 2", "description-1": "Episodes 3 & 4", "description-2": "Episodes 5 & 6",
+  } });
+  await handleEventSchedulerInteraction(submit);
+  const added = store.getEventByDiscordId(guildId, native.id);
+  assert.ok(added);
+  assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+  const prompt = submit.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const announce = fakeInteraction({ customId: prompt, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(announce);
+  const modal = announce.responses[0].modal.toJSON();
+  assert.deepEqual(modal.components.slice(1).map((row) => row.components[0].label), ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
+  assert.doesNotMatch(JSON.stringify(modal), /November 7/);
+});
+
 test("monthly publication filters events to the requested month", async () => {
   const guildId = `calendar-month-boundary-${Date.now()}`;
   const control = fakeChannel("month-control");
