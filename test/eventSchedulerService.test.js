@@ -342,6 +342,7 @@ test("editing a linked event synchronizes its explicit native end time", async (
   assert.equal(await syncNativeScheduledEvent(client, event), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].scheduledEndTime.toISOString(), event.event_end_at);
+  assert.equal(Object.hasOwn(calls[0], "description"), false);
 });
 
 test("native sync includes entity metadata for External scheduled events", async () => {
@@ -1957,7 +1958,7 @@ test("Add to Calendar links the existing Discord event without creating another 
   assert.match(submit.responses[0].payload.content, /Would you like to schedule announcements/);
 });
 
-test("Discord adoption pre-fills and stores a Harmony-only description without editing Discord", async () => {
+test("Discord adoption starts with a blank Harmony-only description without editing Discord", async () => {
   const guildId = `native-description-${Date.now()}`;
   const native = {
     id: "native-description-event",
@@ -1974,12 +1975,39 @@ test("Discord adoption pre-fills and stores a Harmony-only description without e
   await handleEventSchedulerInteraction(add);
   const modal = add.responses[0].modal.toJSON();
   assert.equal(modal.title, "Harmony calendar description");
-  assert.equal(modal.components[0].components[0].value, native.description);
+  assert.equal(modal.components[0].components[0].value, undefined);
   const submit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
   await handleEventSchedulerInteraction(submit);
   assert.equal(store.getEventByDiscordId(guildId, native.id).description, "Episodes 5 & 6");
   assert.equal(native.description, "Hello! Bring snacks and tissues!");
   assert.equal(nativeEdits, 0);
+});
+
+test("recurring Discord adoption first offers only this event or entire series", async () => {
+  const guildId = `native-adoption-scope-${Date.now()}`;
+  const native = {
+    id: "native-adoption-scope", name: "Weekly K-Drama", description: "Native details",
+    scheduledStartAt: new Date("2099-12-04T23:00:00Z"),
+    recurrenceRule: { startAt: new Date("2099-12-04T23:00:00Z"), frequency: 2, interval: 1, byWeekday: [4], count: 3 },
+  };
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
+  await handleEventSchedulerInteraction(add);
+  const menu = add.responses[0].payload.components[0].components[0].toJSON();
+  assert.deepEqual(menu.options.map((option) => option.label), ["This event", "Entire series"]);
+  const choose = fakeInteraction({ customId: menu.custom_id, kind: "select", guildId, guild, client, values: ["this"] });
+  await handleEventSchedulerInteraction(choose);
+  const modal = choose.responses[0].modal.toJSON();
+  assert.match(modal.custom_id, /nativeaddsinglemodal/);
+  assert.equal(modal.components[0].components[0].value, undefined);
+  const submit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: { description: "Only this Friday" } });
+  await handleEventSchedulerInteraction(submit);
+  const adopted = store.getEventByDiscordId(guildId, native.id);
+  assert.equal(adopted.description, "Only this Friday");
+  assert.equal(adopted.recurrence_series_id, null);
+  assert.equal(store.listCalendarEvents(guildId, "community", "2099-12-01T00:00:00Z", "2100-01-01T00:00:00Z").length, 1);
 });
 
 test("recurring Discord adoption uses separate paged Harmony descriptions for each occurrence", async () => {
@@ -1997,7 +2025,10 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const cutoffModal = add.responses[0].modal.toJSON();
+  const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
+  const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, values: ["series"] });
+  await handleEventSchedulerInteraction(scope);
+  const cutoffModal = scope.responses[0].modal.toJSON();
   assert.match(cutoffModal.custom_id, /nativeaddcutoff/);
   const cutoff = fakeInteraction({ customId: cutoffModal.custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2100-01-31" } });
   await handleEventSchedulerInteraction(cutoff);
@@ -2006,9 +2037,9 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   await handleEventSchedulerInteraction(startDescriptions);
   const firstModal = startDescriptions.responses[0].modal.toJSON();
   assert.match(firstModal.custom_id, /nativeaddseriesmodal/);
-  assert.equal(firstModal.components.length, 4);
-  assert.match(firstModal.components[0].components[0].label, /Friday/);
-  assert.equal(firstModal.components[0].components[0].value, native.description);
+  assert.equal(firstModal.components.length, 5);
+  assert.equal(firstModal.components[0].components[0].label, "Message for all dates");
+  assert.equal(firstModal.components[1].components[0].custom_id, "description-0");
 
   const pageOne = fakeInteraction({ customId: firstModal.custom_id, kind: "modal", guildId, guild, client, fields: {
     "description-0": "Episodes 1 & 2", "description-1": "Episodes 3 & 4",
@@ -2023,7 +2054,7 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   const secondModal = continuePage.responses[0].modal.toJSON();
   assert.match(secondModal.custom_id, /nativeaddseriesmodal/);
   assert.equal(secondModal.components.length, 2);
-  assert.equal(secondModal.components[0].components[0].value, native.description);
+  assert.equal(secondModal.components[0].components[0].value, undefined);
 
   const pageTwo = fakeInteraction({ customId: secondModal.custom_id, kind: "modal", guildId, guild, client, fields: {
     "description-4": "Episodes 9 & 10", "description-5": "Episodes 11 & 12",
@@ -2086,15 +2117,18 @@ test("recurring import description pages stop at the selected Harmony cutoff", a
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const cutoff = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2099-12-11" } });
+  const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
+  await handleEventSchedulerInteraction(scope);
+  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2099-12-11" } });
   await handleEventSchedulerInteraction(cutoff);
   const continueId = cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const next = fakeInteraction({ customId: continueId, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(next);
   const descriptionModal = next.responses[0].modal.toJSON();
-  assert.equal(descriptionModal.components.length, 2);
-  assert.match(descriptionModal.components[0].components[0].label, /Friday/);
+  assert.equal(descriptionModal.components.length, 3);
+  assert.equal(descriptionModal.components[0].components[0].custom_id, "calendar-generic");
   assert.match(descriptionModal.components[1].components[0].label, /Friday/);
+  assert.match(descriptionModal.components[2].components[0].label, /Friday/);
 });
 
 test("recurring native import hands the complete bounded series to announcements", async () => {
@@ -2109,19 +2143,22 @@ test("recurring native import hands the complete bounded series to announcements
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const cutoff = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
+  const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
+  await handleEventSchedulerInteraction(scope);
+  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
   await handleEventSchedulerInteraction(cutoff);
   const start = fakeInteraction({ customId: cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(start);
   const descriptions = start.responses[0].modal.toJSON();
-  assert.equal(descriptions.components.length, 3);
+  assert.equal(descriptions.components.length, 4);
   const submit = fakeInteraction({ customId: descriptions.custom_id, kind: "modal", guildId, guild, client, fields: {
-    "description-0": "Episodes 1 & 2", "description-1": "Episodes 3 & 4", "description-2": "Episodes 5 & 6",
+    "calendar-generic": "K-Drama with Us", "description-0": "Episodes 1 & 2", "description-1": "Episodes 3 & 4", "description-2": "",
   } });
   await handleEventSchedulerInteraction(submit);
   const added = store.getEventByDiscordId(guildId, native.id);
   assert.ok(added);
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+  assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.description), ["Episodes 1 & 2", "Episodes 3 & 4", "K-Drama with Us"]);
   const prompt = submit.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const announce = fakeInteraction({ customId: prompt, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(announce);
@@ -2144,6 +2181,24 @@ test("monthly publication filters events to the requested month", async () => {
   const message = await calendar.messages.fetch("month-calendar-message-1");
   assert.match(message.payload.embeds[0].description, /October event/);
   assert.doesNotMatch(message.payload.embeds[0].description, /November event/);
+});
+
+test("monthly publication collapses duplicate rows for one recurring occurrence", async () => {
+  const guildId = `calendar-duplicate-occurrence-${Date.now()}`;
+  const control = fakeChannel("duplicate-control");
+  const calendar = fakeChannel("duplicate-calendar");
+  store.setCalendarChannels(guildId, null, calendar.id);
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control, calendar]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  const seriesId = `duplicate-series-${Date.now()}`;
+  const values = { guildId, calendarChannelId: calendar.id, title: "Friday K-Drama", eventDate: "2026-10-17", eventAt: "2026-10-17T23:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "kdrama", recurrenceSeriesId: seriesId, recurrenceIndex: 0, createdBy: "admin" };
+  store.createCalendarEvent(values);
+  store.createCalendarEvent(values);
+  await publishMonthlyCalendar(client, guildId, "community", "2026-10");
+  const message = await calendar.messages.fetch("duplicate-calendar-message-1");
+  const text = message.payload.embeds[0].description;
+  assert.equal((text.match(/Friday K-Drama/g) || []).length, 1);
 });
 
 test("adopting a recurring occurrence already projected in Harmony reuses its series anchor", async () => {
