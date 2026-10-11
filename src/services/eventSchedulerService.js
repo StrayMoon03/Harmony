@@ -974,8 +974,34 @@ function materializeNativeSeriesAnnouncements(guildId, anchor, occurrences) {
 async function syncDiscordRecurringSeries(guildId, anchor, until = null) {
   if (!anchor?.recurrence_series_id || Number(anchor.recurrence_native_enabled) !== NATIVE_RECURRENCE_MODE) return [];
   const occurrences = nativeSeriesOccurrences(anchor, until);
+  const anchorOccurrence = occurrences.find((item) => Number(item.occurrenceIndex) === 0);
+  // A native series can be attached to an older Harmony recurrence whose
+  // indexes exist but whose persisted dates are stale. Reconcile those dates
+  // before rebuilding announcements so old dates cannot leak into the UI.
+  if (anchorOccurrence && Number(anchor.recurrence_index) === 0 && (
+    anchor.event_at !== anchorOccurrence.eventAt ||
+    anchor.event_end_at !== anchorOccurrence.eventEndAt ||
+    anchor.event_date !== anchorOccurrence.eventAt.slice(0, 10)
+  )) {
+    anchor = store.updateEvent(guildId, anchor.id, {
+      event_at: anchorOccurrence.eventAt,
+      event_end_at: anchorOccurrence.eventEndAt,
+      event_date: anchorOccurrence.eventAt.slice(0, 10),
+    }) || anchor;
+  }
   for (const occurrence of occurrences) {
     if (Number(occurrence.occurrenceIndex) === Number(anchor.recurrence_index)) continue;
+    const existing = store.getSeriesEvent(guildId, anchor.recurrence_series_id, occurrence.occurrenceIndex);
+    if (existing) {
+      if (existing.event_at !== occurrence.eventAt || existing.event_end_at !== occurrence.eventEndAt || existing.event_date !== occurrence.eventAt.slice(0, 10)) {
+        store.updateEvent(guildId, existing.id, {
+          event_at: occurrence.eventAt,
+          event_end_at: occurrence.eventEndAt,
+          event_date: occurrence.eventAt.slice(0, 10),
+        });
+      }
+      continue;
+    }
     store.createSeriesOccurrence(guildId, anchor.recurrence_series_id, occurrence, anchor);
   }
   materializeNativeSeriesAnnouncements(guildId, anchor, occurrences);
@@ -1954,10 +1980,12 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
   const alreadyLinked = store.getEventByDiscordId(interaction.guildId, discordEventId);
   if (alreadyLinked) return alreadyLinked;
   const eventAt = event.scheduledStartAt.toISOString();
-  const existingOccurrence = store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
+  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event) : null;
+  const existingOccurrence = recurrenceRule
+    ? store.findAdoptableNativeEventByTitleAndAt(interaction.guildId, event.name, eventAt)
+    : store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
   if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions, cutoffDate, adoptSeries, genericDescription);
   const eventDate = eventAt.slice(0, 10);
-  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event) : null;
   const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
   const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
   const seriesId = recurrenceRule ? randomUUID() : null;
@@ -1973,7 +2001,6 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
 async function attachNativeRecurrence(interaction, nativeEvent, linked, cutoffDate = null) {
   const recurrenceRule = nativeRecurrencePayload(nativeEvent);
   if (!recurrenceRule) return linked;
-  if (linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) return linked;
   const seriesId = linked.recurrence_series_id || randomUUID();
   const updated = store.updateEvent(interaction.guildId, linked.id, {
     recurrence_series_id: seriesId,
@@ -3501,6 +3528,7 @@ module.exports = {
   clearPendingNativeDelete,
   nativeDeleteKey,
   announcementChannelMenu,
+  announcementEventIds,
   sendImmediateCalendarAnnouncement,
   CALENDAR_ANNOUNCEMENT_OPTIONS,
   offerEventReminder,

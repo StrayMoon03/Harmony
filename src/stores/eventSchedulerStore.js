@@ -193,6 +193,25 @@ function findActiveCommunityEventByTitleAndAt(guildId, title, eventAt) {
   `).get(guildId, title, eventAt) || null;
 }
 
+// A recurring native import may be re-adopting a one-off Harmony row that was
+// itself created from Discord.  Ordinary one-off calendar rows are deliberately
+// excluded: title/time alone is not strong enough to hijack them.
+function findAdoptableNativeEventByTitleAndAt(guildId, title, eventAt) {
+  if (!title || !eventAt) return null;
+  return getDb().prepare(`
+    SELECT * FROM scheduled_events
+    WHERE guild_id = ? AND calendar_type = 'community'
+      AND title = ? AND event_at = ? AND cancelled_at IS NULL
+      AND (
+        (recurrence_series_id IS NOT NULL AND recurrence_index IS NOT NULL)
+        OR (recurrence_series_id IS NULL AND discord_event_origin = 'adopted')
+      )
+    ORDER BY CASE WHEN recurrence_series_id IS NULL THEN 0 ELSE 1 END,
+             CASE WHEN discord_event_id IS NOT NULL THEN 0 ELSE 1 END, id
+    LIMIT 1
+  `).get(guildId, title, eventAt) || null;
+}
+
 function getSeriesAnchor(guildId, seriesId) {
   if (!seriesId) return null;
   return getDb().prepare(`
@@ -705,6 +724,7 @@ module.exports = {
   getEvent,
   getEventByDiscordId,
   findActiveCommunityEventByTitleAndAt,
+  findAdoptableNativeEventByTitleAndAt,
   getSeriesAnchor,
   normalizeCandidateUrl,
   getCalendarCandidate,

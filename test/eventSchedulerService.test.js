@@ -22,6 +22,7 @@ const {
   clearPendingNativeCreate,
   markPendingNativeDelete,
   announcementChannelMenu,
+  announcementEventIds,
   sendImmediateCalendarAnnouncement,
   addNativeEventToCalendar,
   syncDiscordRecurringSeries,
@@ -2184,6 +2185,57 @@ test("recurring native import hands the complete bounded series to announcements
   const modal = announce.responses[0].modal.toJSON();
   assert.deepEqual(modal.components.slice(1).map((row) => row.components[0].label), ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
   assert.doesNotMatch(JSON.stringify(modal), /November 7/);
+});
+
+test("fresh recurring adoption canonicalizes a stale series and hands only its bounded IDs to announcements", async () => {
+  const guildId = `native-fresh-adoption-${Date.now()}`;
+  const native = {
+    id: "native-fresh-adoption", name: "Kdrama with Us! Europe and US EST friendly", description: "Native details",
+    scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-10-17T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 3 },
+  };
+  const staleRule = JSON.stringify({ source: "discord", startAt: "2026-10-17T01:00:00.000Z", frequency: 2, interval: 1, byWeekday: [5], count: 3 });
+  const seriesId = `stale-series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: native.name, eventDate: "2026-10-17", eventAt: native.scheduledStartAt.toISOString(),
+    eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin",
+    recurrenceSeriesId: seriesId, recurrenceRule: staleRule, recurrenceIndex: 0,
+  });
+  const anchor = store.getEvent(guildId, anchorId);
+  store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2026-08-29T01:00:00.000Z", eventEndAt: null }, anchor);
+  store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 2, eventAt: "2026-09-05T01:00:00.000Z", eventEndAt: null }, anchor);
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const added = await addNativeEventToCalendar({ guildId, user: { id: "admin" }, guild }, native.id, "Episodes 1 & 2", { 0: "Episodes 1 & 2", 1: "Episodes 3 & 4", 2: "Episodes 5 & 6" }, "2026-10-31", true, "Kdrama default");
+  const rows = store.listSeriesEvents(guildId, seriesId);
+  assert.equal(added.id, anchorId);
+  assert.deepEqual(rows.map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+  assert.deepEqual(rows.map((row) => row.recurrence_index), [0, 1, 2]);
+  assert.equal(rows.filter((row) => row.event_date === "2026-10-17").length, 1);
+  assert.equal(store.getEventByDiscordId(guildId, native.id).id, anchorId);
+  const handoffIds = announcementEventIds(guildId, added);
+  assert.deepEqual(handoffIds, rows.map((row) => row.id));
+  assert.deepEqual(handoffIds.map((id) => store.getEvent(guildId, id).event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
+});
+
+test("recurring adoption converts a prior adopted one-off instead of creating a duplicate anchor", async () => {
+  const guildId = `native-adopted-oneoff-${Date.now()}`;
+  const native = {
+    id: "native-adopted-oneoff", name: "Kdrama with Us! Europe and US EST friendly", description: "Native details",
+    scheduledStartAt: new Date("2099-10-17T01:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-10-17T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 3 },
+  };
+  const existingId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: native.name, eventDate: "2099-10-17", eventAt: native.scheduledStartAt.toISOString(),
+    eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin", discordEventOrigin: "adopted",
+  });
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const added = await addNativeEventToCalendar({ guildId, user: { id: "admin" }, guild }, native.id, "Episodes 1 & 2");
+  const rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.equal(added.id, existingId);
+  assert.equal(rows.length, 3);
+  assert.equal(rows.filter((row) => row.event_date === "2099-10-17").length, 1);
+  assert.equal(store.listCalendarEvents(guildId, "community", "2099-10-17T00:00:00.000Z", "2099-10-18T00:00:00.000Z").length, 1);
+  assert.equal(store.getEventByDiscordId(guildId, native.id).id, existingId);
 });
 
 test("monthly publication filters events to the requested month", async () => {
