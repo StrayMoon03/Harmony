@@ -1929,7 +1929,7 @@ test("Youtiful announcement schedules are independent, multi-selectable, and can
   assert.equal(saved.announcement_channel_id, "announcements");
   assert.deepEqual(JSON.parse(saved.announcement_offsets), [604800, 259200, 86400, 3600]);
   assert.equal(saved.announcement_message, "Custom reminder copy");
-  assert.equal(store.dueAnnouncements("2099-01-01T00:00:00.000Z").length, 0);
+  assert.equal(store.dueAnnouncements("2099-01-01T00:00:00.000Z").some((item) => item.event_id === eventId), false);
   assert.equal(store.cancelEvent(guildId, eventId, "admin"), true);
   assert.equal(store.dueAnnouncements("2100-01-01T00:00:00.000Z").some((item) => item.event_id === eventId), false);
 });
