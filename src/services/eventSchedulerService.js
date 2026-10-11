@@ -468,23 +468,34 @@ function announcementPrompt(eventId) {
 
 function announcementEventIds(guildId, event) {
   if (!event?.recurrence_series_id) return event?.id == null ? [] : [event.id];
-  return store.listSeriesEvents(guildId, event.recurrence_series_id)
+  const rows = store.listSeriesEvents(guildId, event.recurrence_series_id)
     .filter((item) => !item.cancelled_at)
-    .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index))
+    .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index));
+
+  // Native imports can be attached to a pre-existing Harmony series whose old
+  // rows are still present.  For announcement setup, the native recurrence
+  // timeline (and its Harmony cutoff) is authoritative; do not expose those
+  // stale rows or let their IDs drift away from the persisted occurrences.
+  if (Number(event.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && parseNativeRecurrence(event)) {
+    const byIndex = new Map(rows.map((item) => [Number(item.recurrence_index), item]));
+    return nativeSeriesOccurrences(event)
+      .map((occurrence) => byIndex.get(Number(occurrence.occurrenceIndex)))
+      .filter(Boolean)
+      .map((item) => item.id);
+  }
+
+  const cutoff = parseManagerDate(event.recurrence_end_date);
+  return rows
+    .filter((item) => !cutoff || !item.event_date || item.event_date <= event.recurrence_end_date)
     .map((item) => item.id);
 }
 
 function announcementDraftEventIds(guildId, event, draft) {
   const persistedIds = announcementEventIds(guildId, event);
-  if (!event?.recurrence_series_id || !Array.isArray(draft?.eventIds) || !draft.eventIds.length) return persistedIds;
-  const draftIds = [...new Set(draft.eventIds.map(Number).filter(Number.isInteger))];
-  const belongsToSeries = draftIds.every((id) => {
-    const row = store.getEvent(guildId, id);
-    return row && !row.cancelled_at && row.recurrence_series_id === event.recurrence_series_id;
-  });
-  // Keep a valid bounded snapshot captured at adoption time, but discard stale
-  // or unrelated draft IDs and rebuild from the current persisted series.
-  return belongsToSeries ? draftIds.filter((id) => persistedIds.includes(id)) : persistedIds;
+  // Draft IDs are only a transient handoff snapshot.  Rebuild from the
+  // bounded persisted series every time so stale IDs cannot repopulate the
+  // modal or the final submit after a reconciliation.
+  return persistedIds;
 }
 
 function recurrenceMenu() {
@@ -2783,7 +2794,10 @@ async function handleManagerInteraction(interaction) {
   if (calendarType === "community" && action === "ysannouncetiming" && interaction.isStringSelectMenu()) {
     const draft = managerDrafts.get(draftKey(interaction, calendarType, `announce-${eventId}`));
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
-    const eventIds = draft.eventIds || [Number(eventId)];
+    const draftEvent = store.getEvent(interaction.guildId, Number(eventId));
+    const eventIds = draftEvent?.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? announcementDraftEventIds(interaction.guildId, draftEvent, draft)
+      : (draft.eventIds || [Number(eventId)]);
     const editing = Boolean(draft.editing);
     const selected = interaction.values.includes("none") ? [] : interaction.values;
     const first = store.getEvent(interaction.guildId, eventIds[0]);
