@@ -342,6 +342,17 @@ test("editing a linked event synchronizes its explicit native end time", async (
   assert.equal(await syncNativeScheduledEvent(client, event), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].scheduledEndTime.toISOString(), event.event_end_at);
+  assert.equal(calls[0].description, event.description);
+});
+
+test("adopted native description edits stay Harmony-only", async () => {
+  const calls = [];
+  const native = { entityType: GuildScheduledEventEntityType.External, edit: async (payload) => { calls.push(payload); } };
+  const client = { guilds: { cache: new Map([["g", { scheduledEvents: { cache: new Map([["native-adopted", native]]) } }]]) } };
+  await syncNativeScheduledEvent(client, {
+    guild_id: "g", discord_event_id: "native-adopted", discord_event_origin: "adopted",
+    event_at: "2026-10-24T09:30:00.000Z", title: "Adopted event", description: "Harmony-only details",
+  });
   assert.equal(Object.hasOwn(calls[0], "description"), false);
 });
 
@@ -2067,6 +2078,7 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   ]);
   const anchor = store.getEventByDiscordId(guildId, native.id);
   assert.equal(anchor.recurrence_exception, 1);
+  assert.equal(anchor.recurrence_default_description, "");
   // A later recurrence sync may discover dates that were not present when
   // the import modal was submitted. The occurrence-specific anchor text must
   // never become the template for those newly projected dates.
@@ -2159,6 +2171,13 @@ test("recurring native import hands the complete bounded series to announcements
   assert.ok(added);
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.event_date), ["2026-10-17", "2026-10-24", "2026-10-31"]);
   assert.deepEqual(store.listSeriesEvents(guildId, added.recurrence_series_id).map((row) => row.description), ["Episodes 1 & 2", "Episodes 3 & 4", "K-Drama with Us"]);
+  assert.equal(added.recurrence_default_description, "K-Drama with Us");
+  store.updateEvent(guildId, added.id, {
+    recurrence_end_date: "2026-11-07",
+    recurrence_rule: JSON.stringify({ source: "discord", startAt: "2026-10-17T01:00:00.000Z", frequency: 2, interval: 1, byWeekday: [5], count: 4 }),
+  });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  assert.equal(store.getSeriesEvent(guildId, added.recurrence_series_id, 3).description, "K-Drama with Us");
   const prompt = submit.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const announce = fakeInteraction({ customId: prompt, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(announce);

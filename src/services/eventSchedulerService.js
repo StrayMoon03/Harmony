@@ -1368,6 +1368,7 @@ async function syncNativeScheduledEvent(client, event) {
     scheduledStartTime: new Date(event.event_at),
     scheduledEndTime: nativeEventEndTime(event),
   };
+  if (event.discord_event_origin !== "adopted") payload.description = event.description || undefined;
   // Discord only accepts entity metadata for External scheduled events. Voice
   // and Stage events are channel-bound and reject this field with
   // GUILD_SCHEDULED_EVENT_ENTITY_METADATA_UNSUPPORTED.
@@ -1908,7 +1909,8 @@ async function handleGuildScheduledEventDelete(client, event) {
 
 async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, description, descriptions = null, cutoffDate = null, adoptSeries = true, genericDescription = null) {
   const recurrenceRule = adoptSeries ? nativeRecurrencePayload(nativeEvent) : null;
-  const normalizedGenericDescription = String(genericDescription || "").trim() || null;
+  const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
+  const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
   let target = existing;
   // A title/time match can be a projected occurrence. Native identity belongs
   // on the series anchor, never on a projected row, so adoption must reuse the
@@ -1920,8 +1922,10 @@ async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, 
   if (linked) return linked;
   const updated = store.updateEvent(interaction.guildId, target.id, {
     discord_event_id: nativeEvent.id,
+    discord_event_origin: "adopted",
     description: description !== undefined ? (description.trim() || null) : null,
-    ...(recurrenceRule && descriptions ? { recurrence_exception: normalizedGenericDescription ? 0 : 1 } : {}),
+    ...(hasSeriesDefault ? { recurrence_default_description: normalizedGenericDescription || "" } : {}),
+    ...(recurrenceRule && descriptions ? { recurrence_exception: 1 } : {}),
     ...(recurrenceRule ? { recurrence_end_date: cutoffDate || null } : {}),
   });
   if (!updated) throw new Error("That Harmony calendar event is no longer active.");
@@ -1953,10 +1957,11 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
   const existingOccurrence = store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
   if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions, cutoffDate, adoptSeries, genericDescription);
   const eventDate = eventAt.slice(0, 10);
-  const normalizedGenericDescription = String(genericDescription || "").trim() || null;
   const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event) : null;
+  const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
+  const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
   const seriesId = recurrenceRule ? randomUUID() : null;
-  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, allDay: false, description: description !== undefined ? (description.trim() || null) : null, createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: recurrenceRule ? cutoffDate : null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions && !normalizedGenericDescription), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false });
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, discordEventOrigin: "adopted", description: description !== undefined ? (description.trim() || null) : null, createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: recurrenceRule ? cutoffDate : null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false, recurrenceDefaultDescription: hasSeriesDefault ? normalizedGenericDescription || "" : null });
   const saved = store.getEvent(interaction.guildId, id);
   if (seriesId) {
     await syncDiscordRecurringSeries(interaction.guildId, saved);
@@ -2435,7 +2440,7 @@ async function handleManagerInteraction(interaction) {
     managerDrafts.delete(key);
     if (!store.claimDiscordEventReconciliation(interaction.guildId, nativeId)) { await interaction.reply({ content: "That Discord Scheduled Event has already been reviewed.", flags: 64 }); return; }
     try {
-      const added = await addNativeEventToCalendar(interaction, nativeId, draft.genericDescription || "", draft.descriptions, draft.cutoffDate, true, draft.genericDescription || null);
+      const added = await addNativeEventToCalendar(interaction, nativeId, draft.genericDescription || "", draft.descriptions, draft.cutoffDate, true, draft.genericDescription);
       store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "added");
       await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
       managerDrafts.set(draftKey(interaction, calendarType, `announce-${added.id}`), { eventIds: announcementEventIds(interaction.guildId, added), linked: true, title: added.title });

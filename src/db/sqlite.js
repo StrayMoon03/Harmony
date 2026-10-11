@@ -311,6 +311,8 @@ function migrate(database) {
       recurrence_end_count    INTEGER,
       recurrence_exception    INTEGER NOT NULL DEFAULT 0,
       recurrence_native_enabled INTEGER NOT NULL DEFAULT 0,
+      recurrence_default_description TEXT,
+      discord_event_origin    TEXT NOT NULL DEFAULT 'harmony',
       announcement_channel_id TEXT,
       announcement_offsets TEXT NOT NULL DEFAULT '[]',
       announcement_message TEXT,
@@ -525,6 +527,23 @@ function migrate(database) {
   if (!scheduledEventColumns.has("recurrence_native_enabled")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_native_enabled INTEGER NOT NULL DEFAULT 0");
   }
+  if (!scheduledEventColumns.has("recurrence_default_description")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN recurrence_default_description TEXT");
+  }
+  if (!scheduledEventColumns.has("discord_event_origin")) {
+    database.exec("ALTER TABLE scheduled_events ADD COLUMN discord_event_origin TEXT NOT NULL DEFAULT 'harmony'");
+  }
+  // Recurring native imports created before the origin marker was added are
+  // unambiguous from their Discord recurrence payload. Preserve their native
+  // descriptions when Harmony edits the calendar copy.
+  database.exec(`
+    UPDATE scheduled_events
+    SET discord_event_origin = 'adopted'
+    WHERE discord_event_origin = 'harmony'
+      AND discord_event_id IS NOT NULL
+      AND recurrence_native_enabled = 2
+      AND recurrence_rule LIKE '%"source":"discord"%'
+  `);
   if (!scheduledEventColumns.has("announcement_channel_id")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN announcement_channel_id TEXT");
   }

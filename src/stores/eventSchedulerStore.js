@@ -30,7 +30,7 @@ function candidateTitleSimilarity(left, right) {
   return overlap / new Set([...a, ...b]).size;
 }
 
-function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
+function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, discordEventOrigin = "harmony", recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, recurrenceDefaultDescription = null, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
   const db = getDb();
   const now = new Date().toISOString();
   // The legacy announcement column is NOT NULL, but calendar-only all-day
@@ -42,12 +42,12 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const result = db.prepare(`
       INSERT INTO scheduled_events (
         guild_id, source_channel_id, destination_channel_id, title,
-        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, recurrence_native_enabled, announcement_channel_id, announcement_offsets, announcement_message, created_by, created_at
+        link, timezone, calendar_type, event_at, event_end_at, event_date, event_timezone, event_location, description, category, member, all_day, calendar_event_type, event_channel_id, discord_event_id, discord_event_origin, recurrence_series_id, recurrence_rule, recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception, recurrence_native_enabled, recurrence_default_description, announcement_channel_id, announcement_offsets, announcement_message, created_by, created_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
-    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, typeof recurrenceNativeEnabled === "number" ? recurrenceNativeEnabled : (recurrenceNativeEnabled ? 1 : 0), announcementChannelId, JSON.stringify(announcementOffsets || []), announcementMessage || null, createdBy, now);
+    `).run(guildId, sourceChannelId, destinationChannelId, title, link, storedTimezone, calendarType || null, eventAt || null, eventEndAt || null, eventDate || null, eventTimezone === undefined ? storedTimezone : eventTimezone, eventLocation || null, description || null, category || null, member || null, allDay ? 1 : 0, calendarEventType, eventChannelId, discordEventId, discordEventOrigin || "harmony", recurrenceSeriesId, recurrenceRule, recurrenceIndex, recurrenceEndDate, recurrenceEndCount, recurrenceException ? 1 : 0, typeof recurrenceNativeEnabled === "number" ? recurrenceNativeEnabled : (recurrenceNativeEnabled ? 1 : 0), recurrenceDefaultDescription, announcementChannelId, JSON.stringify(announcementOffsets || []), announcementMessage || null, createdBy, now);
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
@@ -65,7 +65,7 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
   }
 }
 
-function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
+function createCalendarEvent({ guildId, calendarChannelId, title, link = "", timezone = "America/New_York", eventAt = null, eventEndAt = null, eventDate, eventTimezone = timezone, eventLocation = null, calendarType, category, member = null, allDay = false, description = null, createdBy, calendarEventType = null, eventChannelId = null, discordEventId = null, discordEventOrigin = "harmony", recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, recurrenceDefaultDescription = null, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
   return createEvent({
     guildId,
     sourceChannelId: calendarChannelId || "",
@@ -86,6 +86,7 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     calendarEventType,
     eventChannelId,
     discordEventId,
+    discordEventOrigin,
     recurrenceSeriesId,
     recurrenceRule,
     recurrenceIndex,
@@ -93,6 +94,7 @@ function createCalendarEvent({ guildId, calendarChannelId, title, link = "", tim
     recurrenceEndCount,
     recurrenceException,
     recurrenceNativeEnabled,
+    recurrenceDefaultDescription,
     announcementChannelId,
     announcementOffsets,
     announcementMessage,
@@ -309,7 +311,7 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
     const now = new Date().toISOString();
     const storedTimezone = template.timezone || "UTC";
     const description = Number(template.recurrence_native_enabled) === 2 && template.recurrence_exception
-      ? null
+      ? (template.recurrence_default_description ?? "")
       : template.description;
     const announcementOffsets = (() => {
       try { return JSON.parse(template.announcement_offsets || "[]"); } catch { return []; }
@@ -321,9 +323,10 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
         event_location, description, category, member, all_day, calendar_event_type,
         event_channel_id, discord_event_id, recurrence_series_id, recurrence_rule,
         recurrence_index, recurrence_end_date, recurrence_end_count, recurrence_exception,
-        recurrence_native_enabled, announcement_channel_id, announcement_offsets,
+        recurrence_native_enabled, recurrence_default_description, discord_event_origin,
+        announcement_channel_id, announcement_offsets,
         announcement_message, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       guildId,
       template.source_channel_id || template.destination_channel_id || "",
@@ -351,6 +354,10 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
       template.recurrence_end_count || null,
       0,
       0,
+      Number(template.recurrence_native_enabled) === 2 && template.recurrence_exception
+        ? (template.recurrence_default_description ?? "")
+        : null,
+      "harmony",
       template.announcement_channel_id || null,
       JSON.stringify(announcementOffsets),
       template.announcement_message || null,
@@ -542,7 +549,7 @@ function cancelSeriesEvents(guildId, seriesId, cancelledBy, fromIndex = null) {
 function updateEvent(guildId, eventId, changes) {
   const event = getEvent(guildId, eventId);
   if (!event) return null;
-  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "announcement_channel_id", "announcement_offsets", "announcement_message", "announcement_message_override"];
+  const allowed = ["title", "calendar_type", "event_at", "event_end_at", "event_date", "event_timezone", "event_location", "timezone", "description", "category", "member", "all_day", "link", "calendar_event_type", "event_channel_id", "discord_event_id", "discord_event_origin", "recurrence_series_id", "recurrence_rule", "recurrence_index", "recurrence_end_date", "recurrence_end_count", "recurrence_exception", "recurrence_native_enabled", "recurrence_default_description", "announcement_channel_id", "announcement_offsets", "announcement_message", "announcement_message_override"];
   const normalizedChanges = { ...changes };
   // event_timezone is nullable for all-day events, but the legacy timezone
   // column is NOT NULL. Preserve its compatibility value when an edit clears
