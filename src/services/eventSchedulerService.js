@@ -466,6 +466,13 @@ function announcementPrompt(eventId) {
   )];
 }
 
+function announcementEventIds(guildId, event) {
+  if (!event?.recurrence_series_id) return event?.id == null ? [] : [event.id];
+  return store.listSeriesEvents(guildId, event.recurrence_series_id)
+    .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index))
+    .map((item) => item.id);
+}
+
 function recurrenceMenu() {
   return [new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder().setCustomId("harmony-manager:community:ysrecurrence").setPlaceholder("Choose recurrence").addOptions(
@@ -1944,7 +1951,7 @@ async function linkNativeEventToHarmony(interaction, nativeId, linkedId, descrip
   const adopted = await adoptNativeIntoExistingEvent(interaction, native, linked, description, descriptions, cutoffDate);
   store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
   await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
-  managerDrafts.set(draftKey(interaction, "community", `announce-${adopted.id}`), { eventIds: [adopted.id], linked: true, title: adopted.title });
+  managerDrafts.set(draftKey(interaction, "community", `announce-${adopted.id}`), { eventIds: announcementEventIds(interaction.guildId, adopted), linked: true, title: adopted.title });
   return adopted;
 }
 
@@ -2369,7 +2376,7 @@ async function handleManagerInteraction(interaction) {
       const added = await addNativeEventToCalendar(interaction, nativeId, draft.descriptions["0"] || "", draft.descriptions, draft.cutoffDate);
       store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "added");
       await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
-      managerDrafts.set(draftKey(interaction, calendarType, `announce-${added.id}`), { eventIds: [added.id], linked: true, title: added.title });
+      managerDrafts.set(draftKey(interaction, calendarType, `announce-${added.id}`), { eventIds: announcementEventIds(interaction.guildId, added), linked: true, title: added.title });
       await interaction.reply({ content: `Added **${added.title}** to the Youtiful Stays calendar. Would you like to schedule announcements for this event?`, components: announcementPrompt(added.id), flags: 64 });
       await refreshPublishedCalendar(interaction.client, interaction.guildId, "community", added.event_date).catch(() => {});
     } catch (error) {
