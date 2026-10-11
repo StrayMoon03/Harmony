@@ -23,6 +23,7 @@ const {
   markPendingNativeDelete,
   announcementChannelMenu,
   announcementEventIds,
+  announcementEditorModal,
   sendImmediateCalendarAnnouncement,
   addNativeEventToCalendar,
   syncDiscordRecurringSeries,
@@ -2185,6 +2186,29 @@ test("recurring native import hands the complete bounded series to announcements
   const modal = announce.responses[0].modal.toJSON();
   assert.deepEqual(modal.components.slice(1).map((row) => row.components[0].label), ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
   assert.doesNotMatch(JSON.stringify(modal), /November 7/);
+});
+
+test("series announcement modal rebuilds occurrence fields from the persisted adopted series", () => {
+  const guildId = `native-announcement-modal-refresh-${Date.now()}`;
+  const seriesId = `series-${Date.now()}`;
+  const anchorId = store.createCalendarEvent({
+    guildId, calendarChannelId: null, title: "October K-Drama", eventDate: "2026-10-17",
+    eventAt: "2026-10-17T01:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", createdBy: "admin", recurrenceSeriesId: seriesId, recurrenceIndex: 0,
+  });
+  const anchor = store.getEvent(guildId, anchorId);
+  const oct24 = store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 1, eventAt: "2026-10-24T01:00:00.000Z", eventEndAt: null }, anchor);
+  store.createSeriesOccurrence(guildId, seriesId, { occurrenceIndex: 2, eventAt: "2026-10-31T01:00:00.000Z", eventEndAt: null }, anchor);
+  const unrelatedAug = store.createCalendarEvent({
+    guildId, calendarChannelId: null, title: "Old K-Drama", eventDate: "2026-08-22", eventAt: "2026-08-22T01:00:00.000Z",
+    eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", createdBy: "admin",
+  });
+  const modal = announcementEditorModal(anchorId, {
+    guildId, eventIds: [unrelatedAug, oct24.id], announcementScope: "series", announcementPage: 0,
+  }, store.getEvent(guildId, anchorId), guildId).toJSON();
+  const labels = modal.components.slice(1).map((row) => row.components[0].label);
+  assert.deepEqual(labels, ["Saturday, October 17", "Saturday, October 24", "Saturday, October 31"]);
+  assert.doesNotMatch(JSON.stringify(modal), /August|September/);
 });
 
 test("fresh recurring adoption canonicalizes a stale series and hands only its bounded IDs to announcements", async () => {

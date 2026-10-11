@@ -469,8 +469,22 @@ function announcementPrompt(eventId) {
 function announcementEventIds(guildId, event) {
   if (!event?.recurrence_series_id) return event?.id == null ? [] : [event.id];
   return store.listSeriesEvents(guildId, event.recurrence_series_id)
+    .filter((item) => !item.cancelled_at)
     .sort((left, right) => Number(left.recurrence_index) - Number(right.recurrence_index))
     .map((item) => item.id);
+}
+
+function announcementDraftEventIds(guildId, event, draft) {
+  const persistedIds = announcementEventIds(guildId, event);
+  if (!event?.recurrence_series_id || !Array.isArray(draft?.eventIds) || !draft.eventIds.length) return persistedIds;
+  const draftIds = [...new Set(draft.eventIds.map(Number).filter(Number.isInteger))];
+  const belongsToSeries = draftIds.every((id) => {
+    const row = store.getEvent(guildId, id);
+    return row && !row.cancelled_at && row.recurrence_series_id === event.recurrence_series_id;
+  });
+  // Keep a valid bounded snapshot captured at adoption time, but discard stale
+  // or unrelated draft IDs and rebuild from the current persisted series.
+  return belongsToSeries ? draftIds.filter((id) => persistedIds.includes(id)) : persistedIds;
 }
 
 function recurrenceMenu() {
@@ -756,7 +770,13 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
   const recurring = Boolean(event?.recurrence_series_id);
   const scope = draft?.announcementScope || (recurring ? "series" : "this");
   const targetGuildId = draft?.guildId || guildId || event?.guild_id;
-  const allTargets = (draft?.eventIds || [event?.id]).map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
+  // The persisted series is authoritative at the moment the modal opens.
+  // Draft event IDs can outlive an adoption/projection reconciliation and may
+  // otherwise point the editor at stale or unrelated occurrence rows.
+  const currentEventIds = recurring && scope === "series"
+    ? announcementDraftEventIds(targetGuildId, event, draft)
+    : (draft?.eventIds || [event?.id]);
+  const allTargets = currentEventIds.map((id) => store.getEvent(targetGuildId, Number(id))).filter(Boolean);
   const page = Number(draft?.announcementPage || 0);
   const targets = allTargets.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE);
   const seriesAnchor = recurring ? (store.listSeriesEvents(targetGuildId, event.recurrence_series_id).find((item) => Number(item.recurrence_index) === 0) || event) : event;
@@ -2675,7 +2695,11 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!event) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    await interaction.showModal(announcementEditorModal(eventId, draft, event, interaction.guildId));
+    const currentDraft = event.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? { ...draft, eventIds: announcementDraftEventIds(interaction.guildId, event, draft), announcementPage: 0 }
+      : draft;
+    managerDrafts.set(draftKey(interaction, calendarType, `announce-${eventId}`), currentDraft);
+    await interaction.showModal(announcementEditorModal(eventId, currentDraft, event, interaction.guildId));
     return;
   }
   if (calendarType === "community" && action === "ysannouncepage" && interaction.isButton()) {
@@ -2684,8 +2708,11 @@ async function handleManagerInteraction(interaction) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
     if (!draft || !event) { await interaction.update({ content: "That announcement setup expired. The event was saved successfully.", components: [] }); return; }
     const page = Number(parts[4]);
-    managerDrafts.set(key, { ...draft, announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 });
-    await interaction.showModal(announcementEditorModal(eventId, managerDrafts.get(key), event, interaction.guildId));
+    const currentDraft = event.recurrence_series_id && (draft.announcementScope || "series") === "series"
+      ? { ...draft, eventIds: announcementDraftEventIds(interaction.guildId, event, draft), announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 }
+      : { ...draft, announcementPage: Number.isInteger(page) && page >= 0 ? page : 0 };
+    managerDrafts.set(key, currentDraft);
+    await interaction.showModal(announcementEditorModal(eventId, currentDraft, event, interaction.guildId));
     return;
   }
   if (calendarType === "community" && action === "ysannounce-no" && interaction.isButton()) {
@@ -2702,7 +2729,10 @@ async function handleManagerInteraction(interaction) {
     if (!draft) { await interaction.reply({ content: "That announcement setup expired. The event was saved successfully.", flags: 64 }); return; }
     const event = store.getEvent(interaction.guildId, Number(eventId));
     const announcementScope = draft.announcementScope || (event?.recurrence_series_id ? "series" : "this");
-    const targetEvents = (draft.eventIds || [Number(eventId)]).map((id) => store.getEvent(interaction.guildId, Number(id))).filter(Boolean);
+    const targetEventIds = event?.recurrence_series_id && announcementScope === "series"
+      ? announcementDraftEventIds(interaction.guildId, event, draft)
+      : (draft.eventIds || [Number(eventId)]);
+    const targetEvents = targetEventIds.map((id) => store.getEvent(interaction.guildId, Number(id))).filter(Boolean);
     const page = Number(draft.announcementPage || 0);
     const pageEvents = announcementScope === "series"
       ? targetEvents.slice(page * ANNOUNCEMENT_OCCURRENCES_PER_PAGE, (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE)
@@ -3529,6 +3559,7 @@ module.exports = {
   nativeDeleteKey,
   announcementChannelMenu,
   announcementEventIds,
+  announcementEditorModal,
   sendImmediateCalendarAnnouncement,
   CALENDAR_ANNOUNCEMENT_OPTIONS,
   offerEventReminder,
