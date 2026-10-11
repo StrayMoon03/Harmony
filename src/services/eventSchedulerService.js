@@ -811,7 +811,7 @@ function announcementEditorModal(eventId, draft, event, guildId = null) {
         .setLabel("Message for all dates")
         .setPlaceholder("Used for every occurrence unless you enter a different message for a specific date.")
         .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
+        .setRequired(false)
         .setMaxLength(1800);
       const currentBody = seriesAnchor?.announcement_message;
       if (currentBody) defaultInput.setValue(normalizeCalendarAnnouncementBody(currentBody).slice(0, 1800));
@@ -2771,11 +2771,17 @@ async function handleManagerInteraction(interaction) {
       overrides.set(String(target.id), value);
     }
     const announcementMessage = announcementScope === "series" && page > 0
-      ? draft.announcementMessage
-      : interaction.fields.getTextInputValue("announcement-message").trim();
+      ? normalizeCalendarAnnouncementBody(draft.announcementMessage || "")
+      : normalizeCalendarAnnouncementBody(interaction.fields.getTextInputValue("announcement-message"));
     if (!announcementMessage) {
-      await interaction.reply({ content: "Please provide a series/default announcement message.", flags: 64 });
-      return;
+      const uncovered = targetEvents.some((target) => {
+        const override = overrides.has(String(target.id)) ? overrides.get(String(target.id)) : target.announcement_message_override;
+        return !normalizeCalendarAnnouncementBody(override || "");
+      });
+      if (uncovered) {
+        await interaction.reply({ content: "Please provide a message for every occurrence, or enter a Message for all dates.", flags: 64 });
+        return;
+      }
     }
     const nextPage = announcementScope === "series" && (page + 1) * ANNOUNCEMENT_OCCURRENCES_PER_PAGE < targetEvents.length;
     const nextDraft = {
