@@ -72,6 +72,53 @@ test("Youtiful birthday calendar entries are informational and never mention mem
   assert.deepEqual(part.allowedMentions, { parse: [] });
 });
 
+test("published Youtiful dates use the event instant in the local presentation timezone", () => {
+  const friday = [
+    ["2026-10-17T01:00:00.000Z", "Oct 16", "9:00 PM"],
+    ["2026-10-24T01:00:00.000Z", "Oct 23", "9:00 PM"],
+    ["2026-10-31T01:00:00.000Z", "Oct 30", "9:00 PM"],
+    ["2026-11-07T01:00:00.000Z", "Nov 6", "8:00 PM"],
+  ].map(([eventAt]) => ({
+    calendar_event_type: "kdrama", event_at: eventAt,
+    event_date: eventAt.slice(0, 10), event_timezone: "UTC", timezone: "UTC",
+    discord_event_origin: "adopted", all_day: 0, title: "Friday series",
+  }));
+  const october = buildYoutifulCalendarMessages("2026-10", friday.slice(0, 3), Date.parse("2026-10-01T00:00:00Z"))[0].embeds[0];
+  const november = buildYoutifulCalendarMessages("2026-11", friday.slice(3), Date.parse("2026-11-01T00:00:00Z"))[0].embeds[0];
+  assert.match(october.description, /Oct 16/);
+  assert.match(october.description, /Oct 23/);
+  assert.match(october.description, /Oct 30/);
+  assert.doesNotMatch(october.description, /Oct 17|Oct 24|Oct 31/);
+  assert.match(october.description, /<t:1792198800:t>/);
+  assert.match(november.description, /Nov 6/);
+  assert.match(november.description, /<t:1794013200:t>/);
+  assert.doesNotMatch(november.description, /<t:.*:R>/);
+  assert.match(november.footer.text, /Last updated/);
+  assert.doesNotMatch(november.footer.text, /<t:\d+:R>/);
+});
+
+test("published Youtiful month selection uses local dates without mutating event_at", () => {
+  const guildId = `calendar-local-month-${Date.now()}`;
+  const control = fakeChannel("control-local-month");
+  const community = fakeChannel("community-local-month");
+  store.setCalendarChannels(guildId, "stray-local-month", community.id);
+  const guild = fakeGuild(guildId, [control, community]);
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  const eventAt = "2026-10-17T01:00:00.000Z";
+  const id = store.createCalendarEvent({
+    guildId, calendarChannelId: community.id, title: "Friday series", eventDate: "2026-10-17",
+    eventAt, eventTimezone: "UTC", calendarType: "community", category: "kdrama",
+    createdBy: "admin", discordEventOrigin: "adopted", allDay: false,
+  });
+  return publishMonthlyCalendar(client, guildId, "community", "2026-10")
+    .then(() => community.messages.fetch("community-local-month-message-1"))
+    .then((message) => {
+      assert.match(message.payload.embeds[0].description, /Oct 16/);
+      assert.doesNotMatch(message.payload.embeds[0].description, /Oct 17/);
+      assert.equal(store.getEvent(guildId, id).event_at, eventAt);
+    });
+});
+
 test("Interested state uses Discord Scheduled Event subscriber capabilities", () => {
   const support = interestedStateSupport();
   assert.equal(support.supported, true);
