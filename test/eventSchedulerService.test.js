@@ -514,6 +514,21 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
   return interaction;
 }
 
+async function nativeAdoptionModal({ add, nativeId, scope, guildId, guild, client, userId = "admin", timezone = "America/New_York" }) {
+  const scopeMenu = add.responses.at(-1).payload.components[0].toJSON().components[0];
+  if (scopeMenu.custom_id.includes(":nativeaddtimezone:")) {
+    const chooseTimezone = fakeInteraction({ customId: scopeMenu.custom_id, kind: "select", guildId, guild, client, userId, values: [timezone] });
+    await handleEventSchedulerInteraction(chooseTimezone);
+    return chooseTimezone.responses.at(-1).modal;
+  }
+  const chooseScope = fakeInteraction({ customId: scopeMenu.custom_id, kind: "select", guildId, guild, client, userId, values: [scope] });
+  await handleEventSchedulerInteraction(chooseScope);
+  const timezoneMenu = chooseScope.responses.at(-1).payload.components[0].toJSON().components[0];
+  const chooseTimezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, userId, values: [timezone] });
+  await handleEventSchedulerInteraction(chooseTimezone);
+  return chooseTimezone.responses.at(-1).modal;
+}
+
 test("timed calendar dates preserve the entered year through storage and rendering", () => {
   const guildId = `calendar-year-${Date.now()}`;
   const eventAt = localToUtc("2026-10-01", "07:00", "America/New_York");
@@ -1628,8 +1643,8 @@ test("Find Discord Event routes Add to Calendar into canonical announcements wit
   await handleEventSchedulerInteraction(choose);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  assert.equal(add.responses[0].type, "modal");
-  const submit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  const addModal = await nativeAdoptionModal({ add, nativeId: native.id, scope: "this", guildId, guild, client });
+  const submit = fakeInteraction({ customId: addModal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
   await handleEventSchedulerInteraction(submit);
 
   const linked = store.getEventByDiscordId(guildId, native.id);
@@ -1858,8 +1873,8 @@ test("Review Event Add to Calendar and Ignore remain private and durable", async
   assert.deepEqual(reviewLabels, ["Add to Calendar", "Ignore"]);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  assert.equal(add.responses[0].type, "modal");
-  const addSubmit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "From Discord" } });
+  const addModal = await nativeAdoptionModal({ add, nativeId: native.id, scope: "this", guildId, guild, client });
+  const addSubmit = fakeInteraction({ customId: addModal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "From Discord" } });
   await handleEventSchedulerInteraction(addSubmit);
   assert.match(addSubmit.responses[0].payload.content, /Would you like to schedule announcements/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "added");
@@ -1900,7 +1915,8 @@ test("reconciliation Add to Calendar enters the canonical announcement flow", as
   await handleEventSchedulerInteraction(review);
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const addSubmit = fakeInteraction({ customId: add.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Watch together" } });
+  const addModal = await nativeAdoptionModal({ add, nativeId: native.id, scope: "this", guildId, guild, client });
+  const addSubmit = fakeInteraction({ customId: addModal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Watch together" } });
   await handleEventSchedulerInteraction(addSubmit);
   assert.match(addSubmit.responses[0].payload.content, /Would you like to schedule announcements/);
 
@@ -1987,11 +2003,81 @@ test("multiple Review Event matches open the private candidate selector only aft
 
   const selected = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [selector.options[0].value] });
   await handleEventSchedulerInteraction(selected);
-  assert.equal(selected.responses[0].type, "modal");
-  const selectedSubmit = fakeInteraction({ customId: selected.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  assert.equal(selected.responses[0].type, "update");
+  const timezoneMenu = selected.responses[0].payload.components[0].toJSON().components[0];
+  const chooseTimezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(chooseTimezone);
+  assert.equal(chooseTimezone.responses[0].type, "modal");
+  const selectedSubmit = fakeInteraction({ customId: chooseTimezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
   await handleEventSchedulerInteraction(selectedSubmit);
   assert.match(selectedSubmit.responses[0].payload.content, /Linked/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "linked");
+});
+
+test("linking an existing one-off Harmony event requires timezone confirmation", async () => {
+  const guildId = `native-link-timezone-${Date.now()}`;
+  const native = {
+    id: "native-link-timezone",
+    name: "One-off native event",
+    description: "Native description",
+    scheduledStartAt: new Date("2099-10-18T23:00:00Z"),
+  };
+  const linkedId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar",
+    title: native.name,
+    eventDate: "2099-10-18",
+    eventAt: native.scheduledStartAt.toISOString(),
+    eventTimezone: "America/New_York",
+    timezone: "America/New_York",
+    calendarType: "community",
+    category: "other",
+    createdBy: "admin",
+  });
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const selected = fakeInteraction({
+    customId: `harmony-manager:community:nativelinkselect:${native.id}`,
+    kind: "select",
+    guildId,
+    guild,
+    client,
+    values: [String(linkedId)],
+  });
+  await handleEventSchedulerInteraction(selected);
+  assert.equal(selected.responses[0].type, "update");
+  const timezoneMenu = selected.responses[0].payload.components[0].toJSON().components[0];
+  assert.match(timezoneMenu.custom_id, new RegExp(`nativelinktimezone:${linkedId}:${native.id}:this$`));
+  assert.equal(timezoneMenu.options.find((option) => option.default).value, "America/New_York");
+
+  const chooseTimezone = fakeInteraction({
+    customId: timezoneMenu.custom_id,
+    kind: "select",
+    guildId,
+    guild,
+    client,
+    values: ["America/Mexico_City"],
+  });
+  await handleEventSchedulerInteraction(chooseTimezone);
+  const descriptionModal = chooseTimezone.responses[0].modal.toJSON();
+  assert.match(descriptionModal.custom_id, /nativelinkmodal/);
+
+  const submit = fakeInteraction({
+    customId: descriptionModal.custom_id,
+    kind: "modal",
+    guildId,
+    guild,
+    client,
+    fields: { description: "Harmony-only details" },
+  });
+  await handleEventSchedulerInteraction(submit);
+  const saved = store.getEvent(guildId, linkedId);
+  assert.equal(saved.event_timezone, "America/Mexico_City");
+  assert.equal(saved.timezone, "America/Mexico_City");
+  assert.equal(saved.event_at, native.scheduledStartAt.toISOString());
+  assert.equal(saved.description, "Harmony-only details");
+  assert.equal(native.description, "Native description");
 });
 
 test("Discord-first reconciliation uses only the configured channel and fails closed when unset", async () => {
@@ -2060,8 +2146,8 @@ test("Add to Calendar links the existing Discord event without creating another 
   store.setManagerChannel(guildId, "control");
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   await handleEventSchedulerInteraction(interaction);
-  assert.equal(interaction.responses[0].type, "modal");
-  const submit = fakeInteraction({ customId: interaction.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
+  const modal = await nativeAdoptionModal({ add: interaction, nativeId: native.id, scope: "this", guildId, guild, client });
+  const submit = fakeInteraction({ customId: modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
   await handleEventSchedulerInteraction(submit);
   const linked = store.getEventByDiscordId(guildId, native.id);
   assert.ok(linked);
@@ -2085,7 +2171,7 @@ test("Discord adoption starts with a blank Harmony-only description without edit
   store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
   const add = fakeInteraction({ customId: `harmony-manager:community:nativeadd:${native.id}`, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(add);
-  const modal = add.responses[0].modal.toJSON();
+  const modal = (await nativeAdoptionModal({ add, nativeId: native.id, scope: "this", guildId, guild, client })).toJSON();
   assert.equal(modal.title, "Harmony calendar description");
   assert.equal(modal.components[0].components[0].value, undefined);
   const submit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: { description: "Episodes 5 & 6" } });
@@ -2111,7 +2197,10 @@ test("recurring Discord adoption first offers only this event or entire series",
   assert.deepEqual(menu.options.map((option) => option.label), ["This event", "Entire series"]);
   const choose = fakeInteraction({ customId: menu.custom_id, kind: "select", guildId, guild, client, values: ["this"] });
   await handleEventSchedulerInteraction(choose);
-  const modal = choose.responses[0].modal.toJSON();
+  const timezoneMenu = choose.responses[0].payload.components[0].toJSON().components[0];
+  const timezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const modal = timezone.responses[0].modal.toJSON();
   assert.match(modal.custom_id, /nativeaddsinglemodal/);
   assert.equal(modal.components[0].components[0].value, undefined);
   const submit = fakeInteraction({ customId: modal.custom_id, kind: "modal", guildId, guild, client, fields: { description: "Only this Friday" } });
@@ -2140,7 +2229,10 @@ test("recurring Discord adoption uses separate paged Harmony descriptions for ea
   const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const cutoffModal = scope.responses[0].modal.toJSON();
+  const timezoneMenu = scope.responses[0].payload.components[0].toJSON().components[0];
+  const timezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const cutoffModal = timezone.responses[0].modal.toJSON();
   assert.match(cutoffModal.custom_id, /nativeaddcutoff/);
   const cutoff = fakeInteraction({ customId: cutoffModal.custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2100-01-31" } });
   await handleEventSchedulerInteraction(cutoff);
@@ -2232,7 +2324,10 @@ test("recurring import description pages stop at the selected Harmony cutoff", a
   await handleEventSchedulerInteraction(add);
   const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2099-12-11" } });
+  const timezoneMenu = scope.responses[0].payload.components[0].toJSON().components[0];
+  const timezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const cutoff = fakeInteraction({ customId: timezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2099-12-11" } });
   await handleEventSchedulerInteraction(cutoff);
   const continueId = cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const next = fakeInteraction({ customId: continueId, kind: "button", guildId, guild, client });
@@ -2259,7 +2354,10 @@ test("native recurring cutoff uses the local calendar date across the DST bounda
   await handleEventSchedulerInteraction(add);
   const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-11-06" } });
+  const timezoneMenu = scope.responses[0].payload.components[0].toJSON().components[0];
+  const timezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const cutoff = fakeInteraction({ customId: timezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-11-06" } });
   await handleEventSchedulerInteraction(cutoff);
   const start = fakeInteraction({ customId: cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(start);
@@ -2316,7 +2414,9 @@ test("recurring native import hands the complete bounded series to announcements
   await handleEventSchedulerInteraction(add);
   const scope = fakeInteraction({ customId: add.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "select", guildId, guild, client, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
+  const timezone = fakeInteraction({ customId: scope.responses[0].payload.components[0].toJSON().components[0].custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const cutoff = fakeInteraction({ customId: timezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { "last-date": "2026-10-31" } });
   await handleEventSchedulerInteraction(cutoff);
   const start = fakeInteraction({ customId: cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id, kind: "button", guildId, guild, client });
   await handleEventSchedulerInteraction(start);
@@ -2744,7 +2844,9 @@ test("native recurring cutoff modal uses the approved series-end wording", async
   const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
   const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, values: ["series"] });
   await handleEventSchedulerInteraction(scope);
-  const modal = scope.responses[0].modal.toJSON();
+  const timezone = fakeInteraction({ customId: scope.responses[0].payload.components[0].toJSON().components[0].custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(timezone);
+  const modal = timezone.responses[0].modal.toJSON();
   assert.equal(modal.title, "When should this series end?");
   assert.equal(modal.components[0].components[0].label, "Last event date (YYYY-MM-DD)");
 });
@@ -2773,7 +2875,9 @@ test("independent native recurring intake workflows keep their own date timeline
     const scopeId = add.responses[0].payload.components[0].components[0].toJSON().custom_id;
     const scope = fakeInteraction({ customId: scopeId, kind: "select", guildId, guild, client, userId, values: ["series"] });
     await handleEventSchedulerInteraction(scope);
-    const cutoff = fakeInteraction({ customId: scope.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, userId, fields: { "last-date": "2026-10-31" } });
+    const timezone = fakeInteraction({ customId: scope.responses[0].payload.components[0].toJSON().components[0].custom_id, kind: "select", guildId, guild, client, userId, values: ["America/New_York"] });
+    await handleEventSchedulerInteraction(timezone);
+    const cutoff = fakeInteraction({ customId: timezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, userId, fields: { "last-date": "2026-10-31" } });
     await handleEventSchedulerInteraction(cutoff);
     return cutoff.responses[0].payload.components[0].components[0].toJSON().custom_id;
   }
@@ -2925,5 +3029,45 @@ test("occurrence override refreshes only pending reminder messages", () => {
   assert.equal(sentRow.message, "old sent");
   assert.equal(sentRow.status, "sent");
   assert.equal(rows.length, 2);
+});
+
+test("adopted native presentation timezone persists across recurrence sync and series edits", async () => {
+  const guildId = `native-timezone-persistence-${Date.now()}`;
+  const native = {
+    id: "native-mexico-series", name: "Mexico watch party",
+    scheduledStartAt: new Date("2026-10-17T01:00:00.000Z"),
+    scheduledEndAt: new Date("2026-10-17T02:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2026-08-22T01:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 3 },
+  };
+  const interaction = { guildId, user: { id: "admin" }, guild: { scheduledEvents: { fetch: async () => native } } };
+  const added = await addNativeEventToCalendar(interaction, native.id, "", { 0: "One", 1: "Two" }, "2026-10-24", true, "Default", "America/Mexico_City");
+  let rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.ok(rows.length >= 2);
+  assert.ok(rows.every((row) => row.event_timezone === "America/Mexico_City" && row.timezone === "America/Mexico_City"));
+  assert.equal(rows[0].event_at, "2026-10-17T01:00:00.000Z");
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.ok(rows.every((row) => row.event_timezone === "America/Mexico_City"));
+  const before = Object.fromEntries(rows.map((row) => [row.id, row.event_at]));
+  const changed = applyRecurringChanges(guildId, store.getEvent(guildId, added.id), "series", {
+    event_timezone: "America/New_York", timezone: "America/New_York", event_at: "2099-01-01T00:00:00.000Z",
+  });
+  assert.ok(changed.length >= 2);
+  rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.ok(rows.every((row) => row.event_timezone === "America/New_York"));
+  for (const row of rows) assert.equal(row.event_at, before[row.id]);
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, added.id));
+  rows = store.listSeriesEvents(guildId, added.recurrence_series_id);
+  assert.ok(rows.every((row) => row.event_timezone === "America/New_York"));
+});
+
+test("one-off adopted native event persists the selected presentation timezone without changing its instant", async () => {
+  const guildId = `native-timezone-oneoff-${Date.now()}`;
+  const native = { id: "native-mexico-oneoff", name: "One-off", scheduledStartAt: new Date("2026-10-17T01:00:00.000Z") };
+  const interaction = { guildId, user: { id: "admin" }, guild: { scheduledEvents: { fetch: async () => native } } };
+  const added = await addNativeEventToCalendar(interaction, native.id, "Details", null, null, false, null, "America/Mexico_City");
+  assert.equal(added.event_at, "2026-10-17T01:00:00.000Z");
+  assert.equal(added.event_timezone, "America/Mexico_City");
+  assert.equal(added.timezone, "America/Mexico_City");
 });
 
