@@ -949,7 +949,7 @@ function createYoutifulOccurrences(guildId, calendarChannelId, draft, createdBy)
 }
 
 async function refreshRecurringMonths(client, guildId, events) {
-  const months = [...new Set(events.map((event) => monthKeyFromDate(event.event_date)).filter(Boolean))];
+  const months = [...new Set(events.map(eventPresentationMonth).filter(Boolean))];
   for (const month of months) await refreshPublishedCalendar(client, guildId, "community", month);
 }
 
@@ -1239,6 +1239,16 @@ function monthKeyFromDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 7);
 }
 
+function eventPresentationDate(event) {
+  if (event?.all_day || !event?.event_at) return event?.event_date || null;
+  return calendarDateInTimezone(event.event_at, calendarPresentationTimezone(event));
+}
+
+function eventPresentationMonth(event) {
+  const date = eventPresentationDate(event);
+  return date ? date.slice(0, 7) : null;
+}
+
 const CALENDAR_COLORS = { stray_kids: 0xE53935, community: 0x5865F2 };
 const EMBED_DESCRIPTION_LIMIT = 3900;
 
@@ -1254,7 +1264,7 @@ function allDayDateHeading(date) {
 }
 
 function eventCalendarBlock(event, calendarType) {
-  const date = event.event_date || (event.event_at || "").slice(0, 10);
+  const date = eventPresentationDate(event);
   const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
   const allDay = !timestamp;
   const dateLine = compactCalendarDate(date);
@@ -1291,7 +1301,7 @@ function youtifulBirthdayEvents(guildId, monthKey) {
 
 function youtifulEventBlock(event) {
   const icon = YOUTIFUL_EVENT_TYPE_ICONS[event.calendar_event_type] || YOUTIFUL_EVENT_TYPE_ICONS.other;
-  const date = event.event_date || (event.event_at || "").slice(0, 10);
+  const date = eventPresentationDate(event);
   const timestamp = !event.all_day && event.event_at ? Math.floor(new Date(event.event_at).getTime() / 1000) : null;
   const datePart = compactCalendarDate(date);
   const timePart = timestamp ? ` • <t:${timestamp}:t>` : " • All Day";
@@ -1305,6 +1315,15 @@ function youtifulEventBlock(event) {
 function compactCalendarDate(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return "Date pending";
   return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(new Date(`${date}T00:00:00Z`));
+}
+
+function calendarUpdatedLabel(now = Date.now()) {
+  const value = new Intl.DateTimeFormat("en-US", {
+    timeZone: DEFAULT_YOUTIFUL_TIMEZONE,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(now));
+  return `Last updated ${value}`;
 }
 
 function splitCalendarDescription(blocks, header) {
@@ -1338,7 +1357,7 @@ function buildCalendarMessages(calendarType, monthKey, events, now = Date.now())
   const header = "Monthly Schedule";
   const blocks = events.length ? events.map((event) => eventCalendarBlock(event, calendarType)) : ["No events scheduled."];
   const descriptions = splitCalendarDescription(blocks, header);
-  const footer = `Times display in your local timezone • Last updated <t:${Math.floor(now / 1000)}:R>`;
+  const footer = `Times display in your local timezone • ${calendarUpdatedLabel(now)}`;
   return descriptions.map((description) => ({
     embeds: [new EmbedBuilder()
       .setColor(CALENDAR_COLORS[calendarType] || CALENDAR_COLORS.community)
@@ -1354,7 +1373,7 @@ function buildYoutifulCalendarMessages(monthKey, events, now = Date.now()) {
   const header = "Monthly Schedule";
   const blocks = events.length ? events.map(youtifulEventBlock) : ["No events scheduled."];
   const descriptions = splitCalendarDescription(blocks, header);
-  const footer = `Times display in your local timezone • Last updated <t:${Math.floor(now / 1000)}:R>`;
+  const footer = `Times display in your local timezone • ${calendarUpdatedLabel(now)}`;
   return descriptions.map((description) => ({
     embeds: [new EmbedBuilder().setColor(CALENDAR_COLORS.community)
       .setTitle(`📅 YOUTIFUL STAYS • ${calendarMonthLabel(monthKey)}`)
@@ -1372,7 +1391,19 @@ async function publishMonthlyCalendar(client, guildId, calendarType, monthKey, {
   const [year, month] = monthKey.split("-").map(Number);
   const start = `${monthKey}-01T00:00:00.000Z`;
   const next = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
-  let events = store.listCalendarEvents(guildId, calendarType, start, `${next}-01T00:00:00.000Z`);
+  // Query a small UTC safety window, then apply the authoritative local
+  // presentation date below. This keeps events near month boundaries in the
+  // correct publication month without changing their stored event_at.
+  const queryStart = new Date(`${start}`).getTime() - 2 * 24 * 60 * 60 * 1000;
+  const queryEnd = new Date(`${next}-01T00:00:00.000Z`).getTime() + 2 * 24 * 60 * 60 * 1000;
+  let events = store.listCalendarEvents(
+    guildId,
+    calendarType,
+    new Date(queryStart).toISOString(),
+    new Date(queryEnd).toISOString(),
+  ).filter((event) => eventPresentationMonth(event) === monthKey);
+  events.sort((a, b) => String(eventPresentationDate(a) || a.event_at || "")
+    .localeCompare(String(eventPresentationDate(b) || b.event_at || "")) || Number(a.id || 0) - Number(b.id || 0));
   if (calendarType === "community") {
     events = [...events, ...youtifulBirthdayEvents(guildId, monthKey)].sort((a, b) => String(a.event_date || a.event_at).localeCompare(String(b.event_date || b.event_at)));
   }
