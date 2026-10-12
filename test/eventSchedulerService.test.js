@@ -2003,11 +2003,81 @@ test("multiple Review Event matches open the private candidate selector only aft
 
   const selected = fakeInteraction({ customId: selector.custom_id, kind: "select", guildId, guild, client, values: [selector.options[0].value] });
   await handleEventSchedulerInteraction(selected);
-  assert.equal(selected.responses[0].type, "modal");
-  const selectedSubmit = fakeInteraction({ customId: selected.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
+  assert.equal(selected.responses[0].type, "update");
+  const timezoneMenu = selected.responses[0].payload.components[0].toJSON().components[0];
+  const chooseTimezone = fakeInteraction({ customId: timezoneMenu.custom_id, kind: "select", guildId, guild, client, values: ["America/New_York"] });
+  await handleEventSchedulerInteraction(chooseTimezone);
+  assert.equal(chooseTimezone.responses[0].type, "modal");
+  const selectedSubmit = fakeInteraction({ customId: chooseTimezone.responses[0].modal.toJSON().custom_id, kind: "modal", guildId, guild, client, fields: { description: "" } });
   await handleEventSchedulerInteraction(selectedSubmit);
   assert.match(selectedSubmit.responses[0].payload.content, /Linked/);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id).status, "linked");
+});
+
+test("linking an existing one-off Harmony event requires timezone confirmation", async () => {
+  const guildId = `native-link-timezone-${Date.now()}`;
+  const native = {
+    id: "native-link-timezone",
+    name: "One-off native event",
+    description: "Native description",
+    scheduledStartAt: new Date("2099-10-18T23:00:00Z"),
+  };
+  const linkedId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: "calendar",
+    title: native.name,
+    eventDate: "2099-10-18",
+    eventAt: native.scheduledStartAt.toISOString(),
+    eventTimezone: "America/New_York",
+    timezone: "America/New_York",
+    calendarType: "community",
+    category: "other",
+    createdBy: "admin",
+  });
+  const guild = { scheduledEvents: { fetch: async () => native } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.saveDiscordEventReconciliation(guildId, native.id, "notice", "open");
+  const selected = fakeInteraction({
+    customId: `harmony-manager:community:nativelinkselect:${native.id}`,
+    kind: "select",
+    guildId,
+    guild,
+    client,
+    values: [String(linkedId)],
+  });
+  await handleEventSchedulerInteraction(selected);
+  assert.equal(selected.responses[0].type, "update");
+  const timezoneMenu = selected.responses[0].payload.components[0].toJSON().components[0];
+  assert.match(timezoneMenu.custom_id, new RegExp(`nativelinktimezone:${linkedId}:${native.id}:this$`));
+  assert.equal(timezoneMenu.options.find((option) => option.default).value, "America/New_York");
+
+  const chooseTimezone = fakeInteraction({
+    customId: timezoneMenu.custom_id,
+    kind: "select",
+    guildId,
+    guild,
+    client,
+    values: ["America/Mexico_City"],
+  });
+  await handleEventSchedulerInteraction(chooseTimezone);
+  const descriptionModal = chooseTimezone.responses[0].modal.toJSON();
+  assert.match(descriptionModal.custom_id, /nativelinkmodal/);
+
+  const submit = fakeInteraction({
+    customId: descriptionModal.custom_id,
+    kind: "modal",
+    guildId,
+    guild,
+    client,
+    fields: { description: "Harmony-only details" },
+  });
+  await handleEventSchedulerInteraction(submit);
+  const saved = store.getEvent(guildId, linkedId);
+  assert.equal(saved.event_timezone, "America/Mexico_City");
+  assert.equal(saved.timezone, "America/Mexico_City");
+  assert.equal(saved.event_at, native.scheduledStartAt.toISOString());
+  assert.equal(saved.description, "Harmony-only details");
+  assert.equal(native.description, "Native description");
 });
 
 test("Discord-first reconciliation uses only the configured channel and fails closed when unset", async () => {
