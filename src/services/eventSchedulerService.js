@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 54974)
-Total output lines: 3767
-
 const {
   PermissionFlagsBits,
   ActionRowBuilder,
@@ -1978,7 +1975,317 @@ async function staleReconciliationInteraction(interaction, mode = "reply") {
   const payload = { content: "This Discord Scheduled Event has already been reviewed.", components: [], flags: 64 };
   if (mode === "update") {
     delete payload.flags;
-    awai…4974 tokens truncated…r admins can use the Schedule Manager.", flags: 64 });
+    await interaction.update(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+async function handleGuildScheduledEventCreate(client, event) {
+  if (!event?.guildId) {
+    console.warn("[scheduler-reconciliation] create-ignored reason=missing-guild-or-event");
+    return;
+  }
+  const key = `${event.guildId}:${event.id}`;
+  if (reconciliationInProgress.has(key)) {
+    console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=reconciliation-in-progress`);
+    return;
+  }
+  reconciliationInProgress.add(key);
+  try {
+    console.log(`[scheduler-reconciliation] create-received guild=${event.guildId} event=${event.id}`);
+    if (store.getEventByDiscordId(event.guildId, event.id)) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=linked`);
+      return;
+    }
+    if (pendingNativeCreates.has(nativeCreateKey(event.guildId, event.name, event.scheduledStartAt))) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=pending-harmony-create`);
+      return;
+    }
+    if (store.getDiscordEventReconciliation(event.guildId, event.id)) {
+      console.log(`[scheduler-reconciliation] create-ignored guild=${event.guildId} event=${event.id} reason=already-reconciled`);
+      return;
+    }
+    const candidates = store.listUnlinkedCommunityEvents(event.guildId).filter((item) => item.title === event.name);
+    console.log(`[scheduler-reconciliation] payload-built guild=${event.guildId} event=${event.id} candidates=${candidates.length}`);
+    const channel = await managerControlChannel(client, event.guildId);
+    if (!channel?.isTextBased()) {
+      console.warn(`[scheduler-reconciliation] create-stopped guild=${event.guildId} event=${event.id} reason=channel-unavailable`);
+      return;
+    }
+    console.log(`[scheduler-reconciliation] send-attempt guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}`);
+    let sent;
+    try {
+      sent = await channel.send(reconciliationPayload(event));
+    } catch (error) {
+      console.error(`[scheduler-reconciliation] send-failed guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)}:`, error);
+      throw error;
+    }
+    store.saveDiscordEventReconciliation(event.guildId, event.id, sent?.id || null, "open");
+    console.log(`[scheduler-reconciliation] send-succeeded guild=${event.guildId} event=${event.id} channel=${store.getReconciliationChannel(event.guildId)} message=${sent?.id || "unknown"}`);
+  } finally {
+    reconciliationInProgress.delete(key);
+  }
+}
+
+/**
+ * Register native Discord Scheduled Event listeners in one place. Keeping the
+ * wiring here makes the production path and the integration test path use the
+ * same discord.js event constants and handler signatures.
+ */
+function registerScheduledEventListeners(client) {
+  console.log(`[scheduler-reconciliation] listeners-registered create=${Events.GuildScheduledEventCreate} update=${Events.GuildScheduledEventUpdate} delete=${Events.GuildScheduledEventDelete} intents=${client.options?.intents?.bitfield ?? "unknown"}`);
+  client.on(Events.GuildScheduledEventCreate, (event) => {
+    return handleGuildScheduledEventCreate(client, event).catch((error) =>
+      console.error(`Scheduled event create sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  client.on(Events.GuildScheduledEventUpdate, (oldEvent, event) => {
+    return handleGuildScheduledEventUpdate(client, oldEvent, event).catch((error) =>
+      console.error(`Scheduled event update sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  client.on(Events.GuildScheduledEventDelete, (event) => {
+    return handleGuildScheduledEventDelete(client, event).catch((error) =>
+      console.error(`Scheduled event delete sync failed for ${event?.id || "unknown"}:`, error)
+    );
+  });
+  return client;
+}
+
+async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
+  if (!event?.guildId) return;
+  const linked = store.getEventByDiscordId(event.guildId, event.id);
+  if (!linked) return;
+  if (!event.scheduledStartAt) return;
+  const existingRule = parseNativeRecurrence(linked);
+  const effectiveAnchorAt = existingRule?.anchorAt || linked.event_at || event.scheduledStartAt;
+  const nextNativeRule = nativeRecurrencePayload(event, effectiveAnchorAt);
+  const recurrenceChanged = Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule !== linked.recurrence_rule;
+  if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime() && !recurrenceChanged) return;
+  const timezone = linked.event_timezone || linked.timezone;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
+  const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const isNativeSeriesAnchor = Boolean(linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE);
+  const changes = {
+    title: event.name,
+    // A recurring native event's scheduledStartAt advances to the selected
+    // occurrence. Keep Harmony's adopted anchor stable across reconciliation.
+    event_at: isNativeSeriesAnchor ? linked.event_at : event.scheduledStartAt.toISOString(),
+    event_end_at: isNativeSeriesAnchor ? linked.event_end_at : event.scheduledEndAt?.toISOString() || null,
+    event_date: isNativeSeriesAnchor ? linked.event_date : `${localDate.year}-${localDate.month}-${localDate.day}`,
+  };
+  if (Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) changes.recurrence_rule = nextNativeRule;
+  const updated = store.updateEvent(event.guildId, linked.id, changes);
+  if (updated?.recurrence_series_id && Number(updated.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule) await syncDiscordRecurringSeries(event.guildId, updated).catch((error) => console.error("Discord recurring series update failed:", error));
+  await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
+}
+
+async function handleGuildScheduledEventDelete(client, event) {
+  if (!event?.guildId) return;
+  const linked = store.getEventByDiscordId(event.guildId, event.id);
+  if (!linked) return;
+  const harmonyInitiated = consumePendingNativeDelete(event.guildId, event.id);
+  store.updateEvent(event.guildId, linked.id, { discord_event_id: null });
+  if (harmonyInitiated) return;
+  const channel = await managerControlChannel(client, event.guildId);
+  if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${linked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
+}
+
+function persistPresentationTimezone(guildId, seriesId, timezone) {
+  if (!validTimezone(timezone)) return;
+  const events = seriesId ? store.listSeriesEvents(guildId, seriesId) : [];
+  for (const event of events) store.updateEvent(guildId, event.id, { event_timezone: timezone, timezone });
+}
+
+async function adoptNativeIntoExistingEvent(interaction, nativeEvent, existing, description, descriptions = null, cutoffDate = null, adoptSeries = true, genericDescription = null, presentationTimezone = null) {
+  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt) : null;
+  const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
+  const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
+  let target = existing;
+  // A title/time match can be a projected occurrence. Native identity belongs
+  // on the series anchor, never on a projected row, so adoption must reuse the
+  // existing series instead of creating a second anchor/series.
+  if (recurrenceRule && existing.recurrence_series_id) {
+    target = store.getSeriesAnchor(interaction.guildId, existing.recurrence_series_id) || existing;
+  }
+  const linked = store.getEventByDiscordId(interaction.guildId, nativeEvent.id);
+  if (linked) return linked;
+  const timezone = validTimezone(presentationTimezone)
+    ? presentationTimezone
+    : (calendarPresentationTimezone(target) || DEFAULT_YOUTIFUL_TIMEZONE);
+  const updated = store.updateEvent(interaction.guildId, target.id, {
+    discord_event_id: nativeEvent.id,
+    discord_event_origin: "adopted",
+    description: description !== undefined ? (description.trim() || null) : null,
+    ...(hasSeriesDefault ? { recurrence_default_description: normalizedGenericDescription || "" } : {}),
+    ...(recurrenceRule && descriptions ? { recurrence_exception: 1 } : {}),
+    ...(recurrenceRule ? { recurrence_end_date: cutoffDate || null } : {}),
+    event_timezone: timezone,
+    timezone,
+  });
+  if (!updated) throw new Error("That Harmony calendar event is no longer active.");
+  if (recurrenceRule) {
+    const adopted = await attachNativeRecurrence(interaction, nativeEvent, store.getEvent(interaction.guildId, target.id), cutoffDate);
+    persistPresentationTimezone(interaction.guildId, adopted.recurrence_series_id, timezone);
+    applyNativeOccurrenceDescriptions(interaction.guildId, adopted, descriptions, normalizedGenericDescription);
+    return store.getEvent(interaction.guildId, adopted.id);
+  }
+  return store.getEvent(interaction.guildId, target.id);
+}
+
+function applyNativeOccurrenceDescriptions(guildId, anchor, descriptions, genericDescription = null) {
+  if (!anchor?.recurrence_series_id || !descriptions) return;
+  const normalizedGenericDescription = String(genericDescription || "").trim() || null;
+  for (const event of store.listSeriesEvents(guildId, anchor.recurrence_series_id)) {
+    const index = String(event.recurrence_index);
+    if (!Object.prototype.hasOwnProperty.call(descriptions, index) && !normalizedGenericDescription) continue;
+    const individual = Object.prototype.hasOwnProperty.call(descriptions, index) ? String(descriptions[index] || "").trim() : "";
+    store.updateEvent(guildId, event.id, { description: individual || normalizedGenericDescription });
+  }
+}
+
+async function addNativeEventToCalendar(interaction, discordEventId, description = undefined, descriptions = null, cutoffDate = null, adoptSeries = true, genericDescription = null, presentationTimezone = null) {
+  const event = await interaction.guild.scheduledEvents.fetch(discordEventId);
+  if (!event?.scheduledStartAt) throw new Error("The Discord event is no longer available.");
+  const alreadyLinked = store.getEventByDiscordId(interaction.guildId, discordEventId);
+  if (alreadyLinked) return alreadyLinked;
+  const eventAt = event.scheduledStartAt.toISOString();
+  const recurrenceRule = adoptSeries ? nativeRecurrencePayload(event, event.scheduledStartAt) : null;
+  const existingOccurrence = recurrenceRule
+    ? store.findAdoptableNativeEventByTitleAndAt(interaction.guildId, event.name, eventAt)
+    : store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
+  if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions, cutoffDate, adoptSeries, genericDescription, presentationTimezone);
+  const eventDate = eventAt.slice(0, 10);
+  const timezone = validTimezone(presentationTimezone) ? presentationTimezone : DEFAULT_YOUTIFUL_TIMEZONE;
+  const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
+  const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
+  const seriesId = recurrenceRule ? randomUUID() : null;
+  const id = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: null, title: event.name, eventAt, eventEndAt: event.scheduledEndAt?.toISOString() || null, eventDate, eventTimezone: timezone, timezone, calendarType: "community", category: "other", calendarEventType: "other", eventChannelId: null, discordEventId, discordEventOrigin: "adopted", description: description !== undefined ? (description.trim() || null) : null, createdBy: interaction.user.id, recurrenceSeriesId: seriesId, recurrenceRule, recurrenceIndex: recurrenceRule ? 0 : null, recurrenceEndDate: recurrenceRule ? cutoffDate : null, recurrenceEndCount: null, recurrenceException: Boolean(recurrenceRule && descriptions), recurrenceNativeEnabled: recurrenceRule ? NATIVE_RECURRENCE_MODE : false, recurrenceDefaultDescription: hasSeriesDefault ? normalizedGenericDescription || "" : null });
+  const saved = store.getEvent(interaction.guildId, id);
+  if (seriesId) {
+    await syncDiscordRecurringSeries(interaction.guildId, saved);
+    persistPresentationTimezone(interaction.guildId, seriesId, timezone);
+    applyNativeOccurrenceDescriptions(interaction.guildId, store.getEvent(interaction.guildId, id), descriptions, normalizedGenericDescription);
+  }
+  return store.getEvent(interaction.guildId, id);
+}
+
+async function attachNativeRecurrence(interaction, nativeEvent, linked, cutoffDate = null) {
+  const recurrenceRule = nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt);
+  if (!recurrenceRule) return linked;
+  const seriesId = linked.recurrence_series_id || randomUUID();
+  const updated = store.updateEvent(interaction.guildId, linked.id, {
+    recurrence_series_id: seriesId,
+    recurrence_rule: recurrenceRule,
+    recurrence_index: 0,
+    recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+    recurrence_end_date: cutoffDate || linked.recurrence_end_date || null,
+  });
+  await syncDiscordRecurringSeries(interaction.guildId, updated);
+  return store.getEvent(interaction.guildId, linked.id);
+}
+
+async function linkNativeEventToHarmony(interaction, nativeId, linkedId, description, descriptions = null, cutoffDate = null, adoptSeries = true, genericDescription = null, presentationTimezone = null) {
+  if (!store.claimDiscordEventReconciliation(interaction.guildId, nativeId)) {
+    throw new Error("That Discord Scheduled Event has already been reviewed.");
+  }
+  const linked = store.getEvent(interaction.guildId, Number(linkedId));
+  if (!linked) throw new Error("That Harmony event is no longer active.");
+  if (store.getEventByDiscordId(interaction.guildId, nativeId)) throw new Error("That native event is already linked.");
+  let native = null;
+  try { native = await interaction.guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+  if (!native) throw new Error("That Discord Scheduled Event is no longer available.");
+  const adopted = await adoptNativeIntoExistingEvent(interaction, native, linked, description, descriptions, cutoffDate, adoptSeries, genericDescription, presentationTimezone);
+  store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "linked");
+  await disableReconciliationNotice(interaction.client, interaction.guildId, nativeId);
+  managerDrafts.set(draftKey(interaction, "community", `announce-${adopted.id}`), { eventIds: announcementEventIds(interaction.guildId, adopted), linked: true, title: adopted.title });
+  return adopted;
+}
+
+async function handleEventSchedulerInteraction(interaction) {
+  const customId = interaction.customId || "";
+  if (customId.startsWith("harmony-reminder:") || customId.startsWith("harmony-reminders:")) return handleReminderInteraction(interaction);
+  if (customId.startsWith("harmony-manager:")) {
+    try {
+      await handleManagerInteraction(interaction);
+    } catch (error) {
+      console.error("Schedule Manager interaction failed:", error);
+      const payload = { content: "Harmony could not complete that scheduler action. Please try again.", flags: 64 };
+      if (!interaction.replied && !interaction.deferred) await interaction.reply(payload).catch((replyError) => console.error("Could not acknowledge Schedule Manager failure:", replyError));
+      else await interaction.followUp(payload).catch((followUpError) => console.error("Could not report Schedule Manager failure:", followUpError));
+    }
+    return true;
+  }
+  if (!customId.startsWith("harmony-schedule:")) return false;
+  const admin = Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
+  );
+  if (!admin) {
+    await interaction.reply({ content: "Only server admins can change scheduled events.", flags: 64 });
+    return true;
+  }
+  const [, action, rawEventId] = customId.split(":");
+  const eventId = Number(rawEventId);
+  const event = store.getEvent(interaction.guildId, eventId);
+  if (!event) {
+    await interaction.reply({ content: "That scheduled event is no longer active.", flags: 64 });
+    return true;
+  }
+  if (action === "add" && interaction.isButton()) {
+    const modal = new ModalBuilder().setCustomId(`harmony-schedule:save:${eventId}`).setTitle("Add an event announcement");
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("date").setLabel("Date (YYYY-MM-DD)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("time").setLabel("Time (24-hour HH:MM)").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(5)),
+      new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("message").setLabel("Announcement message").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1800))
+    );
+    await interaction.showModal(modal);
+    return true;
+  }
+  if (action === "save" && interaction.isModalSubmit()) {
+    const date = interaction.fields.getTextInputValue("date").trim();
+    const time = interaction.fields.getTextInputValue("time").trim();
+    const message = interaction.fields.getTextInputValue("message").trim();
+    const scheduledFor = localToUtc(date, time, event.timezone);
+    if (!scheduledFor || scheduledFor.getTime() <= Date.now()) {
+      await interaction.reply({ content: "That date or time is invalid or has already passed. Use `YYYY-MM-DD` and 24-hour `HH:MM`.", flags: 64 });
+      return true;
+    }
+    const result = store.addAnnouncement(interaction.guildId, eventId, scheduledFor.toISOString(), message);
+    if (!result.ok) {
+      const reason = result.reason === "limit" ? "This event already has the maximum of 12 announcements."
+        : result.reason === "duplicate" ? "That exact announcement is already scheduled."
+          : "That event is no longer active.";
+      await interaction.reply({ content: reason, flags: 64 });
+      return true;
+    }
+    await interaction.reply({ ...renderEventControls(interaction.guildId, eventId), flags: 64 });
+    return true;
+  }
+  if (action === "done" && interaction.isButton()) {
+    await interaction.update({
+      content: `✅ Event #${eventId} is scheduled with ${event.pending_count} announcement${Number(event.pending_count) === 1 ? "" : "s"}. Use \`/harmony-schedule list\` anytime to review it.`,
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  }
+  if (action === "cancel" && interaction.isButton()) {
+    store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
+    await interaction.update({ content: `Cancelled event #${eventId}.`, components: [] });
+    return true;
+  }
+  return false;
+}
+
+async function handleManagerInteraction(interaction) {
+  const admin = Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
+  );
+  if (!admin) {
+    await interaction.reply({ content: "Only server admins can use the Schedule Manager.", flags: 64 });
     return;
   }
   const parts = interaction.customId.split(":");
