@@ -4,7 +4,7 @@ const { ChannelType, GuildScheduledEventEntityType } = require("discord.js");
 const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
-  managerModal, handleEventSchedulerInteraction,
+  managerModal, handleEventSchedulerInteraction, isEventSchedulerInteraction,
   installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS, YOUTIFUL_TIMEZONE_OPTIONS,
   SKZ_TIMEZONE_OPTIONS,
@@ -503,6 +503,8 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
     isButton: () => kind === "button",
     isStringSelectMenu: () => kind === "select",
     isChannelSelectMenu: () => kind === "channel",
+    isRoleSelectMenu: () => kind === "role",
+    isUserSelectMenu: () => kind === "user",
     isModalSubmit: () => kind === "modal",
     reply: async (payload) => { interaction.responses.push({ type: "reply", payload }); },
     deferReply: async (payload) => { interaction.responses.push({ type: "deferReply", payload }); },
@@ -513,6 +515,33 @@ function fakeInteraction({ customId, kind, guildId, userId = "admin", values = [
   };
   return interaction;
 }
+
+test("outer scheduler routing accepts Birthday Manager user and role selectors", async () => {
+  const guildId = `birthday-router-${Date.now()}`;
+  const modes = ["add", "customize", "clear", "preview", "matchmember"];
+  for (const mode of modes) {
+    const interaction = fakeInteraction({
+      customId: `harmony-manager:community:birthdaymember:${mode}`,
+      kind: "user",
+      guildId,
+      values: ["100001"],
+    });
+    assert.equal(isEventSchedulerInteraction(interaction), true);
+    await handleEventSchedulerInteraction(interaction);
+    assert.equal(interaction.responses.length, 1);
+    assert.ok(["update", "modal"].includes(interaction.responses[0].type));
+  }
+
+  const role = fakeInteraction({
+    customId: "harmony-manager:community:birthdaysettingsrole",
+    kind: "role",
+    guildId,
+    values: ["role-100001"],
+  });
+  assert.equal(isEventSchedulerInteraction(role), true);
+  await handleEventSchedulerInteraction(role);
+  assert.equal(role.responses[0].type, "update");
+});
 
 async function nativeAdoptionModal({ add, nativeId, scope, guildId, guild, client, userId = "admin", timezone = "America/New_York" }) {
   const scopeMenu = add.responses.at(-1).payload.components[0].toJSON().components[0];

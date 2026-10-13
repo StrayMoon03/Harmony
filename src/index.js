@@ -64,6 +64,7 @@ const {
 const {
   handleEventSchedulerMessage,
   handleEventSchedulerInteraction,
+  isEventSchedulerInteraction,
   startEventScheduler,
   registerScheduledEventListeners,
   offerEventReminder,
@@ -365,7 +366,7 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isChannelSelectMenu?.() || interaction.isModalSubmit()) {
+  if (isEventSchedulerInteraction(interaction)) {
     try {
       if (await handleEventSchedulerInteraction(interaction)) return;
     } catch (error) {
