@@ -2270,6 +2270,17 @@ async function handleEventSchedulerInteraction(interaction) {
   return false;
 }
 
+function isEventSchedulerInteraction(interaction) {
+  return Boolean(
+    interaction.isButton?.() ||
+    interaction.isStringSelectMenu?.() ||
+    interaction.isChannelSelectMenu?.() ||
+    interaction.isRoleSelectMenu?.() ||
+    interaction.isUserSelectMenu?.() ||
+    interaction.isModalSubmit?.()
+  );
+}
+
 async function handleManagerInteraction(interaction) {
   const admin = Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -3695,6 +3706,7 @@ module.exports = {
   renderEventControls,
   handleEventSchedulerMessage,
   handleEventSchedulerInteraction,
+  isEventSchedulerInteraction,
   processScheduledAnnouncements,
   formatAnnouncementCountdown,
   normalizeCalendarAnnouncementBody,
