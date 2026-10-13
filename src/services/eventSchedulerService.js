@@ -18,6 +18,7 @@ const {
 const store = require("../stores/eventSchedulerStore");
 const { enrichCalendarCandidate } = require("./calendarCandidateEnrichment");
 const birthdayStore = require("../stores/birthdayStore");
+const { handleBirthdayManagerInteraction } = require("./birthdayManagerService");
 const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 const { randomUUID } = require("node:crypto");
 const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences } = require("./recurrenceService");
@@ -117,6 +118,7 @@ function managerPanelComponents(calendarType) {
   if (calendarType === "community") {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
     )];
   }
   return [row];
@@ -2392,6 +2394,15 @@ async function handleManagerInteraction(interaction) {
   const eventId = parts[3];
   if (!calendarType) {
     await interaction.reply({ content: "That calendar manager is no longer available.", flags: 64 });
+    return;
+  }
+  if (calendarType === "community" && [
+    "birthdays", "birthdayhome", "birthdaystatus", "birthdayupcoming", "birthdayadd", "birthdayaddmodal",
+    "birthdaycustomize", "birthdaycustomizemodal", "birthdayclear", "birthdayclearmodal", "birthdaypreview",
+    "birthdaypreviewmodal", "birthdaysettings", "birthdaysettingsmodal", "birthdayweekly", "birthdaymonthly", "birthdaymatchall", "birthdaymatchmember",
+    "birthdayoff", "birthdayoffconfirm",
+  ].includes(action)) {
+    await handleBirthdayManagerInteraction(interaction, action);
     return;
   }
   const settings = store.getCalendarChannels(interaction.guildId) || {};
