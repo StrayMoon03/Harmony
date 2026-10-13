@@ -22,6 +22,7 @@ const { handleBirthdayManagerInteraction } = require("./birthdayManagerService")
 const LOCATION_TIMEZONES = require("../data/locationTimezones.json");
 const { randomUUID } = require("node:crypto");
 const { MAX_RECURRENCE_OCCURRENCES, RECURRENCE_TYPES, normalizeRecurrenceRule, generateRecurringOccurrences, generateDiscordRecurringOccurrences } = require("./recurrenceService");
+const { YOUTIFUL_TIMEZONE_OPTIONS } = require("../data/youtifulTimezones");
 
 const CHECK_INTERVAL_MS = 30 * 1000;
 const NATIVE_DELETE_MARKER_TTL_MS = 5 * 60 * 1000;
@@ -75,18 +76,6 @@ const YOUTIFUL_EVENT_TYPE_LABELS = {
   kdrama: "K-Dramas", chans_room: "Chan's Room", skz_code: "SKZ CODE", chat_only: "Chat Only",
   concert_stream: "Concert Stream", games: "Games", birthday: "Birthday", other: "Other / Custom",
 };
-const YOUTIFUL_TIMEZONE_OPTIONS = [
-  { label: "Eastern Time", value: "America/New_York" },
-  { label: "Central Time", value: "America/Chicago" },
-  { label: "Mountain Time", value: "America/Denver" },
-  { label: "Pacific Time", value: "America/Los_Angeles" },
-  { label: "Alaska Time", value: "America/Anchorage" },
-  { label: "Hawaii Time", value: "Pacific/Honolulu" },
-  { label: "Mexico City Time", value: "America/Mexico_City" },
-  { label: "Korea Time", value: "Asia/Seoul" },
-  { label: "Japan Time", value: "Asia/Tokyo" },
-  { label: "No timezone (all-day)", value: "none" },
-];
 const SKZ_TIMEZONE_OPTIONS = [
   ...YOUTIFUL_TIMEZONE_OPTIONS.slice(0, -1),
   { label: "China / Beijing Time", value: "Asia/Shanghai" },
@@ -2397,9 +2386,10 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   if (calendarType === "community" && [
-    "birthdays", "birthdayhome", "birthdaystatus", "birthdayupcoming", "birthdayadd", "birthdayaddmodal",
-    "birthdaycustomize", "birthdaycustomizemodal", "birthdayclear", "birthdayclearmodal", "birthdaypreview",
-    "birthdaypreviewmodal", "birthdaysettings", "birthdaysettingsmodal", "birthdayweekly", "birthdaymonthly", "birthdaymatchall", "birthdaymatchmember",
+    "birthdays", "birthdayhome", "birthdaystatus", "birthdayupcoming", "birthdayadd", "birthdayaddmodal", "birthdaymember", "birthdaybias",
+    "birthdaycustomize", "birthdaycustomizemodal", "birthdayclear", "birthdaypreview", "birthdaysettings", "birthdaysettingschannel", "birthdaysettingsrole",
+    "birthdaysettingsstep2", "birthdaysettingstimezone", "birthdaysettingstime", "birthdaysettingsday", "birthdaysettingssave", "birthdayweekly", "birthdaymonthly", "birthdaymatchall", "birthdaymatchmember",
+    "birthdaymatchmembermodal",
     "birthdayoff", "birthdayoffconfirm",
   ].includes(action)) {
     await handleBirthdayManagerInteraction(interaction, action);
