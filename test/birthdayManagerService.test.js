@@ -134,6 +134,22 @@ test("Birthday Manager settings use human-friendly channel, role, timezone, time
   assert.equal(saved.weekly_day, 2);
 });
 
+test("Resolve One Welcome Pass routes the selected member to its modal", async () => {
+  const guildId = `birthday-match-one-${Date.now()}`;
+  const open = fakeInteraction("birthdaymatchmember", guildId);
+  await handleBirthdayManagerInteraction(open, "birthdaymatchmember");
+  assert.match(open.responses[0].payload.content, /Choose the Discord member/);
+  const selected = fakeInteraction("birthdaymember", guildId, true, {}, {
+    kind: "user",
+    values: ["100005"],
+    customId: "harmony-manager:community:birthdaymember:matchmember",
+  });
+  await handleBirthdayManagerInteraction(selected, "birthdaymember");
+  assert.ok(selected.modal);
+  assert.equal(selected.modal.data.custom_id, "harmony-manager:community:birthdaymatchmembermodal:100005");
+  assert.equal(selected.modal.data.title, "Connect Welcome Pass birthday");
+});
+
 test("Welcome Pass matching, reminder controls, and confirmed disable remain available", async () => {
   const guildId = `birthday-controls-${Date.now()}`;
   birthdayStore.saveBirthdaySettings({ guildId, channelId: "c", roleId: "r", timezone: "America/New_York", announcementHour: 9, weeklyDay: 0, weeklyEnabled: true, monthlyRecapEnabled: true });

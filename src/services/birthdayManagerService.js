@@ -341,7 +341,14 @@ async function handleBirthdayManagerInteraction(interaction, action) {
   if (action === "birthdaymember" && interaction.isUserSelectMenu?.()) {
     const [, , , mode] = customParts(interaction);
     const memberId = selectedMemberId(interaction);
-    if (!memberId || !["add", "customize", "clear", "preview"].includes(mode)) return true;
+    if (!memberId || !["add", "customize", "clear", "preview", "matchmember"].includes(mode)) return true;
+    if (mode === "matchmember") {
+      saveSession(interaction, { memberId });
+      await interaction.showModal(textModal(`harmony-manager:community:birthdaymatchmembermodal:${memberId}`, "Connect Welcome Pass birthday", [
+        { id: "imported-name", label: "Welcome Pass name or code", required: true, maxLength: 100 },
+      ]));
+      return true;
+    }
     if (mode === "clear" || mode === "preview") {
       const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
       if (!profile) {
@@ -475,17 +482,6 @@ async function handleBirthdayManagerInteraction(interaction, action) {
   if (action === "birthdaymatchmember" && interaction.isButton?.()) {
     await interaction.update(memberPrompt("matchmember", "Choose the Discord member to connect to a Welcome Pass birthday."));
     return true;
-  }
-  if (action === "birthdaymember" && interaction.isUserSelectMenu?.()) {
-    const [, , , mode] = customParts(interaction);
-    if (mode === "matchmember") {
-      const memberId = selectedMemberId(interaction);
-      saveSession(interaction, { memberId });
-      await interaction.showModal(textModal(`harmony-manager:community:birthdaymatchmembermodal:${memberId}`, "Connect Welcome Pass birthday", [
-        { id: "imported-name", label: "Welcome Pass name or code", required: true, maxLength: 100 },
-      ]));
-      return true;
-    }
   }
   if (action === "birthdaymatchmembermodal" && interaction.isModalSubmit?.()) {
     const importedName = normalizeName(interaction.fields.getTextInputValue("imported-name"));
