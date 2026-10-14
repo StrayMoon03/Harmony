@@ -246,11 +246,25 @@ function findCandidateCalendarMatches(guildId, candidate) {
   });
 }
 
-function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
+function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, discoveryKey = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
   const normalizedUrl = normalizeCandidateUrl(sourceUrl);
   if (!normalizedUrl && !discordEventId) throw new Error('A complete http(s) source link is required.');
   const dedupeKey = normalizedUrl ? `url:${normalizedUrl}` : `discord:${discordEventId}`;
   const db = getDb();
+  const now = new Date().toISOString();
+  const updateExistingDiscovery = (existing) => {
+    const changed = Boolean(existing && (existing.title !== (title?.trim() || null) || existing.proposed_event_at !== proposedEventAt || existing.proposed_event_date !== proposedEventDate || existing.proposed_event_timezone !== proposedEventTimezone || existing.source_metadata !== sourceMetadata));
+    if (!existing || !['open', 'processing'].includes(existing.status)) return { candidate: existing, duplicate: true, duplicateReason: 'same-discovery', updated: false, sourceChanged: changed };
+    db.prepare(`UPDATE calendar_candidates SET title = ?, proposed_event_at = ?, proposed_event_date = ?, proposed_event_end_date = ?, proposed_event_timezone = ?, source_url = ?, source_url_normalized = ?, source_metadata = ?, updated_at = ? WHERE guild_id = ? AND id = ?`).run(
+      title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone,
+      sourceUrl?.trim() || null, normalizedUrl, sourceMetadata, now, guildId, existing.id
+    );
+    return { candidate: getCalendarCandidate(guildId, existing.id), duplicate: true, duplicateReason: 'same-discovery', updated: changed, sourceChanged: changed };
+  };
+  if (sourceProvider && discoveryKey) {
+    const existingDiscovery = db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_provider = ? AND discovery_key = ?").get(guildId, sourceProvider, discoveryKey);
+    if (existingDiscovery) return updateExistingDiscovery(existingDiscovery);
+  }
   const existing = normalizedUrl
     ? db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_url_normalized = ?").get(guildId, normalizedUrl)
     : db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId);
@@ -265,15 +279,39 @@ function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt =
     : null;
   if (strong) return { candidate: strong, duplicate: true, duplicateReason: 'same-title-date' };
 
-  const now = new Date().toISOString();
   const result = db.prepare(`
     INSERT INTO calendar_candidates (
       guild_id, title, proposed_event_at, proposed_event_date, proposed_event_end_date, proposed_event_timezone,
-      source_url, source_url_normalized, source_type, source_provider, source_metadata, submitter_id, submitted_note,
+      source_url, source_url_normalized, source_type, source_provider, discovery_key, source_metadata, submitter_id, submitted_note,
       discord_event_id, dedupe_key, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, discoveryKey, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
   return { candidate: getCalendarCandidate(guildId, Number(result.lastInsertRowid)), duplicate: false, duplicateReason: null };
+}
+
+function getCalendarDiscoveryState(guildId, sourceKey) {
+  return getDb().prepare("SELECT * FROM calendar_discovery_state WHERE guild_id = ? AND source_key = ?").get(guildId, sourceKey) || null;
+}
+
+function saveCalendarDiscoveryState(guildId, sourceKey, patch = {}) {
+  const existing = getCalendarDiscoveryState(guildId, sourceKey);
+  const now = new Date().toISOString();
+  const next = {
+    initialized: existing?.initialized ? 1 : 0,
+    lastSuccessAt: existing?.last_success_at || null,
+    lastRunAt: existing?.last_run_at || null,
+    lastSourceHash: existing?.last_source_hash || null,
+    etag: existing?.etag || null,
+    lastModified: existing?.last_modified || null,
+    lastError: existing?.last_error || null,
+    ...patch,
+  };
+  getDb().prepare(`INSERT INTO calendar_discovery_state (guild_id, source_key, initialized, last_success_at, last_run_at, last_source_hash, etag, last_modified, last_error, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, source_key) DO UPDATE SET initialized = excluded.initialized, last_success_at = excluded.last_success_at, last_run_at = excluded.last_run_at, last_source_hash = excluded.last_source_hash, etag = excluded.etag, last_modified = excluded.last_modified, last_error = excluded.last_error, updated_at = excluded.updated_at`).run(
+    guildId, sourceKey, next.initialized ? 1 : 0, next.lastSuccessAt, next.lastRunAt, next.lastSourceHash, next.etag, next.lastModified, next.lastError, now
+  );
+  return getCalendarDiscoveryState(guildId, sourceKey);
 }
 
 function saveCalendarCandidateNotice(guildId, candidateId, noticeMessageId) {
@@ -731,6 +769,8 @@ module.exports = {
   listCalendarCandidates,
   findCandidateCalendarMatches,
   createOrGetCalendarCandidate,
+  getCalendarDiscoveryState,
+  saveCalendarDiscoveryState,
   saveCalendarCandidateNotice,
   claimCalendarCandidate,
   releaseCalendarCandidate,

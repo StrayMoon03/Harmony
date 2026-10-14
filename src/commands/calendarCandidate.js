@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { submitCalendarCandidate } = require("../services/eventSchedulerService");
+const { runDiscovery } = require("../services/calendarDiscoveryService");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-calendar")
@@ -8,9 +9,31 @@ const data = new SlashCommandBuilder()
     .setName("submit")
     .setDescription("Send Harmony a possible event source for admin review")
     .addStringOption((o) => o.setName("link").setDescription("Complete event source link").setRequired(true).setMaxLength(500))
-    .addStringOption((o) => o.setName("note").setDescription("Optional context for the admin reviewer").setMaxLength(500)));
+    .addStringOption((o) => o.setName("note").setDescription("Optional context for the admin reviewer").setMaxLength(500)))
+  .addSubcommand((sub) => sub
+    .setName("discover")
+    .setDescription("Check the official Stray Kids schedule for new candidates"));
 
 async function execute(interaction) {
+  const subcommand = interaction.options.getSubcommand?.() || "submit";
+  if (subcommand === "discover") {
+    const allowed = Boolean(interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageGuild) || interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator));
+    if (!allowed) {
+      await interaction.reply({ content: "Only Harmony calendar administrators can run discovery.", flags: 64 });
+      return;
+    }
+    await interaction.deferReply({ flags: 64 });
+    const result = await runDiscovery(interaction.client, { guildIds: [interaction.guildId] });
+    if (result.locked) {
+      await interaction.editReply("A discovery check is already running. Please try again shortly.");
+      return;
+    }
+    const totals = result.results.reduce((sum, item) => ({
+      fetched: sum.fetched + (item.fetched || 0), newCount: sum.newCount + (item.newCount || 0), updated: sum.updated + (item.updated || 0), duplicate: sum.duplicate + (item.duplicate || 0), skipped: sum.skipped + (item.skipped || 0), failed: sum.failed + (item.ok ? 0 : 1),
+    }), { fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0, failed: 0 });
+    await interaction.editReply(`Official schedule check complete. Fetched ${totals.fetched}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; skipped ${totals.skipped}${totals.failed ? `; failed ${totals.failed}` : ""}. No calendar events were created automatically.`);
+    return;
+  }
   const link = interaction.options.getString("link", true).trim();
   const note = interaction.options.getString("note")?.trim() || null;
   if (!/^https?:\/\/\S+$/i.test(link)) {

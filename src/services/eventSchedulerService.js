@@ -1657,11 +1657,12 @@ function candidateNoticePayload(candidate) {
 
 async function submitCalendarCandidate(client, input) {
   let enriched = {};
-  if (input.sourceUrl) {
+  if (input.sourceUrl && !input.skipEnrichment) {
     const enrichment = await enrichCalendarCandidate(input.sourceUrl);
     enriched = enrichment.metadata || {};
   }
-  const result = store.createOrGetCalendarCandidate({ ...input, ...enriched });
+  const { skipEnrichment, ...candidateInput } = input;
+  const result = store.createOrGetCalendarCandidate({ ...candidateInput, ...enriched });
   if (result.duplicate) {
     if (result.candidate?.status === "open" && !result.candidate.notice_message_id && client) {
       const channel = await managerControlChannel(client, input.guildId);

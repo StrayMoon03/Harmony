@@ -69,6 +69,7 @@ const {
   registerScheduledEventListeners,
   offerEventReminder,
 } = require("./services/eventSchedulerService");
+const { startCalendarDiscovery } = require("./services/calendarDiscoveryService");
 
 const commands = [
   forgetShareCommand,
@@ -161,6 +162,7 @@ client.once("clientReady", async () => {
   startBirthdayScheduler(client);
   startMemberCountScheduler(client);
   startEventScheduler(client);
+  startCalendarDiscovery(client);
 });
 
 client.on("guildCreate", async (guild) => {
