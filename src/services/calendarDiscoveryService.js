@@ -60,6 +60,22 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
     if (state?.etag) conditionalHeaders["if-none-match"] = state.etag;
     if (state?.last_modified) conditionalHeaders["if-modified-since"] = state.last_modified;
     const result = await fetchSourceWithRetry(source, { ...window, fetchImpl, headers: conditionalHeaders });
+    if (result.notModified) {
+      store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, {
+        initialized: 1,
+        lastSuccessAt: new Date().toISOString(),
+        lastError: null,
+      });
+      console.log("Calendar discovery not modified", {
+        sourceKey: source.SOURCE_KEY,
+        runId,
+        guildId,
+        window,
+        fetched: 0,
+        latencyMs: Date.now() - started,
+      });
+      return { ok: true, notModified: true, sourceKey: source.SOURCE_KEY, runId, window, fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0 };
+    }
     fetched = result.records.length;
     for (const record of result.records) {
       const normalized = source.normalizeRecord(record);

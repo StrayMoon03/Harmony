@@ -65,6 +65,41 @@ test("source endpoint uses the official structured contract", async () => {
   assert.equal(requested.options.headers.accept, "application/json");
 });
 
+test("HTTP 304 preserves discovery state and never becomes an empty schedule", async () => {
+  const guildId = `discovery-304-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const before = store.saveCalendarDiscoveryState(guildId, adapter.SOURCE_KEY, {
+    initialized: 1,
+    lastSuccessAt: "2026-10-14T11:00:00.000Z",
+    lastSourceHash: "known-source-hash",
+    etag: '"known-etag"',
+    lastModified: "Wed, 14 Oct 2026 11:00:00 GMT",
+  });
+  const existing = store.createOrGetCalendarCandidate({
+    guildId,
+    title: "Existing official show",
+    proposedEventDate: "2026-10-20",
+    sourceUrl: "https://straykids.jype.com/schedule?scheduleId=999",
+    sourceProvider: adapter.SOURCE_PROVIDER,
+    discoveryKey: `${adapter.SOURCE_PROVIDER}:10:999`,
+    sourceType: "automatic_discovery",
+  });
+  const result = await runDiscovery(client, {
+    now: new Date("2026-10-14T12:00:00Z"),
+    fetchImpl: async () => response(null, 304),
+  });
+  const after = store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY);
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[0].notModified, true);
+  assert.equal(store.listCalendarCandidates(guildId).length, 1);
+  assert.equal(store.getCalendarCandidate(guildId, existing.candidate.id).title, "Existing official show");
+  assert.equal(after.last_source_hash, before.last_source_hash);
+  assert.equal(after.etag, before.etag);
+  assert.equal(after.last_modified, before.last_modified);
+  assert.notEqual(after.last_success_at, before.last_success_at);
+});
+
 test("manual discover is admin-only and the command is ephemeral", async () => {
   const options = calendarCandidateCommand.data.toJSON().options;
   assert.ok(options.some((item) => item.name === "discover"));
