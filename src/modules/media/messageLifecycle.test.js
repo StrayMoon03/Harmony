@@ -78,6 +78,13 @@ test("a cutoff timeout is recognized as already reported", () => {
   assert.equal(isHandledMediaTimeout(new Error("download failed"), { timedOut: false }), false);
 });
 
+test("timeout error reports its configured retrieval deadline", () => {
+  assert.equal(
+    new MediaRetrievalTimeoutError(90000).message,
+    "Harmony stopped media retrieval after 90 seconds."
+  );
+});
+
 test("configured custom status emoji replaces the fallback attachment", async () => {
   process.env.HARMONY_WORKING_EMOJI_ID = "123456789012345678";
   const message = fakeMessage();
