@@ -6,6 +6,7 @@ const {
   deleteOriginalAfterSuccess,
 } = require("../modules/media/messageLifecycle");
 const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
+const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 90000;
 const fs = require("node:fs/promises");
 const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -1189,7 +1190,9 @@ async function processMediaMessage(message, lifecycle) {
 }
 
 function mediaLifecycleCutoffMs(content) {
-  return findFacebookLinks(content).length ? FACEBOOK_LIFECYCLE_CUTOFF_MS : undefined;
+  if (findFacebookLinks(content).length) return FACEBOOK_LIFECYCLE_CUTOFF_MS;
+  if (findInstagramLinks(content).length) return INSTAGRAM_LIFECYCLE_CUTOFF_MS;
+  return undefined;
 }
 
 async function handleMediaMessage(message) {

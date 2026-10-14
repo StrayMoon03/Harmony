@@ -11,8 +11,8 @@ const STICKERS = {
 };
 
 class MediaRetrievalTimeoutError extends Error {
-  constructor() {
-    super("Harmony stopped media retrieval after 20 seconds.");
+  constructor(cutoffMs = 20000) {
+    super(`Harmony stopped media retrieval after ${Math.round(cutoffMs / 1000)} seconds.`);
     this.name = "MediaRetrievalTimeoutError";
     this.code = "HARMONY_RETRIEVAL_TIMEOUT";
   }
@@ -72,7 +72,7 @@ async function withMediaLifecycle(message, work, options = {}) {
   const cutoffTimer = setTimeout(() => {
     if (retrievalFinished || timedOut) return;
     timedOut = true;
-    const timeoutError = new MediaRetrievalTimeoutError();
+    const timeoutError = new MediaRetrievalTimeoutError(cutoffMs);
     timeoutNoticePromise = (async () => {
       await removeWorking();
       const sent = await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
@@ -86,7 +86,7 @@ async function withMediaLifecycle(message, work, options = {}) {
 
   const lifecycle = {
     async markRetrieved() {
-      if (timedOut) throw new MediaRetrievalTimeoutError();
+      if (timedOut) throw new MediaRetrievalTimeoutError(cutoffMs);
       retrievalFinished = true;
       clearTimeout(workingTimer);
       clearTimeout(cutoffTimer);
@@ -101,7 +101,7 @@ async function withMediaLifecycle(message, work, options = {}) {
       return true;
     },
     assertCanPublish() {
-      if (timedOut) throw new MediaRetrievalTimeoutError();
+      if (timedOut) throw new MediaRetrievalTimeoutError(cutoffMs);
     },
     get timedOut() { return timedOut; },
   };

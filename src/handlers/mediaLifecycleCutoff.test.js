@@ -9,11 +9,18 @@ test("Facebook shares allow the serialized exact-post browser queue to finish", 
   );
 });
 
-test("non-Facebook media keeps the existing lifecycle cutoff", () => {
+test("Instagram fallback recovery receives the bounded 90-second lifecycle window", () => {
   assert.equal(
     mediaLifecycleCutoffMs("https://www.instagram.com/reel/example/"),
-    undefined
+    90000
   );
+  assert.equal(
+    mediaLifecycleCutoffMs("https://www.instagram.com/p/example/"),
+    90000
+  );
+});
+
+test("other non-Facebook and non-Instagram media keeps the existing lifecycle cutoff", () => {
   assert.equal(
     mediaLifecycleCutoffMs("https://www.threads.com/share/example/"),
     undefined
