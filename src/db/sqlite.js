@@ -429,6 +429,7 @@ function migrate(database) {
       source_url_normalized      TEXT,
       source_type                TEXT NOT NULL DEFAULT 'member_submission',
       source_provider            TEXT,
+      discovery_key              TEXT,
       source_metadata            TEXT,
       submitter_id               TEXT,
       submitted_note             TEXT,
@@ -452,6 +453,20 @@ function migrate(database) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_candidates_discord
       ON calendar_candidates (guild_id, discord_event_id)
       WHERE discord_event_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS calendar_discovery_state (
+      guild_id      TEXT NOT NULL,
+      source_key    TEXT NOT NULL,
+      initialized   INTEGER NOT NULL DEFAULT 0,
+      last_success_at TEXT,
+      last_run_at   TEXT,
+      last_source_hash TEXT,
+      etag          TEXT,
+      last_modified TEXT,
+      last_error    TEXT,
+      updated_at    TEXT NOT NULL,
+      PRIMARY KEY (guild_id, source_key)
+    );
   `);
 
   migrateSharesToGuildScope(database);
@@ -563,12 +578,26 @@ function migrate(database) {
   if (!candidateColumns.has("source_provider")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_provider TEXT");
   }
+  if (!candidateColumns.has("discovery_key")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN discovery_key TEXT");
+  }
   if (!candidateColumns.has("source_metadata")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_metadata TEXT");
   }
   if (!candidateColumns.has("proposed_event_end_date")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN proposed_event_end_date TEXT");
   }
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_candidates_discovery
+      ON calendar_candidates (guild_id, source_provider, discovery_key)
+      WHERE source_provider IS NOT NULL AND discovery_key IS NOT NULL;
+  `);
+
+  const discoveryColumns = new Set(
+    database.prepare("PRAGMA table_info(calendar_discovery_state)").all().map((column) => column.name)
+  );
+  if (!discoveryColumns.has("etag")) database.exec("ALTER TABLE calendar_discovery_state ADD COLUMN etag TEXT");
+  if (!discoveryColumns.has("last_modified")) database.exec("ALTER TABLE calendar_discovery_state ADD COLUMN last_modified TEXT");
 
   const settingColumns = new Set(
     database.prepare("PRAGMA table_info(calendar_settings)").all()
