@@ -77,7 +77,18 @@ function normalizeRecord(record) {
 }
 
 function buildEndpoint(startDate, endDate) {
-  const params = new URLSearchParams({ groupId: GROUP_ID, startDate, endDate });
+  const toIsoBound = (value, end) => {
+    const text = String(value || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+      return `${text}T${end ? "23:59:59.999" : "00:00:00.000"}Z`;
+    }
+    return text;
+  };
+  const params = new URLSearchParams({
+    groupId: GROUP_ID,
+    startDate: toIsoBound(startDate, false),
+    endDate: toIsoBound(endDate, true),
+  });
   return `${OFFICIAL_ORIGIN}/api/schedules?${params}`;
 }
 

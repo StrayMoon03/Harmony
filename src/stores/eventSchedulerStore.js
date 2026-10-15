@@ -293,6 +293,21 @@ function getCalendarDiscoveryState(guildId, sourceKey) {
   return getDb().prepare("SELECT * FROM calendar_discovery_state WHERE guild_id = ? AND source_key = ?").get(guildId, sourceKey) || null;
 }
 
+function getCalendarDiscoveryConfig(guildId) {
+  return getDb().prepare("SELECT * FROM calendar_discovery_config WHERE guild_id = ?").get(guildId) || null;
+}
+
+function saveCalendarDiscoveryConfig(guildId, patch = {}) {
+  const existing = getCalendarDiscoveryConfig(guildId);
+  const next = { enabled: existing?.enabled ? 1 : 0, ...patch };
+  getDb().prepare(`INSERT INTO calendar_discovery_config (guild_id, enabled, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`).run(
+    guildId, next.enabled ? 1 : 0, new Date().toISOString()
+  );
+  return getCalendarDiscoveryConfig(guildId);
+}
+
 function saveCalendarDiscoveryState(guildId, sourceKey, patch = {}) {
   const existing = getCalendarDiscoveryState(guildId, sourceKey);
   const now = new Date().toISOString();
@@ -312,6 +327,14 @@ function saveCalendarDiscoveryState(guildId, sourceKey, patch = {}) {
     guildId, sourceKey, next.initialized ? 1 : 0, next.lastSuccessAt, next.lastRunAt, next.lastSourceHash, next.etag, next.lastModified, next.lastError, now
   );
   return getCalendarDiscoveryState(guildId, sourceKey);
+}
+
+function setCalendarDiscoveryEnabled(guildId, enabled) {
+  return saveCalendarDiscoveryConfig(guildId, { enabled: enabled ? 1 : 0 });
+}
+
+function isCalendarDiscoveryEnabled(guildId) {
+  return getCalendarDiscoveryConfig(guildId)?.enabled === 1;
 }
 
 function saveCalendarCandidateNotice(guildId, candidateId, noticeMessageId) {
@@ -771,6 +794,10 @@ module.exports = {
   createOrGetCalendarCandidate,
   getCalendarDiscoveryState,
   saveCalendarDiscoveryState,
+  getCalendarDiscoveryConfig,
+  saveCalendarDiscoveryConfig,
+  setCalendarDiscoveryEnabled,
+  isCalendarDiscoveryEnabled,
   saveCalendarCandidateNotice,
   claimCalendarCandidate,
   releaseCalendarCandidate,

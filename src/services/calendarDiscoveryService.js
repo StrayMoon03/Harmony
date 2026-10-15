@@ -29,7 +29,12 @@ async function fetchWithLimits(url, options = {}) {
     if (typeof response.json !== "function") return response;
     const raw = await response.text();
     if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) throw new Error("source response exceeded size limit");
-    return { ok: response.ok, status: response.status, json: async () => JSON.parse(raw) };
+    return {
+      ok: response.ok,
+      status: response.status,
+      headers: response.headers,
+      json: async () => JSON.parse(raw),
+    };
   } finally { clearTimeout(timer); }
 }
 
@@ -63,7 +68,7 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
     if (result.notModified) {
       store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, {
         initialized: 1,
-        lastSuccessAt: new Date().toISOString(),
+        lastSuccessAt: now.toISOString(),
         lastError: null,
       });
       console.log("Calendar discovery not modified", {
@@ -89,7 +94,7 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
       } else newCount += 1;
     }
     const sourceHash = crypto.createHash("sha256").update(JSON.stringify(result.records.map((record) => [record.id, record.updatedAt || record.scheduledAt || record.scheduledDate]))).digest("hex");
-    store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { initialized: 1, lastSuccessAt: new Date().toISOString(), lastSourceHash: sourceHash, etag: result.etag || state?.etag || null, lastModified: result.lastModified || state?.last_modified || null, lastError: null });
+    store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { initialized: 1, lastSuccessAt: now.toISOString(), lastSourceHash: sourceHash, etag: result.etag || state?.etag || null, lastModified: result.lastModified || state?.last_modified || null, lastError: null });
     console.log("Calendar discovery completed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, fetched, newCount, updated, duplicate, skipped, latencyMs: Date.now() - started });
     return { ok: true, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped };
   } catch (error) {
@@ -99,12 +104,14 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
   }
 }
 
-async function runDiscovery(client, { now = new Date(), fetchImpl = fetchWithLimits, guildIds = null } = {}) {
+async function runDiscovery(client, { now = new Date(), fetchImpl = fetchWithLimits, guildIds = null, automatic = false } = {}) {
   if (locks.has("calendar-discovery")) return { locked: true, results: [] };
   locks.add("calendar-discovery");
   try {
     const results = [];
-    const guilds = [...(client?.guilds?.cache?.values?.() || [])].filter((guild) => !guildIds || guildIds.includes(guild.id));
+    const guilds = [...(client?.guilds?.cache?.values?.() || [])]
+      .filter((guild) => !guildIds || guildIds.includes(guild.id))
+      .filter((guild) => !automatic || store.isCalendarDiscoveryEnabled(guild.id));
     for (const guild of guilds) {
       for (const source of sources) results.push(await runSource(client, guild.id, source, { now, fetchImpl }));
     }
@@ -113,10 +120,10 @@ async function runDiscovery(client, { now = new Date(), fetchImpl = fetchWithLim
 }
 
 function startCalendarDiscovery(client) {
-  runDiscovery(client).catch((error) => console.error("Calendar discovery startup failed", { errorClass: error.name || "Error" }));
-  const timer = setInterval(() => runDiscovery(client).catch((error) => console.error("Calendar discovery failed", { errorClass: error.name || "Error" })), POLL_INTERVAL_MS);
+  runDiscovery(client, { automatic: true }).catch((error) => console.error("Calendar discovery startup failed", { errorClass: error.name || "Error" }));
+  const timer = setInterval(() => runDiscovery(client, { automatic: true }).catch((error) => console.error("Calendar discovery failed", { errorClass: error.name || "Error" })), POLL_INTERVAL_MS);
   timer.unref?.();
   return timer;
 }
 
-module.exports = { LOOKAHEAD_DAYS, CORRECTION_LOOKBACK_HOURS, POLL_INTERVAL_MS, windowFor, runSource, runDiscovery, startCalendarDiscovery };
+module.exports = { LOOKAHEAD_DAYS, CORRECTION_LOOKBACK_HOURS, POLL_INTERVAL_MS, windowFor, fetchWithLimits, runSource, runDiscovery, startCalendarDiscovery };

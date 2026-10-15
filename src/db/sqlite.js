@@ -467,6 +467,12 @@ function migrate(database) {
       updated_at    TEXT NOT NULL,
       PRIMARY KEY (guild_id, source_key)
     );
+
+    CREATE TABLE IF NOT EXISTS calendar_discovery_config (
+      guild_id      TEXT PRIMARY KEY,
+      enabled       INTEGER NOT NULL DEFAULT 0,
+      updated_at    TEXT NOT NULL
+    );
   `);
 
   migrateSharesToGuildScope(database);
