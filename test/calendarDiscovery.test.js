@@ -177,10 +177,12 @@ test("automatic discovery defaults off, persists when enabled, and manual checks
   const fetchImpl = async () => response({ schedules: [] });
   const automaticOff = await runDiscovery(client, { automatic: true, fetchImpl });
   assert.equal(automaticOff.results.length, 0);
-  store.setCalendarDiscoveryEnabled(guildId, adapter.SOURCE_KEY, true);
+  store.setCalendarDiscoveryEnabled(guildId, true);
   const automaticOn = await runDiscovery(client, { automatic: true, fetchImpl });
   assert.equal(automaticOn.results.length, 1);
-  assert.equal(store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY).enabled, 1);
+  assert.equal(store.getCalendarDiscoveryConfig(guildId).enabled, 1);
+  store.saveCalendarDiscoveryState(guildId, "future-official-source", { lastError: "test state" });
+  assert.equal(store.isCalendarDiscoveryEnabled(guildId), true);
   const manual = await runDiscovery(client, { automatic: false, fetchImpl });
   assert.equal(manual.results.length, 1);
 });
