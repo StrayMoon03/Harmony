@@ -111,7 +111,7 @@ async function runDiscovery(client, { now = new Date(), fetchImpl = fetchWithLim
     const results = [];
     const guilds = [...(client?.guilds?.cache?.values?.() || [])]
       .filter((guild) => !guildIds || guildIds.includes(guild.id))
-      .filter((guild) => !automatic || sources.every((source) => store.getCalendarDiscoveryState(guild.id, source.SOURCE_KEY)?.enabled === 1));
+      .filter((guild) => !automatic || store.isCalendarDiscoveryEnabled(guild.id));
     for (const guild of guilds) {
       for (const source of sources) results.push(await runSource(client, guild.id, source, { now, fetchImpl }));
     }
