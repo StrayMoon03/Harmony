@@ -297,6 +297,7 @@ function saveCalendarDiscoveryState(guildId, sourceKey, patch = {}) {
   const existing = getCalendarDiscoveryState(guildId, sourceKey);
   const now = new Date().toISOString();
   const next = {
+    enabled: existing?.enabled ? 1 : 0,
     initialized: existing?.initialized ? 1 : 0,
     lastSuccessAt: existing?.last_success_at || null,
     lastRunAt: existing?.last_run_at || null,
@@ -306,12 +307,20 @@ function saveCalendarDiscoveryState(guildId, sourceKey, patch = {}) {
     lastError: existing?.last_error || null,
     ...patch,
   };
-  getDb().prepare(`INSERT INTO calendar_discovery_state (guild_id, source_key, initialized, last_success_at, last_run_at, last_source_hash, etag, last_modified, last_error, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(guild_id, source_key) DO UPDATE SET initialized = excluded.initialized, last_success_at = excluded.last_success_at, last_run_at = excluded.last_run_at, last_source_hash = excluded.last_source_hash, etag = excluded.etag, last_modified = excluded.last_modified, last_error = excluded.last_error, updated_at = excluded.updated_at`).run(
-    guildId, sourceKey, next.initialized ? 1 : 0, next.lastSuccessAt, next.lastRunAt, next.lastSourceHash, next.etag, next.lastModified, next.lastError, now
+  getDb().prepare(`INSERT INTO calendar_discovery_state (guild_id, source_key, enabled, initialized, last_success_at, last_run_at, last_source_hash, etag, last_modified, last_error, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, source_key) DO UPDATE SET enabled = excluded.enabled, initialized = excluded.initialized, last_success_at = excluded.last_success_at, last_run_at = excluded.last_run_at, last_source_hash = excluded.last_source_hash, etag = excluded.etag, last_modified = excluded.last_modified, last_error = excluded.last_error, updated_at = excluded.updated_at`).run(
+    guildId, sourceKey, next.enabled ? 1 : 0, next.initialized ? 1 : 0, next.lastSuccessAt, next.lastRunAt, next.lastSourceHash, next.etag, next.lastModified, next.lastError, now
   );
   return getCalendarDiscoveryState(guildId, sourceKey);
+}
+
+function setCalendarDiscoveryEnabled(guildId, sourceKey, enabled) {
+  return saveCalendarDiscoveryState(guildId, sourceKey, { enabled: enabled ? 1 : 0 });
+}
+
+function isCalendarDiscoveryEnabled(guildId, sourceKey) {
+  return getCalendarDiscoveryState(guildId, sourceKey)?.enabled === 1;
 }
 
 function saveCalendarCandidateNotice(guildId, candidateId, noticeMessageId) {
@@ -771,6 +780,8 @@ module.exports = {
   createOrGetCalendarCandidate,
   getCalendarDiscoveryState,
   saveCalendarDiscoveryState,
+  setCalendarDiscoveryEnabled,
+  isCalendarDiscoveryEnabled,
   saveCalendarCandidateNotice,
   claimCalendarCandidate,
   releaseCalendarCandidate,
