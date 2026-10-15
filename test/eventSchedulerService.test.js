@@ -481,6 +481,8 @@ test("manager panels stay scoped to their calendar", () => {
   assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-check"));
   assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-toggle"));
   assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-status"));
+  const toggle = communityRows.find((button) => button.custom_id === "harmony-manager:community:discovery-toggle");
+  assert.equal(toggle.label, "⏱️ Turn Discovery On");
 });
 
 test("calendar discovery controls persist toggle state and report status", async () => {
@@ -498,6 +500,9 @@ test("calendar discovery controls persist toggle state and report status", async
   await handleEventSchedulerInteraction(makeInteraction("harmony-manager:community:discovery-status"));
   assert.match(replies[0].content, /now \*\*on\*\*/);
   assert.match(replies[1].content, /discovery is \*\*enabled\*\*/);
+  const toggle = managerPanelComponents("community", guildId).flatMap((row) => row.toJSON().components)
+    .find((button) => button.custom_id === "harmony-manager:community:discovery-toggle");
+  assert.equal(toggle.label, "⏸️ Turn Discovery Off");
 });
 
 test("manager modals allow blank optional fields", () => {
