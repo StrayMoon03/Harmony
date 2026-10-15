@@ -96,7 +96,7 @@ function managerPanelContent(calendarType) {
   return `${icon} **${label} SCHEDULE MANAGER**\nUse the private controls below to manage this calendar. Calendar events do not require an announcement.\nDiscord Scheduled Event reconciliation also requires Harmony to have **View Channel** permission for each associated voice or stage channel.`;
 }
 
-function managerPanelComponents(calendarType) {
+function managerPanelComponents(calendarType, guildId = null) {
   const prefix = `harmony-manager:${calendarType}`;
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${prefix}:add`).setLabel("➕ Add Event").setStyle(ButtonStyle.Primary),
@@ -110,7 +110,7 @@ function managerPanelComponents(calendarType) {
       new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
     ), new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel("⏱️ Turn Discovery On/Off").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }
@@ -1206,7 +1206,7 @@ async function installScheduleManagers(guild) {
     let message = existing?.channel_id === managerChannel.id
       ? await managerChannel.messages.fetch(existing.message_id).catch(() => null)
       : null;
-    const payload = { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType), allowedMentions: { parse: [] } };
+    const payload = { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType, guild.id), allowedMentions: { parse: [] } };
     if (message) await message.edit(payload);
     else message = await managerChannel.send(payload);
     store.saveManagerPanel(guild.id, calendarType, managerChannel.id, message.id);
@@ -2402,7 +2402,7 @@ async function handleManagerInteraction(interaction) {
     const sourceKey = "jype-straykids-schedule";
     if (action === "discovery-status") {
       const state = store.getCalendarDiscoveryState(interaction.guildId, sourceKey);
-      const status = state?.enabled === 1 ? "enabled" : "disabled";
+      const status = store.isCalendarDiscoveryEnabled(interaction.guildId) ? "enabled" : "disabled";
       await interaction.reply({
         content: [
           `Calendar discovery is **${status}**.`,
@@ -2415,8 +2415,8 @@ async function handleManagerInteraction(interaction) {
       return;
     }
     if (action === "discovery-toggle") {
-      const current = store.getCalendarDiscoveryState(interaction.guildId, sourceKey)?.enabled === 1;
-      store.setCalendarDiscoveryEnabled(interaction.guildId, sourceKey, !current);
+      const current = store.isCalendarDiscoveryEnabled(interaction.guildId);
+      store.setCalendarDiscoveryEnabled(interaction.guildId, !current);
       await interaction.reply({ content: `Automatic calendar discovery is now **${!current ? "on" : "off"}** for this server.`, flags: 64 });
       return;
     }
