@@ -457,6 +457,7 @@ function migrate(database) {
     CREATE TABLE IF NOT EXISTS calendar_discovery_state (
       guild_id      TEXT NOT NULL,
       source_key    TEXT NOT NULL,
+      enabled       INTEGER NOT NULL DEFAULT 0,
       initialized   INTEGER NOT NULL DEFAULT 0,
       last_success_at TEXT,
       last_run_at   TEXT,
@@ -596,6 +597,7 @@ function migrate(database) {
   const discoveryColumns = new Set(
     database.prepare("PRAGMA table_info(calendar_discovery_state)").all().map((column) => column.name)
   );
+  if (!discoveryColumns.has("enabled")) database.exec("ALTER TABLE calendar_discovery_state ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0");
   if (!discoveryColumns.has("etag")) database.exec("ALTER TABLE calendar_discovery_state ADD COLUMN etag TEXT");
   if (!discoveryColumns.has("last_modified")) database.exec("ALTER TABLE calendar_discovery_state ADD COLUMN last_modified TEXT");
 
