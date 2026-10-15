@@ -2,11 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 const adapter = require("../src/services/calendarDiscoverySources/strayKidsJypeScheduleAdapter");
-const { runDiscovery, windowFor } = require("../src/services/calendarDiscoveryService");
+const { runDiscovery, windowFor, fetchWithLimits } = require("../src/services/calendarDiscoveryService");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
 
 function response(payload, status = 200) {
-  return { ok: status >= 200 && status < 300, status, json: async () => payload };
+  return { ok: status >= 200 && status < 300, status, headers: new Map(), json: async () => payload };
 }
 
 test("JYP adapter includes only official event/show/release records and preserves date semantics", () => {
@@ -58,11 +58,68 @@ test("automatic discovery is idempotent, updates open candidates, and never reop
 
 test("source endpoint uses the official structured contract", async () => {
   let requested;
-  const result = await adapter.fetchRecords({ startDate: "2026-10-14", endDate: "2027-02-11", fetchImpl: async (url, options) => { requested = { url, options }; return response({ schedules: [] }); } });
+  const result = await adapter.fetchRecords({ startDate: "2026-10-14", endDate: "2027-02-11", fetchImpl: async (url, options) => {
+    requested = { url, options };
+    return response({ schedules: [{ id: "9260", title: "Stray Kids World Tour <RUN IT> FUKUOKA", category: "EVENT", isAllDay: true, scheduledAt: "2026-10-24T00:00:00+09:00", scheduledDate: "2026-10-24" }] });
+  } });
   assert.match(result.url, /straykids\.jype\.com\/api\/schedules\?groupId=10/);
-  assert.equal(result.records.length, 0);
-  assert.match(requested.url, /startDate=2026-10-14/);
+  assert.equal(result.records[0].id, "9260");
+  assert.match(requested.url, /startDate=2026-10-14T00%3A00%3A00\.000Z/);
+  assert.match(requested.url, /endDate=2027-02-11T23%3A59%3A59\.999Z/);
   assert.equal(requested.options.headers.accept, "application/json");
+});
+
+test("HTTP wrapper exposes upstream validators to source adapters", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({ etag: '"source-v1"', "last-modified": "Wed, 14 Oct 2026 11:00:00 GMT" }),
+    text: async () => JSON.stringify({ schedules: [] }),
+  });
+  try {
+    const wrapped = await fetchWithLimits("https://example.test/source");
+    assert.equal(wrapped.headers.get("etag"), '"source-v1"');
+    assert.equal(wrapped.headers.get("last-modified"), "Wed, 14 Oct 2026 11:00:00 GMT");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("wrapped 200 persists validators and wrapped 304 preserves them", async () => {
+  const guildId = `discovery-validators-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const originalFetch = global.fetch;
+  let call = 0;
+  global.fetch = async () => {
+    call += 1;
+    if (call === 1) return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ etag: '"source-v1"', "last-modified": "Wed, 14 Oct 2026 11:00:00 GMT" }),
+      json: async () => ({ schedules: [] }),
+      text: async () => JSON.stringify({ schedules: [] }),
+    };
+    return { ok: false, status: 304, headers: new Headers({ etag: '"source-v1"' }), text: async () => "" };
+  };
+  try {
+    await runDiscovery(client, { now: new Date("2026-10-14T12:00:00Z"), fetchImpl: fetchWithLimits });
+    const first = store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY);
+    store.saveCalendarDiscoveryState(guildId, adapter.SOURCE_KEY, { lastSourceHash: "known-source-hash" });
+    const before = store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY);
+    const second = await runDiscovery(client, { now: new Date("2026-10-14T13:00:00Z"), fetchImpl: fetchWithLimits });
+    const after = store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY);
+    assert.equal(first.etag, '"source-v1"');
+    assert.equal(first.last_modified, "Wed, 14 Oct 2026 11:00:00 GMT");
+    assert.equal(second.results[0].notModified, true);
+    assert.equal(after.last_source_hash, before.last_source_hash);
+    assert.equal(after.etag, before.etag);
+    assert.equal(after.last_modified, before.last_modified);
+    assert.notEqual(after.last_success_at, before.last_success_at);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("HTTP 304 preserves discovery state and never becomes an empty schedule", async () => {
@@ -111,4 +168,19 @@ test("manual discover is admin-only and the command is ephemeral", async () => {
   });
   assert.equal(reply.flags, 64);
   assert.match(reply.content, /Only Harmony calendar administrators/);
+});
+
+test("automatic discovery defaults off, persists when enabled, and manual checks still run", async () => {
+  const guildId = `discovery-toggle-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const fetchImpl = async () => response({ schedules: [] });
+  const automaticOff = await runDiscovery(client, { automatic: true, fetchImpl });
+  assert.equal(automaticOff.results.length, 0);
+  store.setCalendarDiscoveryEnabled(guildId, adapter.SOURCE_KEY, true);
+  const automaticOn = await runDiscovery(client, { automatic: true, fetchImpl });
+  assert.equal(automaticOn.results.length, 1);
+  assert.equal(store.getCalendarDiscoveryState(guildId, adapter.SOURCE_KEY).enabled, 1);
+  const manual = await runDiscovery(client, { automatic: false, fetchImpl });
+  assert.equal(manual.results.length, 1);
 });
