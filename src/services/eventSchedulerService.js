@@ -108,6 +108,10 @@ function managerPanelComponents(calendarType) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
+    ), new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel("⏱️ Turn Discovery On/Off").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }
   return [row];
@@ -2393,6 +2397,47 @@ async function handleManagerInteraction(interaction) {
   const calendarType = managerCalendarType(parts[1]);
   const action = parts[2];
   const eventId = parts[3];
+
+  if (calendarType === "community" && ["discovery-check", "discovery-toggle", "discovery-status"].includes(action) && interaction.isButton()) {
+    const sourceKey = "jype-straykids-schedule";
+    if (action === "discovery-status") {
+      const state = store.getCalendarDiscoveryState(interaction.guildId, sourceKey);
+      const status = state?.enabled === 1 ? "enabled" : "disabled";
+      await interaction.reply({
+        content: [
+          `Calendar discovery is **${status}**.`,
+          `Last run: ${state?.last_run_at || "not yet run"}`,
+          `Last successful run: ${state?.last_success_at || "not yet successful"}`,
+          `Last error: ${state?.last_error || "none"}`,
+        ].join("\n"),
+        flags: 64,
+      });
+      return;
+    }
+    if (action === "discovery-toggle") {
+      const current = store.getCalendarDiscoveryState(interaction.guildId, sourceKey)?.enabled === 1;
+      store.setCalendarDiscoveryEnabled(interaction.guildId, sourceKey, !current);
+      await interaction.reply({ content: `Automatic calendar discovery is now **${!current ? "on" : "off"}** for this server.`, flags: 64 });
+      return;
+    }
+    await interaction.deferReply({ flags: 64 });
+    const { runDiscovery } = require("./calendarDiscoveryService");
+    const result = await runDiscovery(interaction.client, { guildIds: [interaction.guildId] });
+    if (result.locked) {
+      await interaction.editReply("A discovery check is already running. Please try again shortly.");
+      return;
+    }
+    const totals = result.results.reduce((sum, item) => ({
+      fetched: sum.fetched + (item.fetched || 0),
+      newCount: sum.newCount + (item.newCount || 0),
+      updated: sum.updated + (item.updated || 0),
+      duplicate: sum.duplicate + (item.duplicate || 0),
+      skipped: sum.skipped + (item.skipped || 0),
+      failed: sum.failed + (item.ok ? 0 : 1),
+    }), { fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0, failed: 0 });
+    await interaction.editReply(`Official schedule check complete. Fetched ${totals.fetched}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; skipped ${totals.skipped}${totals.failed ? `; failed ${totals.failed}` : ""}. No calendar events were created automatically.`);
+    return;
+  }
   if (!calendarType) {
     await interaction.reply({ content: "That calendar manager is no longer available.", flags: 64 });
     return;
