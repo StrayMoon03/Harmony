@@ -66,6 +66,7 @@ const {
   handleEventSchedulerInteraction,
   isEventSchedulerInteraction,
   startEventScheduler,
+  refreshConfiguredScheduleManagers,
   registerScheduledEventListeners,
   offerEventReminder,
 } = require("./services/eventSchedulerService");
@@ -153,6 +154,26 @@ client.once("clientReady", async () => {
         `Could not register Harmony commands in ${guild.name}:`,
         error
       );
+    }
+  }
+
+  // Refresh only manager panels that already have persisted references. This
+  // keeps deployed component changes visible without creating new setup or
+  // resurrecting panels an administrator removed.
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const refreshed = await refreshConfiguredScheduleManagers(guild);
+      if (refreshed.length) {
+        console.log("Schedule Manager panels refreshed", {
+          guildId: guild.id,
+          panels: refreshed.map(({ calendarType, channelId, messageId }) => ({ calendarType, channelId, messageId })),
+        });
+      }
+    } catch (error) {
+      console.error("Schedule Manager startup refresh failed", {
+        guildId: guild.id,
+        error: error.message,
+      });
     }
   }
 

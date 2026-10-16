@@ -5,7 +5,7 @@ const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
   managerModal, handleEventSchedulerInteraction, isEventSchedulerInteraction,
-  installScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
+  installScheduleManagers, refreshConfiguredScheduleManagers, publishMonthlyCalendar, refreshPublishedCalendar,
   buildYoutifulCalendarMessages, YOUTIFUL_EVENT_TYPES, YOUTIFUL_EVENT_TYPE_ICONS, YOUTIFUL_TIMEZONE_OPTIONS,
   SKZ_TIMEZONE_OPTIONS,
   applyRecurringChanges,
@@ -469,19 +469,21 @@ test("manager panels stay scoped to their calendar", () => {
   assert.equal(managerCalendarType("other"), null);
   assert.match(managerPanelContent("stray_kids"), /STRAY KIDS SCHEDULE MANAGER/);
   assert.match(managerPanelContent("community"), /YOUTIFUL STAYS SCHEDULE MANAGER/);
-  const ids = managerPanelComponents("stray_kids")[0].toJSON().components.map((button) => button.custom_id);
+  const strayRows = managerPanelComponents("stray_kids", "manager-panel-test").flatMap((row) => row.toJSON().components);
+  const ids = strayRows.slice(0, 4).map((button) => button.custom_id);
   assert.deepEqual(ids, [
     "harmony-manager:stray_kids:add",
     "harmony-manager:stray_kids:view",
     "harmony-manager:stray_kids:edit",
     "harmony-manager:stray_kids:cancel",
   ]);
+  assert.ok(strayRows.some((button) => button.custom_id === "harmony-manager:stray_kids:discovery-check"));
+  assert.ok(strayRows.some((button) => button.custom_id === "harmony-manager:stray_kids:discovery-toggle"));
+  assert.ok(strayRows.some((button) => button.custom_id === "harmony-manager:stray_kids:discovery-status"));
   const communityRows = managerPanelComponents("community").flatMap((row) => row.toJSON().components);
   assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:findnative"));
-  assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-check"));
-  assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-toggle"));
-  assert.ok(communityRows.some((button) => button.custom_id === "harmony-manager:community:discovery-status"));
-  const toggle = communityRows.find((button) => button.custom_id === "harmony-manager:community:discovery-toggle");
+  assert.ok(!communityRows.some((button) => button.custom_id.includes(":discovery-")));
+  const toggle = strayRows.find((button) => button.custom_id === "harmony-manager:stray_kids:discovery-toggle");
   assert.equal(toggle.label, "⏱️ Turn Discovery On");
 });
 
@@ -496,12 +498,12 @@ test("calendar discovery controls persist toggle state and report status", async
     isButton: () => true,
     reply: async (payload) => replies.push(payload),
   });
-  await handleEventSchedulerInteraction(makeInteraction("harmony-manager:community:discovery-toggle"));
-  await handleEventSchedulerInteraction(makeInteraction("harmony-manager:community:discovery-status"));
+  await handleEventSchedulerInteraction(makeInteraction("harmony-manager:stray_kids:discovery-toggle"));
+  await handleEventSchedulerInteraction(makeInteraction("harmony-manager:stray_kids:discovery-status"));
   assert.match(replies[0].content, /now \*\*on\*\*/);
   assert.match(replies[1].content, /discovery is \*\*enabled\*\*/);
-  const toggle = managerPanelComponents("community", guildId).flatMap((row) => row.toJSON().components)
-    .find((button) => button.custom_id === "harmony-manager:community:discovery-toggle");
+  const toggle = managerPanelComponents("stray_kids", guildId).flatMap((row) => row.toJSON().components)
+    .find((button) => button.custom_id === "harmony-manager:stray_kids:discovery-toggle");
   assert.equal(toggle.label, "⏸️ Turn Discovery Off");
 });
 
@@ -929,6 +931,52 @@ test("both managers use one control channel, reuse panels, and recreate deleted 
   assert.equal(control.messageCount(), 2);
   assert.equal(strayKids.messageCount(), 0);
   assert.equal(community.messageCount(), 0);
+});
+
+test("startup refresh updates only already-configured manager panels", async () => {
+  const guildId = `manager-startup-refresh-${Date.now()}`;
+  const control = fakeChannel("startup-refresh-control");
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control]);
+  const installed = await installScheduleManagers(guild);
+  const beforeIds = installed.map(({ messageId }) => messageId);
+  const stale = await control.messages.fetch(beforeIds[0]);
+  stale.payload = { content: "stale", components: [] };
+
+  const refreshed = await refreshConfiguredScheduleManagers(guild);
+  assert.deepEqual(refreshed.map(({ messageId }) => messageId), beforeIds);
+  assert.equal(control.messageCount(), 2);
+  const updated = await control.messages.fetch(beforeIds[0]);
+  assert.match(updated.payload.content, /STRAY KIDS SCHEDULE MANAGER/);
+  assert.ok(updated.payload.components.flatMap((row) => row.toJSON().components)
+    .some((button) => button.custom_id === "harmony-manager:stray_kids:discovery-check"));
+});
+
+test("startup refresh does not create panels for an unconfigured manager", async () => {
+  const guildId = `manager-startup-unconfigured-${Date.now()}`;
+  const control = fakeChannel("startup-unconfigured-control");
+  store.setManagerChannel(guildId, control.id);
+  const guild = fakeGuild(guildId, [control]);
+  assert.deepEqual(await refreshConfiguredScheduleManagers(guild), []);
+  assert.equal(control.messageCount(), 0);
+});
+
+test("startup refresh skips stale references without creating messages", async () => {
+  const guildId = `manager-startup-stale-${Date.now()}`;
+  const control = fakeChannel("startup-stale-control");
+  store.saveManagerPanel(guildId, "stray_kids", "missing-channel", "missing-message");
+  const guild = fakeGuild(guildId, [control]);
+  assert.deepEqual(await refreshConfiguredScheduleManagers(guild), []);
+  assert.equal(control.messageCount(), 0);
+});
+
+test("startup refresh edit failures are nonfatal", async () => {
+  const guildId = `manager-startup-failure-${Date.now()}`;
+  const control = fakeChannel("startup-failure-control");
+  store.saveManagerPanel(guildId, "community", control.id, "message-1");
+  control.messages.fetch = async () => ({ edit: async () => { throw new Error("edit denied"); } });
+  const guild = fakeGuild(guildId, [control]);
+  await assert.doesNotReject(() => refreshConfiguredScheduleManagers(guild));
 });
 
 test("published calendars still target public calendar channels", async () => {
