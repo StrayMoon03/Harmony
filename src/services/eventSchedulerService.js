@@ -108,7 +108,10 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
-    ), new ActionRowBuilder().addComponents(
+    )];
+  }
+  if (calendarType === "stray_kids") {
+    return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
@@ -1206,13 +1209,47 @@ async function installScheduleManagers(guild) {
     let message = existing?.channel_id === managerChannel.id
       ? await managerChannel.messages.fetch(existing.message_id).catch(() => null)
       : null;
-    const payload = { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType, guild.id), allowedMentions: { parse: [] } };
+    const payload = managerPanelPayload(calendarType, guild.id);
     if (message) await message.edit(payload);
     else message = await managerChannel.send(payload);
     store.saveManagerPanel(guild.id, calendarType, managerChannel.id, message.id);
     results.push({ calendarType, channelId: managerChannel.id, messageId: message.id });
   }
   return results;
+}
+
+function managerPanelPayload(calendarType, guildId) {
+  return { content: managerPanelContent(calendarType), components: managerPanelComponents(calendarType, guildId), allowedMentions: { parse: [] } };
+}
+
+/**
+ * Refresh only manager panels that already have persisted channel/message
+ * references. Startup must never create a new manager panel as a side effect.
+ */
+async function refreshConfiguredScheduleManagers(guild) {
+  const refreshed = [];
+  for (const calendarType of MANAGER_TYPES) {
+    const existing = store.getManagerPanel(guild.id, calendarType);
+    if (!existing?.channel_id || !existing?.message_id) continue;
+    const channel = guild.channels.cache.get(existing.channel_id)
+      || await guild.channels.fetch(existing.channel_id).catch(() => null);
+    if (!channel?.isTextBased()) {
+      console.warn("Schedule Manager refresh skipped: configured channel unavailable", { guildId: guild.id, calendarType, channelId: existing.channel_id, messageId: existing.message_id });
+      continue;
+    }
+    const message = await channel.messages.fetch(existing.message_id).catch(() => null);
+    if (!message) {
+      console.warn("Schedule Manager refresh skipped: configured message unavailable", { guildId: guild.id, calendarType, channelId: existing.channel_id, messageId: existing.message_id });
+      continue;
+    }
+    try {
+      await message.edit(managerPanelPayload(calendarType, guild.id));
+      refreshed.push({ calendarType, channelId: existing.channel_id, messageId: existing.message_id });
+    } catch (error) {
+      console.error("Schedule Manager refresh failed", { guildId: guild.id, calendarType, channelId: existing.channel_id, messageId: existing.message_id, error: error.message });
+    }
+  }
+  return refreshed;
 }
 
 function isAdmin(message) {
@@ -2398,7 +2435,7 @@ async function handleManagerInteraction(interaction) {
   const action = parts[2];
   const eventId = parts[3];
 
-  if (calendarType === "community" && ["discovery-check", "discovery-toggle", "discovery-status"].includes(action) && interaction.isButton()) {
+  if (calendarType === "stray_kids" && ["discovery-check", "discovery-toggle", "discovery-status"].includes(action) && interaction.isButton()) {
     const sourceKey = "jype-straykids-schedule";
     if (action === "discovery-status") {
       const state = store.getCalendarDiscoveryState(interaction.guildId, sourceKey);
@@ -3769,6 +3806,7 @@ module.exports = {
   publishMonthlyCalendar,
   refreshPublishedCalendar,
   installScheduleManagers,
+  refreshConfiguredScheduleManagers,
   managerPanelContent,
   managerPanelComponents,
   managerModal,
