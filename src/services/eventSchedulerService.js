@@ -1701,7 +1701,7 @@ function candidateReviewPayload(candidate, matches) {
   const allDay = isExplicitDiscoveryAllDay(candidate);
   const details = [
     `**Potential Stray Kids event #${candidate.id}**`,
-    `Source: ${candidate.source_url || "Not provided"}`,
+    `Source: ${isDiscoveryCandidate(candidate) ? (candidate.source_provider || "Official discovery") + " (use Official Source button)" : (candidate.source_url || "Not provided")}`,
     `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
     `Harmony extracted title: ${candidate.title || "Not available"}`,
     `Harmony extracted start date: ${candidate.proposed_event_date || "Not provided"}`,
