@@ -329,3 +329,62 @@ test("enrichment stops an oversized streamed response before loading it fully", 
   assert.equal(result.error, "response-too-large");
   assert.equal(cancelled, true);
 });
+
+test("discovered all-day candidate is compact, reviewed in-place, and preserves source metadata", async () => {
+  const guildId = `discovery-compact-${Date.now()}`;
+  const { client, sent } = setupGuild(guildId);
+  const sourceUrl = "https://straykids.jype.com/schedule?scheduledId=9260";
+  const metadata = JSON.stringify({
+    allDay: true, scheduledDate: "2026-10-24",
+    scheduledAt: "2026-10-24T00:00:00+09:00", explicitOffset: "+09:00", timezone: null,
+  });
+  const { submitCalendarCandidate } = require("../src/services/eventSchedulerService");
+  const result = await submitCalendarCandidate(client, {
+    guildId, sourceUrl, skipEnrichment: true,
+    sourceType: "discovery", sourceProvider: "jype-straykids-schedule",
+    discoveryKey: "jype-straykids-schedule:10:9260",
+    sourceMetadata: metadata, title: "Stray Kids World Tour <RUN IT> FUKUOKA",
+    proposedEventDate: "2026-10-24", proposedEventAt: null,
+  });
+  const candidate = result.candidate;
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /Candidate #/);
+  assert.match(sent[0].content, /Source: JYP/);
+  assert.doesNotMatch(sent[0].content, /https?:\/\//);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_url, sourceUrl);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_metadata, metadata);
+  const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(review);
+  assert.equal(review.replyPayload, undefined);
+  assert.match(review.updatePayload.content, /All-day: Yes/);
+  assert.doesNotMatch(review.updatePayload.content, /Still missing: event time/);
+  assert.doesNotMatch(review.updatePayload.content, /Event time: 00:00/);
+  assert.match(review.updatePayload.content, /Still missing: nothing obvious/);
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Add to Calendar")));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Dismiss")));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Official Source")));
+  assert.equal(store.listEvents(guildId).length, 0);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
+  const dismiss = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(dismiss);
+  assert.match(dismiss.updatePayload.content, /Ignored/);
+  assert.deepEqual(dismiss.updatePayload.components, []);
+  const stale = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(stale);
+  assert.match(stale.replyPayload.content, /already been reviewed/);
+  assert.equal(store.listEvents(guildId).length, 0);
+});
+
+test("normal timed candidate still uses ephemeral review and reports missing time", async () => {
+  const guildId = `timed-unchanged-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = store.createOrGetCalendarCandidate({
+    guildId, sourceUrl: "https://official.example/timed", sourceType: "member_submission",
+    title: "Timed event", proposedEventDate: "2026-12-10",
+  }).candidate;
+  const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(review);
+  assert.equal(review.replyPayload.flags, 64);
+  assert.match(review.replyPayload.content, /Still missing: event time/);
+  assert.equal(review.updatePayload, undefined);
+});
