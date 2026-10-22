@@ -1708,7 +1708,7 @@ function candidateReviewPayload(candidate, matches) {
     `Harmony extracted end date: ${candidate.proposed_event_end_date || "Not provided"}`,
     `Harmony extracted timezone: ${candidate.proposed_event_timezone || "Not provided"}`,
     ...(allDay ? ["All-day: Yes"] : [`Event time: ${candidate.proposed_event_at ? candidateLocalTime(candidate) : "Not provided"}`]),
-    `Source/provider: ${candidate.source_provider || "Not identified"}${candidate.source_metadata ? ` (${candidate.source_metadata})` : ""}`,
+    `Source/provider: ${candidate.source_provider || "Not identified"}${!isDiscoveryCandidate(candidate) && candidate.source_metadata ? ` (${candidate.source_metadata})` : ""}`,
     `Still missing: ${[!candidate.title && "event title", !candidate.proposed_event_date && "event date", !candidate.proposed_event_at && !allDay && "event time"].filter(Boolean).join(", ") || "nothing obvious"}`,
     `Note: ${candidate.submitted_note || "None"}`,
     matches.length ? `Likely calendar matches: ${matches.map((item) => `#${item.id} ${item.title}`).join(", ")}` : "Likely calendar matches: none",
@@ -2429,12 +2429,13 @@ async function handleManagerInteraction(interaction) {
       return;
     }
     if (action === "add" && interaction.isButton()) {
+      const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone;
       const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}`).setTitle("Add candidate to Stray Kids calendar");
       const fields = [
         ["title", "Event title", candidate.title || "", true, 120],
         ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
-        ["event-time", "Event time HH:MM (blank = all-day)", candidateLocalTime(candidate), false, 5],
-        ["event-timezone", "Event timezone", candidate.proposed_event_timezone || "America/New_York", true, 80],
+        ["event-time", "Event time HH:MM (blank = all-day)", optionalTimezone ? "" : candidateLocalTime(candidate), false, 5],
+        ["event-timezone", "Event timezone", optionalTimezone ? "" : candidate.proposed_event_timezone || "America/New_York", !optionalTimezone, 80],
         ["description", "Details (optional)", candidate.submitted_note || "", false, 500],
       ];
       modal.addComponents(fields.map(([id, label, value, required, maxLength]) => {
@@ -2449,9 +2450,12 @@ async function handleManagerInteraction(interaction) {
       const title = interaction.fields.getTextInputValue("title").trim();
       const eventDate = interaction.fields.getTextInputValue("event-date").trim();
       const eventTime = interaction.fields.getTextInputValue("event-time").trim();
-      const eventTimezone = interaction.fields.getTextInputValue("event-timezone").trim();
+      const eventTimezone = interaction.fields.getTextInputValue("event-timezone").trim() || null;
+      const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone && !eventTime;
+      // Newer Intl runtimes accept numeric offsets; this optional field accepts named zones only.
+      const offsetTimezone = optionalTimezone && /^[+-]/.test(eventTimezone || "");
       const description = interaction.fields.getTextInputValue("description").trim() || null;
-      if (!parseManagerDate(eventDate) || !validTimezone(eventTimezone) || (eventTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(eventTime))) {
+      if (!parseManagerDate(eventDate) || offsetTimezone || (!(optionalTimezone && !eventTimezone) && !validTimezone(eventTimezone)) || (eventTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(eventTime))) {
         await interaction.reply({ content: "Provide a valid event date, optional 24-hour time, and timezone.", flags: 64 });
         return;
       }
