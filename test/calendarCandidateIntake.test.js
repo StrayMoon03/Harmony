@@ -388,3 +388,154 @@ test("normal timed candidate still uses ephemeral review and reports missing tim
   assert.match(review.replyPayload.content, /Still missing: event time/);
   assert.equal(review.updatePayload, undefined);
 });
+
+function timezoneCandidate(guildId, overrides = {}) {
+  return store.createOrGetCalendarCandidate({
+    guildId, sourceUrl: `https://official.example/${guildId}`,
+    sourceType: "discovery", sourceProvider: "jype-straykids-schedule",
+    discoveryKey: `test:${guildId}`,
+    sourceMetadata: JSON.stringify({ allDay: true, explicitOffset: "+09:00", timezone: null }),
+    title: "All-day test", proposedEventDate: "2026-12-10",
+    ...overrides,
+  }).candidate;
+}
+
+async function timezoneModal(guildId, client, candidate) {
+  const add = managerInteraction(guildId, client, `harmony-manager:candidate:add:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(add);
+  return Object.fromEntries(add.modal.components.map(row => [row.components[0].data.custom_id, row.components[0].data]));
+}
+
+async function timezoneSubmit(guildId, client, candidate, fields = {}) {
+  const submit = managerInteraction(guildId, client, `harmony-manager:candidate:addmodal:${candidate.id}`, {
+    kind: "modal",
+    fields: { title: candidate.title, "event-date": candidate.proposed_event_date, "event-time": "", "event-timezone": "", ...fields },
+  });
+  await handleEventSchedulerInteraction(submit);
+  return submit;
+}
+
+test("explicit discovered all-day modal has blank time and optional blank timezone", async () => {
+  const guildId = `all-day-modal-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId);
+  const fields = await timezoneModal(guildId, client, candidate);
+  assert.equal(fields["event-time"].value || "", "");
+  assert.equal(fields["event-timezone"].value || "", "");
+  assert.equal(fields["event-timezone"].required, false);
+  assert.equal(store.listEvents(guildId).length, 0);
+});
+
+test("explicit discovered all-day blank submit preserves null event timezone and legacy fallback", async () => {
+  const guildId = `all-day-save-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId);
+  const submit = await timezoneSubmit(guildId, client, candidate);
+  assert.match(submit.replyPayload.content, /Added/);
+  const saved = store.getCalendarCandidate(guildId, candidate.id);
+  const event = store.getEvent(guildId, saved.calendar_event_id);
+  assert.equal(saved.status, "added");
+  assert.equal(event.all_day, 1);
+  assert.equal(event.event_at, null);
+  assert.equal(event.event_timezone, null);
+  assert.equal(event.timezone, "America/New_York");
+  assert.equal(saved.source_metadata, candidate.source_metadata);
+  assert.equal(store.listAnnouncements(event.id).length, 0);
+});
+
+test("explicit discovered all-day manually supplied named timezone is preserved", async () => {
+  const guildId = `all-day-named-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId);
+  await timezoneSubmit(guildId, client, candidate, { "event-timezone": "Asia/Tokyo" });
+  const event = store.getEvent(guildId, store.getCalendarCandidate(guildId, candidate.id).calendar_event_id);
+  assert.equal(event.event_timezone, "Asia/Tokyo");
+  assert.equal(event.timezone, "Asia/Tokyo");
+  assert.equal(event.all_day, 1);
+  assert.equal(event.event_at, null);
+});
+
+test("explicit discovered all-day invalid named timezone and numeric offset are rejected", async () => {
+  const guildId = `all-day-invalid-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId);
+  for (const timezone of ["Invalid/Zone", "+09:00"]) {
+    const submit = await timezoneSubmit(guildId, client, candidate, { "event-timezone": timezone });
+    assert.match(submit.replyPayload.content, /Provide a valid/);
+    assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
+    assert.equal(store.listEvents(guildId).length, 0);
+  }
+});
+
+test("explicit discovered all-day time entered manually still requires timezone", async () => {
+  const guildId = `all-day-time-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId);
+  const submit = await timezoneSubmit(guildId, client, candidate, { "event-time": "19:00" });
+  assert.match(submit.replyPayload.content, /Provide a valid/);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
+  assert.equal(store.listEvents(guildId).length, 0);
+});
+
+test("timed and non-explicit discovery metadata retain required timezone fallback", async () => {
+  for (const [index, metadata] of [
+    { allDay: false }, { allDay: "true" }, {}, "invalid-json",
+  ].entries()) {
+    const guildId = `discovery-timezone-regression-${index}-${Date.now()}`;
+    const { client } = setupGuild(guildId);
+    const candidate = timezoneCandidate(guildId, { sourceMetadata: typeof metadata === "string" ? metadata : JSON.stringify(metadata) });
+    const fields = await timezoneModal(guildId, client, candidate);
+    assert.equal(fields["event-timezone"].value, "America/New_York");
+    assert.equal(fields["event-timezone"].required, true);
+    const rejected = await timezoneSubmit(guildId, client, candidate);
+    assert.match(rejected.replyPayload.content, /Provide a valid/);
+    assert.equal(store.listEvents(guildId).length, 0);
+  }
+});
+
+test("human and proposed named timezone candidates retain modal and submission behavior", async () => {
+  for (const [index, overrides] of [
+    { sourceType: "member_submission", discoveryKey: null },
+    { proposedEventTimezone: "Asia/Seoul", proposedEventAt: "2026-12-10T10:00:00.000Z" },
+    { sourceMetadata: JSON.stringify({ allDay: false }), proposedEventTimezone: "Asia/Tokyo", proposedEventAt: "2026-12-10T10:00:00.000Z" },
+  ].entries()) {
+    const guildId = `candidate-timezone-regression-${index}-${Date.now()}`;
+    const { client } = setupGuild(guildId);
+    const candidate = timezoneCandidate(guildId, overrides);
+    const fields = await timezoneModal(guildId, client, candidate);
+    assert.equal(fields["event-timezone"].value, overrides.proposedEventTimezone || "America/New_York");
+    assert.equal(fields["event-timezone"].required, true);
+    assert.equal(fields["event-time"].value || "", index === 1 ? "19:00" : index === 2 ? "19:00" : "");
+    const rejected = await timezoneSubmit(guildId, client, candidate);
+    assert.match(rejected.replyPayload.content, /Provide a valid/);
+    await timezoneSubmit(guildId, client, candidate, {
+      "event-timezone": fields["event-timezone"].value, "event-time": fields["event-time"].value || "",
+    });
+    const event = store.getEvent(guildId, store.getCalendarCandidate(guildId, candidate.id).calendar_event_id);
+    assert.equal(event.event_timezone, fields["event-timezone"].value);
+    assert.equal(event.event_at, overrides.proposedEventAt || null);
+  }
+});
+
+test("discovered review hides raw metadata while retaining details, matches, source button and storage", async () => {
+  const guildId = `review-metadata-${Date.now()}`;
+  const { client } = setupGuild(guildId);
+  const candidate = timezoneCandidate(guildId, { proposedEventTimezone: "Asia/Tokyo", submittedNote: "Official note" });
+  const eventId = store.createCalendarEvent({
+    guildId, title: candidate.title, eventDate: candidate.proposed_event_date,
+    calendarType: "stray_kids", allDay: true, createdBy: "admin",
+  });
+  const existingEvent = store.getEvent(guildId, eventId);
+  const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
+  await handleEventSchedulerInteraction(review);
+  const content = review.updatePayload.content;
+  for (const detail of [candidate.title, candidate.proposed_event_date, "Asia/Tokyo", "All-day: Yes", "jype-straykids-schedule", "Still missing: nothing obvious", "Official note", `#${eventId}`]) {
+    assert.ok(content.includes(detail), detail);
+  }
+  assert.doesNotMatch(content, /explicitOffset|source_metadata|\+09:00/);
+  assert.ok(!content.includes(candidate.source_metadata));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data.label === "Official Source" && button.data.url === candidate.source_url)));
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_metadata, candidate.source_metadata);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
+  assert.deepEqual(store.getEvent(guildId, eventId), existingEvent);
+});
