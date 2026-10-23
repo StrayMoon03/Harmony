@@ -30,6 +30,18 @@ function candidateTitleSimilarity(left, right) {
   return overlap / new Set([...a, ...b]).size;
 }
 
+function candidateMatchesCalendarEvent(candidate, event) {
+  const title = normalizeCandidateTitle(candidate?.title);
+  const sourceUrl = normalizeCandidateUrl(candidate?.source_url);
+  if (!title && !sourceUrl) return false;
+  const sameTitle = normalizeCandidateTitle(event.title) === title;
+  const similarTitle = title && candidateTitleSimilarity(event.title, candidate.title) >= 0.75;
+  const sameDate = Boolean(candidate.proposed_event_date && event.event_date === candidate.proposed_event_date);
+  const sameSource = Boolean(sourceUrl && normalizeCandidateUrl(event.link) === sourceUrl);
+  const sameTime = Boolean(candidate.proposed_event_at && event.event_at && Math.abs(new Date(candidate.proposed_event_at).getTime() - new Date(event.event_at).getTime()) <= 2 * 60 * 60 * 1000);
+  return sameSource || (sameDate && (sameTitle || similarTitle || sameTime)) || (sameTitle && sameTime);
+}
+
 function createEvent({ guildId, sourceChannelId, destinationChannelId, title, link, timezone, eventAt, eventEndAt = null, eventDate, eventTimezone, eventLocation, calendarType, category, member = null, allDay = false, description, createdBy, announcements, calendarEventType = null, eventChannelId = null, discordEventId = null, discordEventOrigin = "harmony", recurrenceSeriesId = null, recurrenceRule = null, recurrenceIndex = null, recurrenceEndDate = null, recurrenceEndCount = null, recurrenceException = false, recurrenceNativeEnabled = false, recurrenceDefaultDescription = null, announcementChannelId = null, announcementOffsets = [], announcementMessage = null }) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -236,14 +248,31 @@ function findCandidateCalendarMatches(guildId, candidate) {
   const sourceUrl = normalizeCandidateUrl(candidate?.source_url);
   if (!title && !sourceUrl) return [];
   const rows = getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND calendar_type = 'stray_kids' AND cancelled_at IS NULL ORDER BY event_at, id").all(guildId);
-  return rows.filter((event) => {
-    const sameTitle = normalizeCandidateTitle(event.title) === title;
-    const similarTitle = title && candidateTitleSimilarity(event.title, candidate.title) >= 0.75;
-    const sameDate = Boolean(candidate.proposed_event_date && event.event_date === candidate.proposed_event_date);
-    const sameSource = Boolean(sourceUrl && normalizeCandidateUrl(event.link) === sourceUrl);
-    const sameTime = Boolean(candidate.proposed_event_at && event.event_at && Math.abs(new Date(candidate.proposed_event_at).getTime() - new Date(event.event_at).getTime()) <= 2 * 60 * 60 * 1000);
-    return sameSource || (sameDate && (sameTitle || similarTitle || sameTime)) || (sameTitle && sameTime);
-  });
+  return rows.filter((event) => candidateMatchesCalendarEvent(candidate, event));
+}
+
+function getCandidateMatchDiagnostics(guildId, candidate) {
+  if (!candidate?.proposed_event_date) return [];
+  const rows = getDb().prepare(`SELECT id, title, event_date, event_at, all_day, link, cancelled_at
+    FROM scheduled_events
+    WHERE guild_id = ? AND calendar_type = 'stray_kids' AND cancelled_at IS NULL AND event_date = ?
+    ORDER BY event_at, id`).all(guildId, candidate.proposed_event_date);
+  const normalizedTitle = normalizeCandidateTitle(candidate.title);
+  const normalizedSourceUrl = normalizeCandidateUrl(candidate.source_url);
+  return rows.map((event) => ({
+    ...event,
+    all_day: Boolean(event.all_day),
+    normalized_candidate_title: normalizedTitle,
+    normalized_calendar_title: normalizeCandidateTitle(event.title),
+    title_similarity: candidateTitleSimilarity(candidate.title, event.title),
+    exact_normalized_title_match: normalizedTitle === normalizeCandidateTitle(event.title),
+    exact_date_match: Boolean(candidate.proposed_event_date && candidate.proposed_event_date === event.event_date),
+    normalized_source_url_match: Boolean(normalizedSourceUrl && normalizedSourceUrl === normalizeCandidateUrl(event.link)),
+    time_within_two_hours: candidate.proposed_event_at && event.event_at
+      ? Math.abs(new Date(candidate.proposed_event_at).getTime() - new Date(event.event_at).getTime()) <= 2 * 60 * 60 * 1000
+      : null,
+    current_matcher_match: candidateMatchesCalendarEvent(candidate, event),
+  }));
 }
 
 function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, discoveryKey = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
@@ -791,6 +820,7 @@ module.exports = {
   getCalendarCandidate,
   listCalendarCandidates,
   findCandidateCalendarMatches,
+  getCandidateMatchDiagnostics,
   createOrGetCalendarCandidate,
   getCalendarDiscoveryState,
   saveCalendarDiscoveryState,

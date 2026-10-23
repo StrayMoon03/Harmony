@@ -26,13 +26,14 @@ function candidate(f, title = 'First event', extra = {}) {
   }).candidate;
 }
 async function interact(f, customId, extra = {}) {
-  const calls = { reply: [], update: [], modal: [] };
+  const calls = { reply: [], update: [], modal: [], followUp: [] };
   const i = { guildId: f.guildId, client: f.client, customId,
     user: { id: 'admin' }, memberPermissions: { has: () => true },
     isButton: () => !extra.modal && !extra.select,
     isModalSubmit: () => Boolean(extra.modal), isStringSelectMenu: () => Boolean(extra.select),
     fields: { getTextInputValue: key => extra.fields?.[key] || '' }, values: extra.values || [],
     reply: async payload => calls.reply.push(payload), update: async payload => calls.update.push(payload),
+    followUp: async payload => calls.followUp.push(payload),
     showModal: async payload => calls.modal.push(payload),
   };
   if (extra.deny) i.memberPermissions = { has: () => false };
@@ -84,6 +85,7 @@ test('one private browser reopens persisted candidates with deleted notices and 
   assert.equal(review.reply.length, 0); assert.equal(review.update.length, 1);
   assert.match(review.update[0].content, /Potential Stray Kids event/);
   assert.match(review.update[0].content, /All-day: Yes/);
+  assert.ok(buttons(review.update[0]).some(button => button.label === 'Temporary Match Diagnostic'));
   assert.doesNotMatch(review.update[0].content, /"allDay"/);
   const back = await interact(f, id(review.update[0], 'Back to Discovered Events'));
   assert.match(back.update[0].content, /1 of 2/);
@@ -110,6 +112,67 @@ test('inbox and candidate actions retain admin checks and guild isolation', asyn
   const other = fixture();
   const isolated = await interact(other, `harmony-manager:candidate:review:${c.id}:inbox:0`);
   assert.match(isolated.update[0].content, /0 events awaiting review/);
+});
+
+test('temporary match diagnostic is admin-only, read-only, scoped, and uses matcher normalization', async () => {
+  const f = fixture();
+  const c = candidate(f, 'Stray Kids World Tour <RUN IT> FUKUOKA', {
+    proposedEventDate: '2026-10-24', proposedEventAt: null,
+    sourceUrl: 'https://JYPE.example/event?utm_source=discord&id=42#details',
+  });
+  const addEvent = (guildId, calendarType, title, date, link, extra = {}) => store.createCalendarEvent({
+    guildId, title, link, calendarType, category: 'concert', eventDate: date,
+    eventAt: null, allDay: true, createdBy: 'admin', ...extra,
+  });
+  const sameDate = addEvent(f.guildId, 'stray_kids', 'Stray Kids World Tour RUN IT Fukuoka', '2026-10-24', 'https://jype.example/event?id=42');
+  addEvent(f.guildId, 'stray_kids', 'Other date', '2026-10-25', null);
+  addEvent(f.guildId, 'community', 'Wrong calendar', '2026-10-24', null);
+  const otherGuild = fixture();
+  addEvent(otherGuild.guildId, 'stray_kids', 'Other guild', '2026-10-24', null);
+  const cancelled = addEvent(f.guildId, 'stray_kids', 'Cancelled', '2026-10-24', null);
+  store.cancelEvent(f.guildId, cancelled, 'admin');
+
+  const denied = await interact(f, `harmony-manager:candidate:diagnostic:${c.id}`, { deny: true });
+  assert.match(denied.reply[0].content, /Only server admins/);
+  assert.equal(denied.reply[0].flags, 64);
+
+  const beforeCandidate = store.getCalendarCandidate(f.guildId, c.id);
+  const beforeEvents = store.listEvents(f.guildId).map(event => ({ id: event.id, cancelled_at: event.cancelled_at, title: event.title }));
+  const diagnostic = await interact(f, `harmony-manager:candidate:diagnostic:${c.id}`);
+  assert.equal(diagnostic.reply.length, 1);
+  assert.equal(diagnostic.reply[0].flags, 64);
+  assert.match(diagnostic.reply[0].content, /TEMPORARY DISCOVERED EVENT MATCH DIAGNOSTIC/);
+  assert.match(diagnostic.reply[0].content, new RegExp(`candidate ID: ${c.id}`));
+  assert.match(diagnostic.reply[0].content, /source_provider: jype-straykids-schedule/);
+  assert.match(diagnostic.reply[0].content, /ACTIVE STRAY KIDS CALENDAR EVENTS ON THE SAME DATE: 1/);
+  assert.match(diagnostic.reply[0].content, new RegExp(`calendar event ID: ${sameDate}`));
+  assert.match(diagnostic.reply[0].content, /normalized candidate title: stray kids world tour run it fukuoka/);
+  assert.match(diagnostic.reply[0].content, /normalized calendar title: stray kids world tour run it fukuoka/);
+  assert.match(diagnostic.reply[0].content, /title similarity \(Jaccard\): 1\.000/);
+  assert.match(diagnostic.reply[0].content, /exact normalized-title match: true/);
+  assert.match(diagnostic.reply[0].content, /exact date match: true/);
+  assert.match(diagnostic.reply[0].content, /normalized source URL match: true/);
+  assert.match(diagnostic.reply[0].content, /time within 2 hours: N\/A/);
+  assert.match(diagnostic.reply[0].content, /CURRENT matcher considers match: true/);
+  assert.equal(diagnostic.reply[0].content.length <= 2000, true);
+  assert.deepEqual(store.getCalendarCandidate(f.guildId, c.id), beforeCandidate);
+  assert.deepEqual(store.listEvents(f.guildId).map(event => ({ id: event.id, cancelled_at: event.cancelled_at, title: event.title })), beforeEvents);
+  assert.deepEqual(store.listAnnouncements(sameDate), []);
+});
+
+test('temporary match diagnostic splits large private output within Discord message limits', async () => {
+  const f = fixture();
+  const c = candidate(f, 'Large diagnostic candidate', { proposedEventDate: '2026-10-24' });
+  for (let index = 0; index < 18; index += 1) {
+    store.createCalendarEvent({ guildId: f.guildId, title: `Same-date event ${index} ${'x'.repeat(130)}`,
+      link: `https://official.example/${index}/${'y'.repeat(130)}`, calendarType: 'stray_kids',
+      category: 'concert', eventDate: '2026-10-24', allDay: true, createdBy: 'admin' });
+  }
+  const result = await interact(f, `harmony-manager:candidate:diagnostic:${c.id}`);
+  const messages = [...result.reply, ...result.followUp];
+  assert.ok(messages.length > 1);
+  assert.ok(messages.every(message => message.flags === 64 && message.content.length <= 2000));
+  assert.match(messages.map(message => message.content).join('\n'), /calendar event ID:/);
 });
 
 test('Ignore updates detailed browser and Back reloads pending records', async () => {
