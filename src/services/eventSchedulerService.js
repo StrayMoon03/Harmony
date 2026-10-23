@@ -1057,6 +1057,8 @@ function materializeNativeSeriesAnnouncements(guildId, anchor, occurrences) {
 async function syncDiscordRecurringSeries(guildId, anchor, until = null) {
   if (!anchor?.recurrence_series_id || Number(anchor.recurrence_native_enabled) !== NATIVE_RECURRENCE_MODE) return [];
   const occurrences = nativeSeriesOccurrences(anchor, until);
+  const presentationTimezone = calendarPresentationTimezone(anchor);
+  const occurrenceDate = (occurrence) => calendarDateInTimezone(occurrence.eventAt, presentationTimezone) || occurrence.eventAt.slice(0, 10);
   const anchorOccurrence = occurrences.find((item) => Number(item.occurrenceIndex) === 0);
   // A native series can be attached to an older Harmony recurrence whose
   // indexes exist but whose persisted dates are stale. Reconcile those dates
@@ -1064,28 +1066,28 @@ async function syncDiscordRecurringSeries(guildId, anchor, until = null) {
   if (anchorOccurrence && Number(anchor.recurrence_index) === 0 && (
     anchor.event_at !== anchorOccurrence.eventAt ||
     anchor.event_end_at !== anchorOccurrence.eventEndAt ||
-    anchor.event_date !== anchorOccurrence.eventAt.slice(0, 10)
+    anchor.event_date !== occurrenceDate(anchorOccurrence)
   )) {
     anchor = store.updateEvent(guildId, anchor.id, {
       event_at: anchorOccurrence.eventAt,
       event_end_at: anchorOccurrence.eventEndAt,
-      event_date: anchorOccurrence.eventAt.slice(0, 10),
+      event_date: occurrenceDate(anchorOccurrence),
     }) || anchor;
   }
   for (const occurrence of occurrences) {
     if (Number(occurrence.occurrenceIndex) === Number(anchor.recurrence_index)) continue;
     const existing = store.getSeriesEvent(guildId, anchor.recurrence_series_id, occurrence.occurrenceIndex);
     if (existing) {
-      if (existing.event_at !== occurrence.eventAt || existing.event_end_at !== occurrence.eventEndAt || existing.event_date !== occurrence.eventAt.slice(0, 10)) {
+      if (existing.event_at !== occurrence.eventAt || existing.event_end_at !== occurrence.eventEndAt || existing.event_date !== occurrenceDate(occurrence)) {
         store.updateEvent(guildId, existing.id, {
           event_at: occurrence.eventAt,
           event_end_at: occurrence.eventEndAt,
-          event_date: occurrence.eventAt.slice(0, 10),
+          event_date: occurrenceDate(occurrence),
         });
       }
       continue;
     }
-    store.createSeriesOccurrence(guildId, anchor.recurrence_series_id, occurrence, anchor);
+    store.createSeriesOccurrence(guildId, anchor.recurrence_series_id, { ...occurrence, eventDate: occurrenceDate(occurrence) }, anchor);
   }
   materializeNativeSeriesAnnouncements(guildId, anchor, occurrences);
   return occurrences;
@@ -1182,14 +1184,24 @@ function draftKey(interaction, calendarType, eventId = "new") {
   return `${interaction.guildId}:${interaction.user.id}:${calendarType}:${eventId}`;
 }
 
-function upcomingCalendarEvents(guildId, calendarType) {
-  const now = new Date();
+function isUpcomingCalendarEvent(event, now = new Date()) {
+  if (event?.event_at && !event.all_day) {
+    const eventAt = new Date(event.event_at);
+    return !Number.isNaN(eventAt.getTime()) && eventAt >= now;
+  }
+  const timezone = calendarPresentationTimezone(event);
+  const eventDate = event?.event_date || (event?.event_at ? calendarDateInTimezone(event.event_at, timezone) : null);
+  const today = calendarDateInTimezone(now, timezone);
+  return Boolean(eventDate && today && eventDate >= today);
+}
+
+function upcomingCalendarEvents(guildId, calendarType, now = new Date()) {
   const start = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
   const end = new Date(now.getTime() + 366 * 24 * 60 * 60 * 1000).toISOString();
-  // Linked native events remain editable even when Discord's recurring event
-  // has an initial scheduledStartAt in the past. The native event itself is
-  // still active; its discord_event_id is the durable eligibility signal.
-  return store.listEditableCalendarEvents(guildId, calendarType, start, end);
+  // Include linked native series anchors in the query window, then evaluate
+  // each occurrence below so historical linked events are not selectable.
+  return store.listEditableCalendarEvents(guildId, calendarType, start, end)
+    .filter((event) => isUpcomingCalendarEvent(event, now));
 }
 
 async function installScheduleManagers(guild) {
@@ -2181,7 +2193,7 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   const nextNativeRule = nativeRecurrencePayload(event, effectiveAnchorAt);
   const recurrenceChanged = Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule !== linked.recurrence_rule;
   if (oldEvent && oldEvent.name === event.name && oldEvent.scheduledStartAt?.getTime() === event.scheduledStartAt.getTime() && oldEvent.scheduledEndAt?.getTime() === event.scheduledEndAt?.getTime() && !recurrenceChanged) return;
-  const timezone = linked.event_timezone || linked.timezone;
+  const timezone = calendarPresentationTimezone(linked);
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(event.scheduledStartAt);
   const localDate = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
   const isNativeSeriesAnchor = Boolean(linked.recurrence_series_id && Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE);
@@ -2274,8 +2286,8 @@ async function addNativeEventToCalendar(interaction, discordEventId, description
     ? store.findAdoptableNativeEventByTitleAndAt(interaction.guildId, event.name, eventAt)
     : store.findActiveCommunityEventByTitleAndAt(interaction.guildId, event.name, eventAt);
   if (existingOccurrence) return adoptNativeIntoExistingEvent(interaction, event, existingOccurrence, description, descriptions, cutoffDate, adoptSeries, genericDescription, presentationTimezone);
-  const eventDate = eventAt.slice(0, 10);
   const timezone = validTimezone(presentationTimezone) ? presentationTimezone : DEFAULT_YOUTIFUL_TIMEZONE;
+  const eventDate = calendarDateInTimezone(eventAt, timezone) || eventAt.slice(0, 10);
   const hasSeriesDefault = Boolean(recurrenceRule && descriptions && genericDescription !== null);
   const normalizedGenericDescription = hasSeriesDefault ? String(genericDescription || "").trim() : null;
   const seriesId = recurrenceRule ? randomUUID() : null;
@@ -3966,6 +3978,7 @@ module.exports = {
   YOUTIFUL_EVENT_TYPE_LABELS,
   YOUTIFUL_TIMEZONE_OPTIONS,
   calendarDateInTimezone,
+  upcomingCalendarEvents,
   calendarCutoffBoundary,
   nativeCutoffDate,
   nativeDescriptionOccurrences,

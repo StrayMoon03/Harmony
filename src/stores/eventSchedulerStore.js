@@ -404,7 +404,8 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
   try {
     const existing = db.prepare(`
       SELECT * FROM scheduled_events
-      WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = ? AND cancelled_at IS NULL
+      WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = ?
+      ORDER BY CASE WHEN cancelled_at IS NULL THEN 0 ELSE 1 END, id
       LIMIT 1
     `).get(guildId, seriesId, occurrence.occurrenceIndex);
     if (existing) {
@@ -440,7 +441,7 @@ function createSeriesOccurrence(guildId, seriesId, occurrence, template) {
       template.calendar_type,
       occurrence.eventAt,
       occurrence.eventEndAt,
-      occurrence.eventAt.slice(0, 10),
+      occurrence.eventDate || occurrence.eventAt.slice(0, 10),
       template.event_timezone || storedTimezone,
       template.event_location || null,
       description || null,
