@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const store = require('../src/stores/eventSchedulerStore');
-const { managerPanelComponents, handleEventSchedulerInteraction } = require('../src/services/eventSchedulerService');
+const { managerPanelComponents, handleEventSchedulerInteraction, buildCalendarMessages } = require('../src/services/eventSchedulerService');
 const { runDiscovery } = require('../src/services/calendarDiscoveryService');
 
 function fixture() {
@@ -54,10 +54,10 @@ const buttons = payload => payload.components.flatMap(row => row.components.map(
 const id = (payload, label) => buttons(payload).find(c => c.label === label).custom_id;
 const open = f => interact(f, 'harmony-manager:stray_kids:candidate-inbox');
 
-test('Review Candidates is restricted to the Stray Kids manager', () => {
+test('Review Discovered Events is restricted to the Stray Kids manager', () => {
   const skz = managerPanelComponents('stray_kids').flatMap(row => row.components);
-  assert.ok(skz.some(b => b.data.label === '📋 Review Candidates'));
-  assert.ok(!managerPanelComponents('community').flatMap(row => row.components).some(b => b.data.label === '📋 Review Candidates'));
+  assert.ok(skz.some(b => b.data.label === '📋 Review Discovered Events'));
+  assert.ok(!managerPanelComponents('community').flatMap(row => row.components).some(b => b.data.label === '📋 Review Discovered Events'));
   assert.ok(skz.every(b => b.data.custom_id.length <= 100));
 });
 
@@ -70,7 +70,8 @@ test('one private browser reopens persisted candidates with deleted notices and 
   const opened = await open(f);
   assert.equal(opened.reply.length, 1); assert.equal(opened.reply[0].flags, 64);
   const p = opened.reply[0];
-  assert.match(p.content, /2 pending candidates/); assert.match(p.content, /1 of 2 — First event/);
+  assert.match(p.content, /📋 \*\*DISCOVERED EVENTS\*\*/); assert.match(p.content, /2 events awaiting review/);
+  assert.match(p.content, new RegExp(`Event #${first.id}`)); assert.match(p.content, /1 of 2 — First event/);
   assert.match(p.content, /Seoul/); assert.doesNotMatch(p.content, /https?:\/\//);
   assert.equal(buttons(p).find(b => b.label === '◀ Previous').disabled, true);
   const next = await interact(f, id(p, 'Next ▶'));
@@ -84,7 +85,7 @@ test('one private browser reopens persisted candidates with deleted notices and 
   assert.match(review.update[0].content, /Potential Stray Kids event/);
   assert.match(review.update[0].content, /All-day: Yes/);
   assert.doesNotMatch(review.update[0].content, /"allDay"/);
-  const back = await interact(f, id(review.update[0], 'Back to Candidate Inbox'));
+  const back = await interact(f, id(review.update[0], 'Back to Discovered Events'));
   assert.match(back.update[0].content, /1 of 2/);
   const closed = await interact(f, id(back.update[0], 'Close'));
   assert.deepEqual(closed.update[0].components, []);
@@ -93,11 +94,11 @@ test('one private browser reopens persisted candidates with deleted notices and 
 
 test('empty inbox and stale selection recover without reposting or reopening candidates', async () => {
   const f = fixture(); const empty = (await open(f)).reply[0];
-  assert.match(empty.content, /No pending candidates/);
+  assert.match(empty.content, /0 events awaiting review/);
   const c = candidate(f); const page = (await open(f)).reply[0];
   store.decideCalendarCandidate(f.guildId, c.id, 'dismissed', 'other-admin');
   const stale = await interact(f, id(page, 'Review'));
-  assert.match(stale.update[0].content, /No pending candidates/);
+  assert.match(stale.update[0].content, /0 events awaiting review/);
   assert.equal(store.getCalendarCandidate(f.guildId, c.id).status, 'dismissed');
   assert.equal(f.sent.length, 0);
 });
@@ -108,39 +109,77 @@ test('inbox and candidate actions retain admin checks and guild isolation', asyn
   assert.match(denied.reply[0].content, /Only server admins/);
   const other = fixture();
   const isolated = await interact(other, `harmony-manager:candidate:review:${c.id}:inbox:0`);
-  assert.match(isolated.update[0].content, /No pending candidates/);
+  assert.match(isolated.update[0].content, /0 events awaiting review/);
 });
 
 test('Ignore updates detailed browser and Back reloads pending records', async () => {
   const f = fixture(); const c = candidate(f); candidate(f, 'Remaining event');
   const review = await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`);
   const ignored = await interact(f, id(review.update[0], 'Dismiss'));
-  assert.match(ignored.update[0].content, /Ignored/);
+  assert.match(ignored.update[0].content, new RegExp(`Event #${c.id} \\u2022 Dismissed`));
   assert.equal(store.getCalendarCandidate(f.guildId, c.id).status, 'dismissed');
-  const back = await interact(f, id(ignored.update[0], 'Back to Candidate Inbox'));
-  assert.match(back.update[0].content, /1 pending candidates/); assert.match(back.update[0].content, /Remaining event/);
+  const back = await interact(f, id(ignored.update[0], 'Back to Discovered Events'));
+  assert.match(back.update[0].content, /1 events awaiting review/); assert.match(back.update[0].content, /Remaining event/);
   assert.equal(store.listEvents(f.guildId).length, 0);
 });
 
-test('Add through browser preserves blank and named timezone all-day behavior and returns Back', async () => {
+test('Add uses timezone selection and preserves blank/named all-day timezone behavior', async () => {
   for (const timezone of ['', 'Asia/Seoul']) {
     const f = fixture(); const c = candidate(f);
     const review = (await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`)).update[0];
     const add = await interact(f, id(review, 'Add to Calendar'));
-    const modal = add.modal[0].toJSON();
-    const tz = modal.components.flatMap(row => row.components).find(field => field.custom_id === 'event-timezone');
-    assert.equal(tz.required, false); assert.equal(tz.value, undefined);
+    const menu = buttons(add.update[0]).find(component => component.type === 3 || component.type === undefined && component.custom_id?.includes('addtimezone'));
+    const options = add.update[0].components.flatMap(row => row.components).find(component => component.data.type === 3).toJSON().options;
+    assert.ok(options.some(option => option.value === 'Asia/Tokyo'));
+    assert.equal(options.some(option => option.value === 'none'), true);
+    const selected = await interact(f, menu.custom_id, { select: true, values: [timezone || 'none'] });
+    const modal = selected.modal[0].toJSON();
+    assert.equal(modal.components.flatMap(row => row.components).some(field => field.custom_id === 'event-timezone'), false);
     const added = await interact(f, modal.custom_id, { modal: true,
-      fields: { title: c.title, 'event-date': '2026-12-01', 'event-timezone': timezone },
+      fields: { title: c.title, 'event-date': '2026-12-01' },
     });
     assert.equal(added.reply.length, 0); assert.match(added.update[0].content, /Added/);
     const decided = store.getCalendarCandidate(f.guildId, c.id);
     assert.equal(decided.status, 'added');
     const event = store.getEvent(f.guildId, decided.calendar_event_id);
     assert.equal(event.event_at, null); assert.equal(event.event_timezone, timezone || null);
-    const back = await interact(f, id(added.update[0], 'Back to Candidate Inbox'));
-    assert.match(back.update[0].content, /No pending candidates/);
+    assert.match(added.update[0].content, new RegExp(`Event #${c.id} \\u2022 Added`));
+    const back = await interact(f, id(added.update[0], 'Back to Discovered Events'));
+    assert.match(back.update[0].content, /0 events awaiting review/);
   }
+});
+
+test('timed discovered events require a selected valid timezone and persist Asia/Tokyo', async () => {
+  const f = fixture();
+  const c = candidate(f, 'Tokyo show', {
+    sourceMetadata: JSON.stringify({ allDay: false }),
+    proposedEventAt: '2026-11-07T08:00:00.000Z', proposedEventTimezone: 'Asia/Tokyo',
+  });
+  const review = (await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`)).update[0];
+  const add = await interact(f, id(review, 'Add to Calendar'));
+  const menu = buttons(add.update[0]).find(component => component.type === 3 || component.type === undefined && component.custom_id?.includes('addtimezone'));
+  const options = add.update[0].components.flatMap(row => row.components).find(component => component.data.type === 3).toJSON().options;
+  assert.ok(options.find(option => option.value === 'Asia/Tokyo').default);
+  assert.equal(options.some(option => option.value === 'none'), false);
+  const selected = await interact(f, menu.custom_id, { select: true, values: ['Asia/Tokyo'] });
+  const modal = selected.modal[0].toJSON();
+  const invalid = await interact(f, modal.custom_id.replace(':tz:Asia%2FTokyo', ':tz:none'), { modal: true,
+    fields: { title: c.title, 'event-date': '2026-11-07', 'event-time': '17:00' },
+  });
+  assert.match(invalid.reply[0].content, /selected timezone/);
+  assert.equal(store.getCalendarCandidate(f.guildId, c.id).status, 'open');
+  const valid = await interact(f, modal.custom_id, { modal: true,
+    fields: { title: c.title, 'event-date': '2026-11-07', 'event-time': '17:00' },
+  });
+  assert.match(valid.update[0].content, new RegExp(`Event #${c.id} \\u2022 Added`));
+  const decided = store.getCalendarCandidate(f.guildId, c.id);
+  const event = store.getEvent(f.guildId, decided.calendar_event_id);
+  assert.equal(event.event_timezone, 'Asia/Tokyo');
+  assert.equal(event.timezone, 'Asia/Tokyo');
+  assert.equal(event.event_at, '2026-11-07T08:00:00.000Z');
+  const preview = buildCalendarMessages('stray_kids', '2026-11', [event])[0].embeds[0].description;
+  const timestamp = Number(preview.match(/<t:(\d+):t>/)[1]);
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(timestamp * 1000)), '3:00 AM EST');
 });
 
 function calendarEvent(f, title, link) {
@@ -157,13 +196,13 @@ test('Link Existing uses current review matching and preserves inbox context', a
     const review = (await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`)).update[0];
     let linked = await interact(f, id(review, 'Link Existing'));
     if (multiple) {
-      const menu = buttons(linked.update[0]).find(b => b.type === 3);
+      const menu = buttons(linked.update[0]).find(b => b.type === 3 || b.custom_id?.includes('linkselect'));
       assert.ok(menu.custom_id.endsWith(':inbox:0'));
-      assert.ok(id(linked.update[0], 'Back to Candidate Inbox'));
+      assert.ok(id(linked.update[0], 'Back to Discovered Events'));
       linked = await interact(f, menu.custom_id, { select: true, values: [String(eventId)] });
     }
     assert.match(linked.update[0].content, /Linked/);
-    assert.ok(id(linked.update[0], 'Back to Candidate Inbox'));
+    assert.ok(id(linked.update[0], 'Back to Discovered Events'));
     assert.equal(store.getCalendarCandidate(f.guildId, c.id).status, 'linked');
     assert.equal(store.getCalendarCandidate(f.guildId, c.id).calendar_event_id, eventId);
   }
@@ -179,5 +218,5 @@ test('multiple newly discovered and already-known records never create per-candi
   assert.equal(repeat.results[0].newCount, 0); assert.equal(repeat.results[0].duplicate, 3);
   assert.equal(f.sent.length, 0);
   assert.equal(store.listCalendarCandidates(f.guildId).length, 3);
-  assert.match((await open(f)).reply[0].content, /3 pending candidates/);
+  assert.match((await open(f)).reply[0].content, /3 events awaiting review/);
 });

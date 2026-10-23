@@ -365,7 +365,7 @@ test("discovered all-day candidate is compact, reviewed in-place, and preserves 
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
   const dismiss = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(dismiss);
-  assert.match(dismiss.updatePayload.content, /Ignored/);
+  assert.match(dismiss.updatePayload.content, /Dismissed/);
   assert.deepEqual(dismiss.updatePayload.components, []);
   const stale = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(stale);
@@ -401,13 +401,35 @@ function timezoneCandidate(guildId, overrides = {}) {
 async function timezoneModal(guildId, client, candidate) {
   const add = managerInteraction(guildId, client, `harmony-manager:candidate:add:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(add);
-  return Object.fromEntries(add.modal.components.map(row => [row.components[0].data.custom_id, row.components[0].data]));
+  if (add.modal) {
+    const fields = Object.fromEntries(add.modal.components.map(row => [row.components[0].data.custom_id, row.components[0].data]));
+    fields._modalCustomId = add.modal.data.custom_id;
+    fields._timezoneOptions = [];
+    return fields;
+  }
+  const menu = add.updatePayload.components.flatMap(row => row.components).find(component => component.data.type === 3);
+  const options = menu.toJSON().options;
+  let sourceMetadata = {};
+  try { sourceMetadata = JSON.parse(candidate.source_metadata || "{}"); } catch { /* invalid discovery metadata */ }
+  const selectedTimezone = candidate.proposed_event_timezone || (sourceMetadata.allDay === true ? "none" : "Asia/Tokyo");
+  const selected = managerInteraction(guildId, client, menu.data.custom_id, { kind: "select", values: [selectedTimezone] });
+  await handleEventSchedulerInteraction(selected);
+  const fields = Object.fromEntries(selected.modal.components.map(row => [row.components[0].data.custom_id, row.components[0].data]));
+  fields["event-timezone"] = { value: selectedTimezone === "none" ? "" : selectedTimezone, required: false };
+  fields._timezoneOptions = options;
+  fields._modalCustomId = selected.modal.data.custom_id;
+  return fields;
 }
 
 async function timezoneSubmit(guildId, client, candidate, fields = {}) {
-  const submit = managerInteraction(guildId, client, `harmony-manager:candidate:addmodal:${candidate.id}`, {
+  const base = await timezoneModal(guildId, client, candidate);
+  const selectedTimezone = fields["event-timezone"] || "none";
+  const modalId = base._modalCustomId.includes(":tz:")
+    ? base._modalCustomId.replace(/:tz:[^:]+$/, `:tz:${encodeURIComponent(selectedTimezone)}`)
+    : base._modalCustomId;
+  const submit = managerInteraction(guildId, client, modalId, {
     kind: "modal",
-    fields: { title: candidate.title, "event-date": candidate.proposed_event_date, "event-time": "", "event-timezone": "", ...fields },
+    fields: { title: candidate.title, "event-date": candidate.proposed_event_date, "event-time": "", ...fields },
   });
   await handleEventSchedulerInteraction(submit);
   return submit;
@@ -420,7 +442,7 @@ test("explicit discovered all-day modal has blank time and optional blank timezo
   const fields = await timezoneModal(guildId, client, candidate);
   assert.equal(fields["event-time"].value || "", "");
   assert.equal(fields["event-timezone"].value || "", "");
-  assert.equal(fields["event-timezone"].required, false);
+  assert.ok(fields._timezoneOptions.some(option => option.value === "Asia/Tokyo"));
   assert.equal(store.listEvents(guildId).length, 0);
 });
 
@@ -457,12 +479,12 @@ test("explicit discovered all-day invalid named timezone and numeric offset are 
   const guildId = `all-day-invalid-${Date.now()}`;
   const { client } = setupGuild(guildId);
   const candidate = timezoneCandidate(guildId);
+  const fields = await timezoneModal(guildId, client, candidate);
   for (const timezone of ["Invalid/Zone", "+09:00"]) {
-    const submit = await timezoneSubmit(guildId, client, candidate, { "event-timezone": timezone });
-    assert.match(submit.replyPayload.content, /Provide a valid/);
-    assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
-    assert.equal(store.listEvents(guildId).length, 0);
+    assert.equal(fields._timezoneOptions.some(option => option.value === timezone), false);
   }
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
+  assert.equal(store.listEvents(guildId).length, 0);
 });
 
 test("explicit discovered all-day time entered manually still requires timezone", async () => {
@@ -483,8 +505,8 @@ test("timed and non-explicit discovery metadata retain required timezone fallbac
     const { client } = setupGuild(guildId);
     const candidate = timezoneCandidate(guildId, { sourceMetadata: typeof metadata === "string" ? metadata : JSON.stringify(metadata) });
     const fields = await timezoneModal(guildId, client, candidate);
-    assert.equal(fields["event-timezone"].value, "America/New_York");
-    assert.equal(fields["event-timezone"].required, true);
+    assert.ok(fields._timezoneOptions.some(option => option.value === "Asia/Tokyo"));
+    assert.equal(fields._timezoneOptions.some(option => option.value === "none"), false);
     const rejected = await timezoneSubmit(guildId, client, candidate);
     assert.match(rejected.replyPayload.content, /Provide a valid/);
     assert.equal(store.listEvents(guildId).length, 0);
@@ -501,8 +523,8 @@ test("human and proposed named timezone candidates retain modal and submission b
     const { client } = setupGuild(guildId);
     const candidate = timezoneCandidate(guildId, overrides);
     const fields = await timezoneModal(guildId, client, candidate);
-    assert.equal(fields["event-timezone"].value, overrides.proposedEventTimezone || "America/New_York");
-    assert.equal(fields["event-timezone"].required, true);
+    if (fields._timezoneOptions.length) assert.ok(fields._timezoneOptions.some(option => option.value === (overrides.proposedEventTimezone || "Asia/Tokyo")));
+    else assert.equal(fields["event-timezone"].value, overrides.proposedEventTimezone || "America/New_York");
     assert.equal(fields["event-time"].value || "", index === 1 ? "19:00" : index === 2 ? "19:00" : "");
     const rejected = await timezoneSubmit(guildId, client, candidate);
     assert.match(rejected.replyPayload.content, /Provide a valid/);
