@@ -114,6 +114,7 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel("📋 Review Candidates").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }
@@ -1672,6 +1673,52 @@ function isExplicitDiscoveryAllDay(candidate) {
   }
 }
 
+// The browser reads durable candidates, never their Discord notice messages.
+function discoveryInboxPayload(guildId, requestedIndex = 0) {
+  const candidates = store.listCalendarCandidates(guildId, "open").filter(isDiscoveryCandidate);
+  const index = Math.max(0, Math.min(Number.isSafeInteger(requestedIndex) ? requestedIndex : 0, candidates.length - 1));
+  const candidate = candidates[index];
+  const prefix = "harmony-manager:inbox";
+  const close = new ButtonBuilder().setCustomId(`${prefix}:close`).setLabel("Close").setStyle(ButtonStyle.Secondary);
+  if (!candidate) return {
+    content: "📋 **DISCOVERY CANDIDATES**\nNo pending candidates.",
+    components: [new ActionRowBuilder().addComponents(close)], allowedMentions: { parse: [] },
+  };
+  let metadata = {};
+  try { metadata = JSON.parse(candidate.source_metadata || "{}"); } catch { /* Optional display data only. */ }
+  const text = (value, limit) => String(value || "").replace(/https?:\/\/\S+/gi, "[source link]").slice(0, limit);
+  return {
+    content: ["📋 **DISCOVERY CANDIDATES**", `${candidates.length} pending candidates`, "",
+      `${index + 1} of ${candidates.length} — ${text(candidate.title || "Untitled event", 180)}`,
+      `📅 ${candidateDateLabel(candidate)}`,
+      ...(metadata?.location ? [`📍 ${text(metadata.location, 150)}`] : []),
+      `Source: ${text(candidate.source_provider, 100)}`,
+    ].join("\n"),
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${prefix}:page:${index - 1}`).setLabel("◀ Previous").setStyle(ButtonStyle.Secondary).setDisabled(index === 0),
+      new ButtonBuilder().setCustomId(`harmony-manager:candidate:review:${candidate.id}:inbox:${index}`).setLabel("Review").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${prefix}:page:${index + 1}`).setLabel("Next ▶").setStyle(ButtonStyle.Secondary).setDisabled(index === candidates.length - 1),
+      close,
+    )], allowedMentions: { parse: [] },
+  };
+}
+
+// Preserve browser context through the existing review buttons, menus and modal.
+function withInboxBack(payload, index) {
+  if (index === null) return payload;
+  delete payload.flags;
+  for (const row of payload.components || []) {
+    for (const component of row.components) {
+      const id = component.data?.custom_id;
+      if (id?.startsWith("harmony-manager:candidate:")) component.setCustomId(`${id}:inbox:${index}`);
+    }
+  }
+  payload.components = [...(payload.components || []), new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-manager:inbox:page:${index}`).setLabel("Back to Candidate Inbox").setStyle(ButtonStyle.Secondary),
+  )];
+  return payload;
+}
+
 function candidateFinalPayload(candidate, decision) {
   return {
     content: `**Candidate #${candidate.id} • ${decision}**\n${candidate.proposed_event_date || "Date not provided"} • ${candidate.title || "Untitled event"}`,
@@ -1740,6 +1787,8 @@ async function submitCalendarCandidate(client, input) {
   }
   const { skipEnrichment, ...candidateInput } = input;
   const result = store.createOrGetCalendarCandidate({ ...candidateInput, ...enriched });
+  // Discovery candidates are accessed through the manager inbox, not one post per record.
+  if (isDiscoveryCandidate(result.candidate)) return { ...result, notice: null, noticeSent: false };
   if (result.duplicate) {
     if (result.candidate?.status === "open" && !result.candidate.notice_message_id && client) {
       const channel = await managerControlChannel(client, input.guildId);
@@ -2369,18 +2418,27 @@ async function handleManagerInteraction(interaction) {
     return;
   }
   const parts = interaction.customId.split(":");
+  if (parts[1] === "inbox" && interaction.isButton()) {
+    await interaction.update(parts[2] === "close"
+      ? { content: "Candidate Inbox closed.", components: [], allowedMentions: { parse: [] } }
+      : discoveryInboxPayload(interaction.guildId, Number(parts[3])));
+    return;
+  }
   if (parts[1] === "candidate") {
     const action = parts[2];
     const candidateId = Number(parts[3]);
+    const inboxIndex = parts[4] === "inbox" ? Math.max(0, Number(parts[5]) || 0) : null;
+    const inboxPayload = (payload) => withInboxBack(payload, inboxIndex);
     const candidate = store.getCalendarCandidate(interaction.guildId, candidateId);
     if (!candidate || candidate.status !== "open") {
-      await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 });
+      if (inboxIndex !== null) await interaction.update(discoveryInboxPayload(interaction.guildId, inboxIndex));
+      else await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 });
       return;
     }
     const matches = store.findCandidateCalendarMatches(interaction.guildId, candidate);
     if (action === "review" && interaction.isButton()) {
       if (isDiscoveryCandidate(candidate)) {
-        const payload = candidateReviewPayload(candidate, matches);
+        const payload = inboxPayload(candidateReviewPayload(candidate, matches));
         delete payload.flags;
         await interaction.update(payload);
       } else {
@@ -2395,42 +2453,42 @@ async function handleManagerInteraction(interaction) {
       }
       store.decideCalendarCandidate(interaction.guildId, candidateId, "dismissed", interaction.user.id, "Dismissed by admin");
       await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
-      await interaction.update(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Ignored") : { content: "Dismissed this candidate. No calendar event was created.", components: [] });
+      await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Ignored") : { content: "Dismissed this candidate. No calendar event was created.", components: [] }));
       return;
     }
     if (action === "link" && interaction.isButton()) {
       if (!matches.length) {
-        await interaction.update({ content: "No likely Harmony calendar match is available. Choose Add to Calendar to enter the missing event details, or Dismiss.", components: candidateReviewComponents(candidate, []) });
+        await interaction.update({ content: "No likely Harmony calendar match is available. Choose Add to Calendar to enter the missing event details, or Dismiss.", components: inboxPayload({ components: candidateReviewComponents(candidate, []) }).components });
         return;
       }
       if (matches.length === 1) {
         if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await staleReconciliationInteraction(interaction, "update"); return; }
         store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", matches[0].id);
         await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
-        await interaction.update(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${matches[0].title}**. No new calendar event was created.`, components: [] });
+        await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${matches[0].title}**. No new calendar event was created.`, components: [] }));
         return;
       }
-      await interaction.update({
+      await interaction.update(inboxPayload({
         content: `${candidateReviewPayload(candidate, matches).content}\n\nChoose the existing Harmony event to link:`,
         components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
           .setCustomId(`harmony-manager:candidate:linkselect:${candidateId}`)
           .setPlaceholder("Choose the existing Harmony event")
           .addOptions(matches.slice(0, 25).map((item) => ({ label: `${item.title} • ${item.event_date || "date pending"}`.slice(0, 100), value: String(item.id) }))))],
-      });
+      }));
       return;
     }
     if (action === "linkselect" && interaction.isStringSelectMenu()) {
       if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await staleReconciliationInteraction(interaction, "update"); return; }
       const event = store.getEvent(interaction.guildId, Number(interaction.values[0]));
-      if (!event) { store.releaseCalendarCandidate(interaction.guildId, candidateId, "Selected calendar event was unavailable"); await interaction.update({ content: "That Harmony event is no longer active.", components: [] }); return; }
+      if (!event) { store.releaseCalendarCandidate(interaction.guildId, candidateId, "Selected calendar event was unavailable"); await interaction.update(inboxPayload({ content: "That Harmony event is no longer active.", components: [] })); return; }
       store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", event.id);
       await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
-      await interaction.update(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${event.title}**. No new calendar event was created.`, components: [] });
+      await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${event.title}**. No new calendar event was created.`, components: [] }));
       return;
     }
     if (action === "add" && interaction.isButton()) {
       const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone;
-      const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}`).setTitle("Add candidate to Stray Kids calendar");
+      const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}${inboxIndex !== null ? `:inbox:${inboxIndex}` : ""}`).setTitle("Add candidate to Stray Kids calendar");
       const fields = [
         ["title", "Event title", candidate.title || "", true, 120],
         ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
@@ -2468,7 +2526,8 @@ async function handleManagerInteraction(interaction) {
         store.decideCalendarCandidate(interaction.guildId, candidateId, "added", interaction.user.id, "Added to Stray Kids calendar", eventId);
         await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
         await refreshPublishedCalendar(interaction.client, interaction.guildId, "stray_kids", eventDate).catch(() => {});
-        await interaction.reply({ content: `Added **${title}** to the Stray Kids calendar. No announcements were created; configure them through the existing calendar workflow if needed.`, flags: 64 });
+        if (inboxIndex !== null) await interaction.update(inboxPayload(candidateFinalPayload(candidate, "Added")));
+        else await interaction.reply({ content: `Added **${title}** to the Stray Kids calendar. No announcements were created; configure them through the existing calendar workflow if needed.`, flags: 64 });
       } catch (error) {
         store.releaseCalendarCandidate(interaction.guildId, candidateId, `Add failed: ${error.message}`);
         await interaction.reply({ content: error.message || "Harmony could not add that candidate.", flags: 64 });
@@ -2480,6 +2539,11 @@ async function handleManagerInteraction(interaction) {
   const calendarType = managerCalendarType(parts[1]);
   const action = parts[2];
   const eventId = parts[3];
+
+  if (calendarType === "stray_kids" && action === "candidate-inbox" && interaction.isButton()) {
+    await interaction.reply({ ...discoveryInboxPayload(interaction.guildId), flags: 64 });
+    return;
+  }
 
   if (calendarType === "stray_kids" && ["discovery-check", "discovery-toggle", "discovery-status"].includes(action) && interaction.isButton()) {
     const sourceKey = "jype-straykids-schedule";

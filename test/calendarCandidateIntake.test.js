@@ -347,10 +347,8 @@ test("discovered all-day candidate is compact, reviewed in-place, and preserves 
     proposedEventDate: "2026-10-24", proposedEventAt: null,
   });
   const candidate = result.candidate;
-  assert.equal(sent.length, 1);
-  assert.match(sent[0].content, /Candidate #/);
-  assert.match(sent[0].content, /Source: JYP/);
-  assert.doesNotMatch(sent[0].content, /https?:\/\//);
+  assert.equal(sent.length, 0);
+  assert.equal(result.noticeSent, false);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_url, sourceUrl);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_metadata, metadata);
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
