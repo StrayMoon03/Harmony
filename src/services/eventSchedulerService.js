@@ -1736,86 +1736,12 @@ function candidateReviewComponents(candidate, matches) {
     new ButtonBuilder().setCustomId(`harmony-manager:candidate:add:${candidate.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`harmony-manager:candidate:dismiss:${candidate.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
   ));
-  if (isDiscoveryCandidate(candidate)) components.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`harmony-manager:candidate:diagnostic:${candidate.id}`).setLabel("Temporary Match Diagnostic").setStyle(ButtonStyle.Secondary),
-  ));
   if (isDiscoveryCandidate(candidate) && /^https:\/\/[^\s]+$/i.test(candidate.source_url || "")) {
     components.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setLabel("Official Source").setStyle(ButtonStyle.Link).setURL(candidate.source_url),
     ));
   }
   return components;
-}
-
-function diagnosticValue(value) {
-  if (value === null || value === undefined || value === "") return "(none)";
-  const text = String(value).replace(/[\r\n]+/g, " ");
-  if (!/^https?:\/\//i.test(text)) return text;
-  try {
-    const url = new URL(text);
-    url.username = "";
-    url.password = "";
-    url.hash = "";
-    for (const key of [...url.searchParams.keys()]) {
-      if (/(token|secret|auth|signature|^sig$|session|cookie|api.?key|password|credential|jwt|bearer)/i.test(key)) url.searchParams.set(key, "[redacted]");
-    }
-    return url.toString();
-  } catch {
-    return "[invalid URL]";
-  }
-}
-
-function diagnosticChunks(lines) {
-  const chunks = [];
-  let current = "";
-  for (const line of lines) {
-    const pieces = line.length > 1700 ? line.match(/.{1,1700}/g) : [line];
-    for (const piece of pieces) {
-      const next = current ? `${current}\n${piece}` : piece;
-      if (next.length > 1900) {
-        chunks.push(current);
-        current = piece;
-      } else current = next;
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
-
-function candidateDiagnosticLines(candidate, events) {
-  const lines = [
-    "TEMPORARY DISCOVERED EVENT MATCH DIAGNOSTIC (read-only)",
-    "DISCOVERED EVENT:",
-    `candidate ID: ${candidate.id}`,
-    `title: ${diagnosticValue(candidate.title)}`,
-    `proposed_event_date: ${diagnosticValue(candidate.proposed_event_date)}`,
-    `proposed_event_at: ${diagnosticValue(candidate.proposed_event_at)}`,
-    `source_url: ${diagnosticValue(candidate.source_url)}`,
-    `source_provider: ${diagnosticValue(candidate.source_provider)}`,
-    `ACTIVE STRAY KIDS CALENDAR EVENTS ON THE SAME DATE: ${events.length}`,
-  ];
-  if (!events.length) lines.push("(none)");
-  for (const event of events) {
-    lines.push(
-      `\ncalendar event ID: ${event.id}`,
-      `title: ${diagnosticValue(event.title)}`,
-      `event_date: ${diagnosticValue(event.event_date)}`,
-      `event_at: ${diagnosticValue(event.event_at)}`,
-      `all_day: ${event.all_day}`,
-      `link: ${diagnosticValue(event.link)}`,
-      `cancelled_at: ${diagnosticValue(event.cancelled_at)}`,
-      "MATCH COMPARISON:",
-      `normalized candidate title: ${diagnosticValue(event.normalized_candidate_title)}`,
-      `normalized calendar title: ${diagnosticValue(event.normalized_calendar_title)}`,
-      `title similarity (Jaccard): ${event.title_similarity.toFixed(3)}`,
-      `exact normalized-title match: ${event.exact_normalized_title_match}`,
-      `exact date match: ${event.exact_date_match}`,
-      `normalized source URL match: ${event.normalized_source_url_match}`,
-      `time within 2 hours: ${event.time_within_two_hours === null ? "N/A" : event.time_within_two_hours}`,
-      `CURRENT matcher considers match: ${event.current_matcher_match}`,
-    );
-  }
-  return lines;
 }
 
 function candidateReviewPayload(candidate, matches) {
@@ -2508,19 +2434,6 @@ async function handleManagerInteraction(interaction) {
     if (!candidate || candidate.status !== "open") {
       if (inboxIndex !== null) await interaction.update(discoveryInboxPayload(interaction.guildId, inboxIndex));
       else await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 });
-      return;
-    }
-    if (action === "diagnostic" && interaction.isButton()) {
-      if (!isDiscoveryCandidate(candidate)) {
-        await interaction.reply({ content: "This temporary diagnostic is only available for discovered events.", flags: 64 });
-        return;
-      }
-      const events = store.getCandidateMatchDiagnostics(interaction.guildId, candidate);
-      const chunks = diagnosticChunks(candidateDiagnosticLines(candidate, events));
-      await interaction.reply({ content: chunks[0], flags: 64, allowedMentions: { parse: [] } });
-      for (const content of chunks.slice(1)) {
-        await interaction.followUp({ content, flags: 64, allowedMentions: { parse: [] } });
-      }
       return;
     }
     const matches = store.findCandidateCalendarMatches(interaction.guildId, candidate);
