@@ -232,6 +232,83 @@ test("candidate matching requires supporting identity and does not match by date
   assert.ok(sameDate);
 });
 
+test("production-like Fukuoka discovery matches the Japan event despite missing candidate time", () => {
+  const guildId = `candidate-fukuoka-match-${Date.now()}`;
+  const candidate = store.createOrGetCalendarCandidate({
+    guildId,
+    title: "Stray Kids World Tour <RUN IT> FUKUOKA",
+    proposedEventDate: "2026-10-24",
+    proposedEventAt: null,
+    sourceUrl: "https://straykids.jype.com/schedule?scheduleId=9260",
+    sourceType: "discovery",
+    sourceProvider: "jype-straykids-schedule",
+    discoveryKey: "fukuoka-2026-10-24",
+  }).candidate;
+  const eventId = store.createCalendarEvent({
+    guildId,
+    calendarChannelId: null,
+    title: "World Tour <RUN IT JAPAN> • Fukuoka",
+    link: null,
+    timezone: "Asia/Tokyo",
+    eventAt: "2026-10-24T09:30:00.000Z",
+    eventDate: "2026-10-24",
+    eventTimezone: "Asia/Tokyo",
+    calendarType: "stray_kids",
+    category: "concert",
+    allDay: false,
+    createdBy: "admin",
+  });
+
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate).map((event) => event.id), [eventId]);
+});
+
+test("same-date title matching keeps city identity and rejects unrelated events", () => {
+  const guildId = `candidate-fukuoka-scope-${Date.now()}`;
+  const candidate = store.createOrGetCalendarCandidate({
+    guildId,
+    title: "Stray Kids World Tour <RUN IT> FUKUOKA",
+    proposedEventDate: "2026-10-24",
+    sourceUrl: "https://straykids.jype.com/schedule?scheduleId=9260",
+    sourceType: "discovery",
+    sourceProvider: "jype-straykids-schedule",
+    discoveryKey: "fukuoka-scope-2026-10-24",
+  }).candidate;
+  const differentCity = store.createCalendarEvent({ guildId, title: "World Tour <RUN IT JAPAN> • Tokyo", link: null,
+    timezone: "Asia/Tokyo", eventDate: "2026-10-24", eventTimezone: "Asia/Tokyo", calendarType: "stray_kids",
+    category: "concert", allDay: false, createdBy: "admin" });
+  const unrelated = store.createCalendarEvent({ guildId, title: "Stray Kids Fan Meeting in Fukuoka", link: null,
+    timezone: "Asia/Tokyo", eventDate: "2026-10-24", eventTimezone: "Asia/Tokyo", calendarType: "stray_kids",
+    category: "other", allDay: true, createdBy: "admin" });
+
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate), []);
+  assert.ok(differentCity && unrelated);
+});
+
+test("legacy exact-title, URL, time, and 0.75 title-similarity matching remains intact", () => {
+  const guildId = `candidate-legacy-match-${Date.now()}`;
+  const candidate = store.createOrGetCalendarCandidate({ guildId, title: "Stray Kids Fan Meeting",
+    proposedEventAt: "2026-12-01T19:00:00.000Z", proposedEventDate: "2026-12-01",
+    sourceUrl: "https://official.example/fan-meeting?utm_source=discovery" }).candidate;
+  const exactTitle = store.createCalendarEvent({ guildId, title: "Stray Kids Fan Meeting", link: null,
+    timezone: "America/New_York", eventDate: "2026-12-01", calendarType: "stray_kids", category: "other",
+    allDay: true, createdBy: "admin" });
+  const sameUrl = store.createCalendarEvent({ guildId, title: "Source-linked event", link: "https://official.example/fan-meeting",
+    timezone: "America/New_York", eventDate: "2026-12-02", calendarType: "stray_kids", category: "other",
+    allDay: true, createdBy: "admin" });
+  const withinTwoHours = store.createCalendarEvent({ guildId, title: "Other wording", link: null,
+    timezone: "America/New_York", eventAt: "2026-12-01T20:30:00.000Z", eventDate: "2026-12-01",
+    calendarType: "stray_kids", category: "other", createdBy: "admin" });
+
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, candidate).map((event) => event.id), [exactTitle, sameUrl, withinTwoHours]);
+
+  const similarCandidate = store.createOrGetCalendarCandidate({ guildId, title: "World Tour Fukuoka",
+    proposedEventDate: "2026-12-03", sourceUrl: "https://official.example/world-tour" }).candidate;
+  const thresholdMatch = store.createCalendarEvent({ guildId, title: "World Tour Fukuoka Show", link: null,
+    timezone: "Asia/Tokyo", eventDate: "2026-12-03", calendarType: "stray_kids", category: "concert",
+    allDay: true, createdBy: "admin" });
+  assert.deepEqual(store.findCandidateCalendarMatches(guildId, similarCandidate).map((event) => event.id), [thresholdMatch]);
+});
+
 test("social title date range extracts the live Instagram dates and KST without inventing a time", () => {
   const metadata = extractCandidateMetadata(
     `<title>Stray Kids on Instagram: ODD&amp;FRESH 26.10.22 THU – 11.08 SUN (KST)</title>`,
