@@ -114,7 +114,7 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel("📋 Review Candidates").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel("📋 Review Discovered Events").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }
@@ -1681,15 +1681,15 @@ function discoveryInboxPayload(guildId, requestedIndex = 0) {
   const prefix = "harmony-manager:inbox";
   const close = new ButtonBuilder().setCustomId(`${prefix}:close`).setLabel("Close").setStyle(ButtonStyle.Secondary);
   if (!candidate) return {
-    content: "📋 **DISCOVERY CANDIDATES**\nNo pending candidates.",
+    content: "📋 **DISCOVERED EVENTS**\n0 events awaiting review.",
     components: [new ActionRowBuilder().addComponents(close)], allowedMentions: { parse: [] },
   };
   let metadata = {};
   try { metadata = JSON.parse(candidate.source_metadata || "{}"); } catch { /* Optional display data only. */ }
   const text = (value, limit) => String(value || "").replace(/https?:\/\/\S+/gi, "[source link]").slice(0, limit);
   return {
-    content: ["📋 **DISCOVERY CANDIDATES**", `${candidates.length} pending candidates`, "",
-      `${index + 1} of ${candidates.length} — ${text(candidate.title || "Untitled event", 180)}`,
+    content: ["📋 **DISCOVERED EVENTS**", `${candidates.length} events awaiting review`, "",
+      `Event #${candidate.id}`, `${index + 1} of ${candidates.length} — ${text(candidate.title || "Untitled event", 180)}`,
       `📅 ${candidateDateLabel(candidate)}`,
       ...(metadata?.location ? [`📍 ${text(metadata.location, 150)}`] : []),
       `Source: ${text(candidate.source_provider, 100)}`,
@@ -1714,14 +1714,14 @@ function withInboxBack(payload, index) {
     }
   }
   payload.components = [...(payload.components || []), new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`harmony-manager:inbox:page:${index}`).setLabel("Back to Candidate Inbox").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`harmony-manager:inbox:page:${index}`).setLabel("Back to Discovered Events").setStyle(ButtonStyle.Secondary),
   )];
   return payload;
 }
 
 function candidateFinalPayload(candidate, decision) {
   return {
-    content: `**Candidate #${candidate.id} • ${decision}**\n${candidate.proposed_event_date || "Date not provided"} • ${candidate.title || "Untitled event"}`,
+    content: `**Event #${candidate.id} • ${decision}**\n${candidate.proposed_event_date || "Date not provided"} • ${candidate.title || "Untitled event"}`,
     components: [],
     allowedMentions: { parse: [] },
   };
@@ -2420,14 +2420,15 @@ async function handleManagerInteraction(interaction) {
   const parts = interaction.customId.split(":");
   if (parts[1] === "inbox" && interaction.isButton()) {
     await interaction.update(parts[2] === "close"
-      ? { content: "Candidate Inbox closed.", components: [], allowedMentions: { parse: [] } }
+      ? { content: "Discovered Events closed.", components: [], allowedMentions: { parse: [] } }
       : discoveryInboxPayload(interaction.guildId, Number(parts[3])));
     return;
   }
   if (parts[1] === "candidate") {
     const action = parts[2];
     const candidateId = Number(parts[3]);
-    const inboxIndex = parts[4] === "inbox" ? Math.max(0, Number(parts[5]) || 0) : null;
+    const inboxIndex = parts[4] === "inbox" ? Math.max(0, Number(parts[5]) || 0)
+      : parts[6] === "inbox" ? Math.max(0, Number(parts[7]) || 0) : null;
     const inboxPayload = (payload) => withInboxBack(payload, inboxIndex);
     const candidate = store.getCalendarCandidate(interaction.guildId, candidateId);
     if (!candidate || candidate.status !== "open") {
@@ -2453,7 +2454,7 @@ async function handleManagerInteraction(interaction) {
       }
       store.decideCalendarCandidate(interaction.guildId, candidateId, "dismissed", interaction.user.id, "Dismissed by admin");
       await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
-      await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Ignored") : { content: "Dismissed this candidate. No calendar event was created.", components: [] }));
+      await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Dismissed") : { content: "Dismissed this candidate. No calendar event was created.", components: [] }));
       return;
     }
     if (action === "link" && interaction.isButton()) {
@@ -2487,13 +2488,48 @@ async function handleManagerInteraction(interaction) {
       return;
     }
     if (action === "add" && interaction.isButton()) {
+      if (!isDiscoveryCandidate(candidate)) {
+        const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}`).setTitle("Add candidate to Stray Kids calendar");
+        const fields = [
+          ["title", "Event title", candidate.title || "", true, 120],
+          ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
+          ["event-time", "Event time HH:MM (blank = all-day)", candidateLocalTime(candidate), false, 5],
+          ["event-timezone", "Event timezone", candidate.proposed_event_timezone || "America/New_York", true, 80],
+          ["description", "Details (optional)", candidate.submitted_note || "", false, 500],
+        ];
+        modal.addComponents(fields.map(([id, label, value, required, maxLength]) => {
+          const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(id === "description" ? TextInputStyle.Paragraph : TextInputStyle.Short).setRequired(required).setMaxLength(maxLength);
+          if (value) input.setValue(value.slice(0, maxLength));
+          return new ActionRowBuilder().addComponents(input);
+        }));
+        await interaction.showModal(modal);
+        return;
+      }
       const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone;
-      const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}${inboxIndex !== null ? `:inbox:${inboxIndex}` : ""}`).setTitle("Add candidate to Stray Kids calendar");
+      const options = SKZ_TIMEZONE_OPTIONS.filter((option) => optionalTimezone || option.value !== "none")
+        .map((option) => ({ label: option.label, value: option.value, default: option.value === candidate.proposed_event_timezone }));
+      const timezoneMenu = new StringSelectMenuBuilder()
+        .setCustomId(`harmony-manager:candidate:addtimezone:${candidateId}${inboxIndex !== null ? `:inbox:${inboxIndex}` : ""}`)
+        .setPlaceholder(optionalTimezone ? "Choose a time zone, or leave blank for all-day" : "Choose the event time zone")
+        .addOptions(options);
+      await interaction.update(inboxPayload({
+        content: `Event #${candidate.id} — choose the event time zone${optionalTimezone ? " (optional for an all-day event)" : ""}.`,
+        components: [new ActionRowBuilder().addComponents(timezoneMenu)],
+      }));
+      return;
+    }
+    if (action === "addtimezone" && interaction.isStringSelectMenu()) {
+      const selectedTimezone = interaction.values[0];
+      const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone;
+      if (!(optionalTimezone && selectedTimezone === "none") && !validTimezone(selectedTimezone)) {
+        await interaction.reply({ content: "Choose a valid event time zone.", flags: 64 });
+        return;
+      }
+      const modal = new ModalBuilder().setCustomId(`harmony-manager:candidate:addmodal:${candidateId}:tz:${encodeURIComponent(selectedTimezone)}${inboxIndex !== null ? `:inbox:${inboxIndex}` : ""}`).setTitle("Add discovered event to Stray Kids calendar");
       const fields = [
         ["title", "Event title", candidate.title || "", true, 120],
         ["event-date", "Event date YYYY-MM-DD", candidate.proposed_event_date || "", true, 10],
         ["event-time", "Event time HH:MM (blank = all-day)", optionalTimezone ? "" : candidateLocalTime(candidate), false, 5],
-        ["event-timezone", "Event timezone", optionalTimezone ? "" : candidate.proposed_event_timezone || "America/New_York", !optionalTimezone, 80],
         ["description", "Details (optional)", candidate.submitted_note || "", false, 500],
       ];
       modal.addComponents(fields.map(([id, label, value, required, maxLength]) => {
@@ -2508,13 +2544,13 @@ async function handleManagerInteraction(interaction) {
       const title = interaction.fields.getTextInputValue("title").trim();
       const eventDate = interaction.fields.getTextInputValue("event-date").trim();
       const eventTime = interaction.fields.getTextInputValue("event-time").trim();
-      const eventTimezone = interaction.fields.getTextInputValue("event-timezone").trim() || null;
+      const selectedTimezone = parts[4] === "tz" ? decodeURIComponent(parts[5] || "") : null;
+      const eventTimezone = selectedTimezone === "none" ? null
+        : selectedTimezone || interaction.fields.getTextInputValue("event-timezone").trim() || null;
       const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone && !eventTime;
-      // Newer Intl runtimes accept numeric offsets; this optional field accepts named zones only.
-      const offsetTimezone = optionalTimezone && /^[+-]/.test(eventTimezone || "");
       const description = interaction.fields.getTextInputValue("description").trim() || null;
-      if (!parseManagerDate(eventDate) || offsetTimezone || (!(optionalTimezone && !eventTimezone) && !validTimezone(eventTimezone)) || (eventTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(eventTime))) {
-        await interaction.reply({ content: "Provide a valid event date, optional 24-hour time, and timezone.", flags: 64 });
+      if (!parseManagerDate(eventDate) || (!(optionalTimezone && !eventTimezone) && !validTimezone(eventTimezone)) || (eventTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(eventTime))) {
+        await interaction.reply({ content: "Provide a valid event date, optional 24-hour time, and selected timezone.", flags: 64 });
         return;
       }
       if (!store.claimCalendarCandidate(interaction.guildId, candidateId)) { await interaction.reply({ content: "This calendar candidate has already been reviewed.", flags: 64 }); return; }
