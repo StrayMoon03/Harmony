@@ -1208,10 +1208,17 @@ async function cancelRecurringEvents(interaction, event, scope) {
   const events = event.recurrence_series_id ? store.listSeriesEvents(interaction.guildId, event.recurrence_series_id) : [event];
   const targets = scope === "series" ? events : scope === "future" ? events.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
   for (const item of targets) {
-    if (item.recurrence_series_id) store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
-    else store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
+    if (isHarmonyOwnedRecurringOccurrence(item)) {
+      store.cancelHarmonyOwnedRecurringOccurrence(interaction.guildId, item.id, interaction.user.id);
+    } else {
+      store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
+    }
   }
   return targets;
+}
+
+function isHarmonyOwnedRecurringOccurrence(event) {
+  return Boolean(event?.recurrence_series_id && Number(event.recurrence_native_enabled) === 1);
 }
 
 async function cancelLinkedNativeEvents(interaction, events) {
@@ -2236,6 +2243,18 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   if (!event?.guildId) return;
   const transitionedToCanceled = event.status === GuildScheduledEventStatus.Canceled && oldEvent?.status !== GuildScheduledEventStatus.Canceled;
   if (transitionedToCanceled) {
+    const linkedRecurringOccurrence = store.getEventByDiscordIdIncludingCancelled(event.guildId, event.id);
+    if (isHarmonyOwnedRecurringOccurrence(linkedRecurringOccurrence)) {
+      // One mode 1 Discord ID represents exactly one persisted Harmony
+      // occurrence. Consume Harmony's marker when present, then apply the same
+      // idempotent local cleanup for either origin.
+      consumePendingNativeDelete(event.guildId, event.id);
+      const result = store.cancelHarmonyOwnedRecurringOccurrence(event.guildId, linkedRecurringOccurrence.id, "discord");
+      if (result.changed) {
+        await refreshPublishedCalendar(client, event.guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
+      }
+      return;
+    }
     // A canceled Discord status is a lifecycle change, not a schedule edit.
     // Keep recurring series on their existing path for this phase.
     const linkedForCancellation = store.getEventByDiscordIdIncludingCancelled(event.guildId, event.id);
@@ -2283,6 +2302,15 @@ async function handleGuildScheduledEventDelete(client, event) {
   const harmonyInitiated = consumePendingNativeDelete(event.guildId, event.id);
   const linked = store.getEventByDiscordIdIncludingCancelled(event.guildId, event.id);
   if (!linked) return;
+  if (isHarmonyOwnedRecurringOccurrence(linked)) {
+    const result = store.cancelHarmonyOwnedRecurringOccurrence(event.guildId, linked.id, "discord");
+    if (result.changed) {
+      await refreshPublishedCalendar(client, event.guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
+    }
+    // Keep the Discord ID on the canceled occurrence for durable idempotency
+    // and history; never turn a deletion into an unlinked creation candidate.
+    return;
+  }
   if (harmonyInitiated) {
     // Harmony already canceled its row before editing Discord. Finish any
     // pending personal-reminder cleanup without emitting another notice.
@@ -4060,6 +4088,7 @@ module.exports = {
   calendarAnnouncementItems,
   syncDiscordRecurringSeries,
   syncDiscordRecurringSeriesWindow,
+  syncRecurringNativeEventWindow,
   startEventScheduler,
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,
