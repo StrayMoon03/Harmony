@@ -207,6 +207,41 @@ function getEventByDiscordId(guildId, discordEventId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? AND cancelled_at IS NULL").get(guildId, discordEventId) || null;
 }
 
+function getEventByDiscordIdIncludingCancelled(guildId, discordEventId) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? ORDER BY CASE WHEN cancelled_at IS NULL THEN 0 ELSE 1 END, id LIMIT 1").get(guildId, discordEventId) || null;
+}
+
+// Discord lifecycle callbacks can be delivered more than once. Keep the
+// Discord ID on the canceled calendar row as durable linkage/history, while
+// making all pending work inert in the same transaction.
+function cancelDiscordLinkedEvent(guildId, discordEventId, cancelledBy = "discord") {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const event = db.prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ? ORDER BY CASE WHEN cancelled_at IS NULL THEN 0 ELSE 1 END, id LIMIT 1")
+      .get(guildId, discordEventId);
+    if (!event) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const changed = !event.cancelled_at;
+    db.prepare("UPDATE scheduled_events SET cancelled_at = COALESCE(cancelled_at, ?), cancelled_by = COALESCE(cancelled_by, ?) WHERE guild_id = ? AND id = ?")
+      .run(now, cancelledBy, guildId, event.id);
+    db.prepare("UPDATE scheduled_announcements SET status = 'cancelled' WHERE event_id = ? AND status = 'pending'")
+      .run(event.id);
+    db.prepare("UPDATE discord_event_reminder_schedules SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+      .run(guildId, discordEventId);
+    db.prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+      .run(guildId, discordEventId);
+    db.exec("COMMIT");
+    return { event: { ...event, cancelled_at: event.cancelled_at || now, cancelled_by: event.cancelled_by || cancelledBy }, changed };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 // Projected recurring rows intentionally have no native Discord ID. During
 // explicit adoption, an exact title + start instant is a fallback only for an
 // existing Harmony recurrence series; ordinary one-off events must never be
@@ -808,6 +843,8 @@ module.exports = {
   createCalendarEvent,
   getEvent,
   getEventByDiscordId,
+  getEventByDiscordIdIncludingCancelled,
+  cancelDiscordLinkedEvent,
   findActiveCommunityEventByTitleAndAt,
   findAdoptableNativeEventByTitleAndAt,
   getSeriesAnchor,

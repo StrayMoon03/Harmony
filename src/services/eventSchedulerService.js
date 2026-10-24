@@ -2185,6 +2185,20 @@ function registerScheduledEventListeners(client) {
 
 async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   if (!event?.guildId) return;
+  const transitionedToCanceled = event.status === GuildScheduledEventStatus.Canceled && oldEvent?.status !== GuildScheduledEventStatus.Canceled;
+  if (transitionedToCanceled) {
+    // A canceled Discord status is a lifecycle change, not a schedule edit.
+    // Keep recurring series on their existing path for this phase.
+    const linkedForCancellation = store.getEventByDiscordIdIncludingCancelled(event.guildId, event.id);
+    if (linkedForCancellation && !isRecurringLinkedNativeEvent(linkedForCancellation, event)) {
+      consumePendingNativeDelete(event.guildId, event.id);
+      const result = store.cancelDiscordLinkedEvent(event.guildId, event.id);
+      if (result?.changed) {
+        await refreshPublishedCalendar(client, event.guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
+      }
+      return;
+    }
+  }
   const linked = store.getEventByDiscordId(event.guildId, event.id);
   if (!linked) return;
   if (!event.scheduledStartAt) return;
@@ -2213,13 +2227,39 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
 
 async function handleGuildScheduledEventDelete(client, event) {
   if (!event?.guildId) return;
-  const linked = store.getEventByDiscordId(event.guildId, event.id);
-  if (!linked) return;
   const harmonyInitiated = consumePendingNativeDelete(event.guildId, event.id);
-  store.updateEvent(event.guildId, linked.id, { discord_event_id: null });
-  if (harmonyInitiated) return;
+  const linked = store.getEventByDiscordIdIncludingCancelled(event.guildId, event.id);
+  if (!linked) return;
+  if (harmonyInitiated) {
+    // Harmony already canceled its row before editing Discord. Finish any
+    // pending personal-reminder cleanup without emitting another notice.
+    if (linked.cancelled_at && !isRecurringLinkedNativeEvent(linked, event)) {
+      store.cancelDiscordLinkedEvent(event.guildId, event.id);
+    }
+    return;
+  }
+  if (!isRecurringLinkedNativeEvent(linked, event)) {
+    const result = store.cancelDiscordLinkedEvent(event.guildId, event.id);
+    if (result?.changed) {
+      await refreshPublishedCalendar(client, event.guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
+    }
+    return;
+  }
+  // Recurring Discord events retain their existing reconciliation behavior.
+  const activeLinked = store.getEventByDiscordId(event.guildId, event.id);
+  if (!activeLinked) return;
+  store.updateEvent(event.guildId, activeLinked.id, { discord_event_id: null });
   const channel = await managerControlChannel(client, event.guildId);
-  if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${linked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
+  if (channel?.isTextBased()) await channel.send({ content: `The linked Discord event for **${activeLinked.title}** was deleted. The Harmony calendar entry remains intact.`, allowedMentions: { parse: [] } });
+}
+
+function isRecurringLinkedNativeEvent(calendarEvent, nativeEvent) {
+  return Boolean(
+    calendarEvent?.recurrence_series_id ||
+    Number(calendarEvent?.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE ||
+    parseNativeRecurrence(calendarEvent) ||
+    nativeEvent?.recurrenceRule
+  );
 }
 
 function persistPresentationTimezone(guildId, seriesId, timezone) {

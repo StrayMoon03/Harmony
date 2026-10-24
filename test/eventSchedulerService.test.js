@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { ChannelType, GuildScheduledEventEntityType } = require("discord.js");
+const { ChannelType, GuildScheduledEventEntityType, GuildScheduledEventStatus } = require("discord.js");
 const {
   parseEvent, localToUtc, buildCalendarMessages, parseManagerDraft,
   managerPanelContent, managerPanelComponents, managerCalendarType,
@@ -1786,34 +1786,119 @@ test("Find Discord Event reopens a previously reviewed but unlinked native event
   assert.match(choose.responses[0].payload.content, /Choose what Harmony should do with this event/);
 });
 
-test("Harmony-initiated native cancellation suppresses the deletion notice but external deletion still notifies", async () => {
-  const guildId = `native-delete-${Date.now()}`;
+test("Discord cancellation of a linked one-off cancels Harmony work and leaves unrelated reminders untouched", async () => {
+  const guildId = `discord-cancel-oneoff-${Date.now()}`;
+  const client = { guilds: { cache: new Map(), fetch: async () => null } };
+  const canceledDiscordId = `${guildId}-canceled`;
+  const unrelatedDiscordId = `${guildId}-unrelated`;
+  const createLinked = (title, discordEventId, date) => store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title, eventDate: date,
+    eventAt: `${date}T20:00:00.000Z`, eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId, createdBy: "admin",
+  });
+  const canceledId = createLinked("Discord canceled event", canceledDiscordId, "2099-11-02");
+  const unrelatedId = createLinked("Unrelated event", unrelatedDiscordId, "2099-11-03");
+  const db = getDb();
+  for (const eventId of [canceledId, unrelatedId]) {
+    assert.equal(store.addAnnouncement(guildId, eventId, "2099-11-01T20:00:00.000Z", `Reminder ${eventId}`).ok, true);
+  }
+  store.saveDiscordEventReminder(guildId, canceledDiscordId, "user-canceled", 3600, "2099-11-02T19:00:00.000Z");
+  store.saveDiscordEventReminder(guildId, canceledDiscordId, "user-canceled-2", 86400, "2099-11-01T20:00:00.000Z");
+  store.saveDiscordEventReminder(guildId, unrelatedDiscordId, "user-unrelated", 3600, "2099-11-03T19:00:00.000Z");
+
+  const oldEvent = { guildId, id: canceledDiscordId, status: GuildScheduledEventStatus.Scheduled };
+  const canceledNative = { ...oldEvent, status: GuildScheduledEventStatus.Canceled };
+  await handleGuildScheduledEventUpdate(client, oldEvent, canceledNative);
+
+  assert.equal(store.getEvent(guildId, canceledId), undefined);
+  const canceledHistory = store.getEventByDiscordIdIncludingCancelled(guildId, canceledDiscordId);
+  assert.ok(canceledHistory.cancelled_at);
+  assert.equal(canceledHistory.discord_event_id, canceledDiscordId);
+  assert.equal(db.prepare("SELECT status FROM scheduled_announcements WHERE event_id = ?").get(canceledId).status, "cancelled");
+  assert.equal(db.prepare("SELECT status FROM scheduled_announcements WHERE event_id = ?").get(unrelatedId).status, "pending");
+  assert.equal(db.prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, canceledDiscordId).status, "cancelled");
+  assert.equal(db.prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ? AND user_id = ?").get(guildId, canceledDiscordId, "user-canceled-2").status, "cancelled");
+  assert.equal(db.prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, unrelatedDiscordId).status, "pending");
+  assert.equal(db.prepare("SELECT status FROM discord_event_reminders WHERE guild_id = ? AND discord_event_id = ?").get(guildId, canceledDiscordId).status, "cancelled");
+  assert.equal(db.prepare("SELECT status FROM discord_event_reminders WHERE guild_id = ? AND discord_event_id = ?").get(guildId, unrelatedDiscordId).status, "pending");
+
+  await handleGuildScheduledEventUpdate(client, oldEvent, canceledNative);
+  assert.equal(store.getEventByDiscordIdIncludingCancelled(guildId, canceledDiscordId).discord_event_id, canceledDiscordId);
+});
+
+test("Discord deletion cancels a linked one-off idempotently without a notice or replacement", async () => {
+  const guildId = `discord-delete-oneoff-${Date.now()}`;
   const notices = [];
   const channel = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
   const guild = { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } };
   const client = { guilds: { cache: new Map([[guildId, guild]]) } };
   store.setReconciliationChannel(guildId, "control");
-
-  const harmonyEventId = store.createCalendarEvent({
-    guildId, calendarChannelId: "calendar", title: "Harmony cancellation", eventDate: "2099-11-02",
-    eventAt: "2099-11-02T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
-    category: "other", discordEventId: "harmony-native-delete", createdBy: "admin",
-  });
-  markPendingNativeDelete(guildId, "harmony-native-delete");
-  await handleGuildScheduledEventDelete(client, { guildId, id: "harmony-native-delete" });
-  assert.equal(notices.length, 0);
-  assert.equal(store.getEventByDiscordId(guildId, "harmony-native-delete"), null);
-  assert.ok(store.getEvent(guildId, harmonyEventId));
-
-  store.createCalendarEvent({
+  const discordEventId = `${guildId}-external-native-delete`;
+  const eventId = store.createCalendarEvent({
     guildId, calendarChannelId: "calendar", title: "External deletion", eventDate: "2099-11-03",
     eventAt: "2099-11-03T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
-    category: "other", discordEventId: "external-native-delete", createdBy: "admin",
+    category: "other", discordEventId, createdBy: "admin",
   });
-  await handleGuildScheduledEventDelete(client, { guildId, id: "external-native-delete" });
-  assert.equal(notices.length, 1);
-  assert.match(notices[0].content, /External deletion/);
-  assert.equal(store.getEventByDiscordId(guildId, "external-native-delete"), null);
+  assert.equal(store.addAnnouncement(guildId, eventId, "2099-11-02T20:00:00.000Z", "Pending notice").ok, true);
+  store.saveDiscordEventReminder(guildId, discordEventId, "interested-user", 3600, "2099-11-03T19:00:00.000Z");
+
+  await handleGuildScheduledEventDelete(client, { guildId, id: discordEventId });
+  await handleGuildScheduledEventDelete(client, { guildId, id: discordEventId });
+
+  assert.equal(store.getEvent(guildId, eventId), undefined);
+  assert.equal(store.getEventByDiscordId(guildId, discordEventId), null);
+  assert.equal(store.getEventByDiscordIdIncludingCancelled(guildId, discordEventId).cancelled_at != null, true);
+  assert.equal(getDb().prepare("SELECT status FROM scheduled_announcements WHERE event_id = ?").get(eventId).status, "cancelled");
+  assert.equal(getDb().prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId).status, "cancelled");
+  assert.equal(notices.length, 0);
+});
+
+test("Harmony-originated cancellation keeps its linkage and produces no duplicate lifecycle behavior", async () => {
+  const guildId = `harmony-native-cancel-${Date.now()}`;
+  const notices = [];
+  const channel = { isTextBased: () => true, send: async (payload) => { notices.push(payload); return { id: `notice-${notices.length}` }; } };
+  const guild = { channels: { cache: new Map([["control", channel]]), fetch: async () => channel } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.setReconciliationChannel(guildId, "control");
+  const discordEventId = "harmony-native-delete-oneoff";
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Harmony cancellation", eventDate: "2099-11-04",
+    eventAt: "2099-11-04T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId, createdBy: "admin",
+  });
+  store.cancelEvent(guildId, eventId, "admin");
+  store.saveDiscordEventReminder(guildId, discordEventId, `${guildId}-interested`, 3600, "2099-11-04T19:00:00.000Z");
+  markPendingNativeDelete(guildId, discordEventId);
+  await handleGuildScheduledEventDelete(client, { guildId, id: discordEventId });
+  await handleGuildScheduledEventDelete(client, { guildId, id: discordEventId });
+
+  assert.equal(notices.length, 0);
+  assert.equal(store.getEventByDiscordIdIncludingCancelled(guildId, discordEventId).discord_event_id, discordEventId);
+  assert.ok(store.getEventByDiscordIdIncludingCancelled(guildId, discordEventId).cancelled_at);
+  assert.equal(store.getEvent(guildId, eventId), undefined);
+  assert.equal(getDb().prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId).status, "cancelled");
+});
+
+test("one-off lifecycle cancellation does not affect Discord recurring series", async () => {
+  const guildId = `discord-recurring-cancel-out-of-scope-${Date.now()}`;
+  const client = { guilds: { cache: new Map(), fetch: async () => null } };
+  const discordEventId = `${guildId}-discord-recurring`;
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: "calendar", title: "Recurring event", eventDate: "2099-11-06",
+    eventAt: "2099-11-06T20:00:00.000Z", eventTimezone: "UTC", timezone: "UTC", calendarType: "community",
+    category: "other", discordEventId, recurrenceSeriesId: "recurring-series-oneoff-scope",
+    recurrenceRule: JSON.stringify({ source: "discord", anchorAt: "2099-11-06T20:00:00.000Z" }),
+    recurrenceIndex: 0, recurrenceNativeEnabled: 2, createdBy: "admin",
+  });
+  store.saveDiscordEventReminder(guildId, discordEventId, "recurring-user", 3600, "2099-11-06T19:00:00.000Z");
+  const oldNative = { guildId, id: discordEventId, status: GuildScheduledEventStatus.Scheduled, recurrenceRule: { frequency: 3 } };
+  await handleGuildScheduledEventUpdate(client, oldNative, { ...oldNative, status: GuildScheduledEventStatus.Canceled });
+  await handleGuildScheduledEventDelete(client, oldNative);
+
+  assert.ok(store.getEvent(guildId, eventId));
+  assert.equal(store.getEventByDiscordId(guildId, discordEventId), null);
+  assert.equal(store.getEvent(guildId, eventId).discord_event_id, null);
+  assert.equal(getDb().prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId).status, "pending");
 });
 
 test("current Schedule Manager cancellation stays private and suppresses its native deletion notice", async () => {
