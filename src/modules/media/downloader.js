@@ -139,50 +139,126 @@ async function createJobDirectory() {
  */
 async function downloadMedia(url) {
   const jobDir = await createJobDirectory();
-  const errors = [];
-
-  for (const useCookies of [true, false]) {
-    try {
-      return await downloadWithYtDlp(url, jobDir, { useCookies });
-    } catch (error) {
-      errors.push(error);
-      console.warn(
-        `Instagram yt-dlp ${useCookies ? "cookie" : "public"} attempt failed; ` +
-          `${useCookies ? "retrying without cookies" : "trying gallery-dl"}.`
-      );
-      await fs.rm(jobDir, { recursive: true, force: true });
-      await fs.mkdir(jobDir, { recursive: true });
-    }
-  }
-
   try {
-    console.log("Instagram falling back to gallery-dl for the exact post.");
-    return await downloadWithGalleryDl(url, jobDir, {
-      requireAudio: errors.some((error) =>
-        String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")
-      ),
-    });
-  } catch (galleryError) {
-    errors.push(galleryError);
+    return await downloadInstagramWithFallbacks(url, jobDir);
+  } catch (error) {
+    await fs.rm(jobDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+const AUTH_REQUIRED_CODE = "INSTAGRAM_AUTH_REQUIRED";
+const AUTH_FAILURE_EXCLUSIONS = [
+  /\b429\b/,
+  /too many requests/,
+  /rate.?limit/,
+  /try again later/,
+  /checkpoint|challenge_required|challenge page/,
+  /confirm (?:that )?you(?:'re| are) not a bot/,
+  /not a bot/,
+];
+const AUTH_REQUIRED_PATTERNS = [
+  /\b(?:login|log in|sign[ -]?in|authentication) required\b/,
+  /\b(?:please|must|need to) (?:log in|sign in|authenticate)\b/,
+  /\b(?:log in|sign in) to (?:view|access|watch|continue)\b/,
+  /\b(?:only available|available only) to (?:logged[ -]in users|followers)\b/,
+  /\byou must be logged[ -]in\b/,
+  /\bhttp(?: error)? 401\b/,
+];
+
+function isInstagramAuthenticationRequired(error) {
+  if (error?.code === AUTH_REQUIRED_CODE) return true;
+  const text = `${error?.message || ""}\n${error?.stderr || ""}\n${error?.stdout || ""}`.toLowerCase();
+  if (AUTH_FAILURE_EXCLUSIONS.some((pattern) => pattern.test(text))) return false;
+  return AUTH_REQUIRED_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function instagramCookiesPath() {
+  return process.env.INSTAGRAM_COOKIES || path.resolve(__dirname, "../../instagram-cookies.txt");
+}
+
+async function instagramCookiesAvailable() {
+  try {
+    await fs.access(instagramCookiesPath());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isInstagramReelUrl(url) {
+  const pathname = new URL(url).pathname;
+  return /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(pathname);
+}
+
+function authRequiredError() {
+  const error = new Error("Instagram post access may require authentication or account permission.");
+  error.code = AUTH_REQUIRED_CODE;
+  return error;
+}
+
+async function downloadInstagramWithFallbacks(url, jobDir, dependencies = {}) {
+  const runYtDlp = dependencies.downloadWithYtDlp || downloadWithYtDlp;
+  const runGalleryDl = dependencies.downloadWithGalleryDl || downloadWithGalleryDl;
+  const runReelBrowser = dependencies.downloadInstagramReel || ((...args) =>
+    require("./instagramReelFallback").downloadInstagramReel(...args));
+  const runPhotoBrowser = dependencies.downloadInstagramPhotos || ((...args) =>
+    require("./instagramPhotoFallback").downloadInstagramPhotos(...args));
+  const hasCookies = dependencies.cookiesAvailable || instagramCookiesAvailable;
+  const errors = [];
+  const isReel = isInstagramReelUrl(url);
+  let requireAudio = false;
+
+  async function resetJobDirectory() {
     await fs.rm(jobDir, { recursive: true, force: true });
     await fs.mkdir(jobDir, { recursive: true });
-    try {
-      const reelPath = new URL(url).pathname;
-      const isReel = /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(reelPath);
-      const result = isReel
-        ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir)
-        : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir);
-      return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
-    } catch (browserError) {
-      errors.push(browserError);
-      await fs.rm(jobDir, { recursive: true, force: true });
-    }
-    const summary = errors
-      .map((error) => String(error?.stderr || error?.message || error))
-      .filter(Boolean)
-      .join(" | ");
-    throw new Error(`Instagram exhausted its safe download methods: ${summary}`);
   }
+
+  const anonymousAttempts = [
+    ["yt-dlp", () => runYtDlp(url, jobDir, { useCookies: false })],
+    ["gallery-dl", () => runGalleryDl(url, jobDir, { useCookies: false, requireAudio })],
+    ["browser", () => isReel ? runReelBrowser(url, jobDir, { useCookies: false }) : runPhotoBrowser(url, jobDir)],
+  ];
+
+  for (const [method, attempt] of anonymousAttempts) {
+    try {
+      const result = await attempt();
+      if (method === "browser") {
+        return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
+      }
+      return result;
+    } catch (error) {
+      errors.push({ method, error });
+      if (String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")) requireAudio = true;
+      await resetJobDirectory();
+    }
+  }
+
+  const authFailure = errors.find(({ error }) => isInstagramAuthenticationRequired(error));
+  if (authFailure && await hasCookies()) {
+    // Retry only the method whose anonymous result explicitly required login.
+    // A failed authenticated retry does not fan out to additional cookie-using tools.
+    const authenticatedAttempt = authFailure.method === "gallery-dl"
+      ? () => runGalleryDl(url, jobDir, { useCookies: true, requireAudio })
+      : authFailure.method === "browser" && isReel
+        ? async () => {
+          const result = await runReelBrowser(url, jobDir, { useCookies: true });
+          return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
+        }
+        : () => runYtDlp(url, jobDir, { useCookies: true });
+    try {
+      return await authenticatedAttempt();
+    } catch (error) {
+      errors.push({ method: "authenticated retry", error });
+    }
+  }
+
+  const summary = errors
+    .map(({ error }) => String(error?.stderr || error?.message || error))
+    .filter(Boolean)
+    .join(" | ");
+  if (authFailure) throw authRequiredError();
+  throw new Error(`Instagram exhausted its anonymous download methods: ${summary}`);
 }
 
 /**
@@ -219,10 +295,8 @@ async function hasAudioStream(filePath) {
 
 async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
   const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
-  const cookiesPath =
-    process.env.INSTAGRAM_COOKIES ||
-    path.resolve(__dirname, "../../instagram-cookies.txt");
   const args = [
+    "--ignore-config",
     "--no-playlist",
     "--no-warnings",
     "--print",
@@ -235,10 +309,10 @@ async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
     outputTemplate,
   ];
 
-  if (options.useCookies !== false) {
+  if (options.useCookies === true) {
     try {
-      await fs.access(cookiesPath);
-      args.push("--cookies", cookiesPath);
+      await fs.access(instagramCookiesPath());
+      args.push("--cookies", instagramCookiesPath());
     } catch {
       console.warn("Instagram cookies were not available for this download.");
     }
@@ -368,14 +442,8 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
   const galleryDlPath =
     process.env.GALLERYDL_PATH || "gallery-dl";
 
-  const cookiesPath =
-    process.env.INSTAGRAM_COOKIES ||
-    path.resolve(
-      __dirname,
-      "../../instagram-cookies.txt"
-    );
-
   const args = [
+    "--config-ignore",
     "-o",
     // Let gallery-dl use the DASH manifest so its downloader can fetch
     // separate video and audio streams and merge them with ffmpeg.
@@ -383,11 +451,13 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
     "-d",
     jobDir,
   ];
-  try {
-    await fs.access(cookiesPath);
-    args.unshift("--cookies", cookiesPath);
-  } catch {
-    console.warn("Instagram gallery-dl is continuing without cookies.");
+  if (options.useCookies === true) {
+    try {
+      await fs.access(instagramCookiesPath());
+      args.unshift("--cookies", instagramCookiesPath());
+    } catch {
+      console.warn("Instagram gallery-dl is continuing without cookies.");
+    }
   }
   args.push(url);
 
@@ -454,4 +524,8 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
 module.exports = {
   downloadMedia,
   probeFile,
+  downloadInstagramWithFallbacks,
+  isInstagramAuthenticationRequired,
+  runInstagramYtDlp,
+  downloadWithGalleryDl,
 };

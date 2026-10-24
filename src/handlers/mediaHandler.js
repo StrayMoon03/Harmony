@@ -454,7 +454,7 @@ async function processMediaMessage(message, lifecycle) {
       }
 
       try {
-        info = await getMediaInfo(originalUrl);
+        info = await getMediaInfo(originalUrl, { ignoreConfig: true });
       } catch {
         console.warn(
           "Metadata unavailable. Continuing with download only."

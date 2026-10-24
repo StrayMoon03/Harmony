@@ -35,6 +35,24 @@ test("failed browser execution logs only sanitized stage booleans", async () => 
   assert.deepEqual(warnings, ['HARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"browserLaunched":false}']);
 });
 
+test("reel browser never inherits cookies for anonymous retrieval and surfaces only explicit login redirects", async () => {
+  const source = await fs.readFile(path.join(__dirname, "instagramReelFallback.js"), "utf8");
+  for (const useCookies of [false, true]) {
+    const module = { exports: {} };
+    const optionsSeen = [];
+    const error = new Error("generic browser failure");
+    error.stderr = 'HARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"loginRoute":true,"checkpointRoute":false}';
+    const sandboxRequire = name => {
+      if (name === "node:util") return { promisify: () => async (_command, _args, options) => { optionsSeen.push(options); throw error; } };
+      if (name === "./browserLock") return { withBrowserLock: work => work() };
+      return require(name);
+    };
+    vm.runInNewContext(source, { require: sandboxRequire, module, __dirname, process: { ...process, env: { ...process.env, INSTAGRAM_COOKIES: "/tmp/cookie-session.txt" } }, console: { warn() {} }, URL });
+    await assert.rejects(module.exports.downloadInstagramReel("https://www.instagram.com/reel/EXACT/", "/unused", { useCookies }), error => error.code === "INSTAGRAM_AUTH_REQUIRED");
+    assert.equal(optionsSeen[0].env.INSTAGRAM_COOKIES, useCookies ? "/tmp/cookie-session.txt" : "");
+  }
+});
+
 async function runSave(result = owned, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-test-"));
   const calls = [];

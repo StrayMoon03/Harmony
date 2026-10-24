@@ -1,6 +1,6 @@
 import copy
 import unittest
-from instagramPhotoBrowser import exact_code, extract_photos
+from instagramPhotoBrowser import exact_code, extract_photos, is_login_route
 
 
 class PhotoExtractionTests(unittest.TestCase):
@@ -30,6 +30,12 @@ class PhotoExtractionTests(unittest.TestCase):
         for url in ("https://example.com/p/target/", "https://www.instagram.com/reel/target/"):
             with self.assertRaises(ValueError):
                 exact_code(url)
+
+    def test_login_route_is_explicit_authentication_signal(self):
+        self.assertTrue(is_login_route("https://www.instagram.com/accounts/login/"))
+        self.assertTrue(is_login_route("https://www.instagram.com/login/"))
+        self.assertFalse(is_login_route("https://www.instagram.com/p/target/"))
+        self.assertFalse(is_login_route("https://www.instagram.com/challenge/"))
 
 
 if __name__ == "__main__":

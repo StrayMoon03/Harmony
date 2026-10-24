@@ -50,6 +50,21 @@ test("original creator remains visible without inventing a date", () => {
   assert.doesNotMatch(card.footer, /Date unavailable/);
 });
 
+test("Instagram cards retain creator, original date, member comment, attribution, and source link", () => {
+  const card = formatMediaCard({
+    platform: "Instagram",
+    mediaType: "Reel",
+    creator: "@straykids",
+    originalUrl: "https://www.instagram.com/reel/EXACT/",
+    originalDate: new Date("2026-10-20T18:30:00Z"),
+    sharedById: "123456789012345678",
+    memberComment: "The live vocals!",
+  });
+  assert.equal(card.footer, "@straykids • Oct 20, 2026\nShared by <@123456789012345678>\n\n**💬 <@123456789012345678>**\n> The live vocals!");
+  assert.equal(card.buttonLabel, "View on Instagram");
+  assert.equal(card.buttonUrl, "https://www.instagram.com/reel/EXACT/");
+});
+
 test("missing original creator degrades gracefully", () => {
   const card = formatMediaCard({
     platform: "Threads",
