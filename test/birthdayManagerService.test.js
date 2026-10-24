@@ -45,7 +45,7 @@ test("Birthday Manager opens ephemerally and renders current settings", async ()
   await handleBirthdayManagerInteraction(interaction, "birthdays");
   assert.equal(interaction.responses[0].payload.flags, 64);
   assert.match(interaction.responses[0].payload.content, /Status: \*\*On\*\*/);
-  assert.match(interaction.responses[0].payload.content, /Opted-in profiles: \*\*1\*\*/);
+  assert.match(interaction.responses[0].payload.content, /Opted-in member birthdays: \*\*1\*\*/);
   assert.ok(interaction.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.label === "Manage Birthday"));
 });
 
@@ -177,11 +177,63 @@ test("Upcoming birthdays use member-friendly Welcome Pass wording", async () => 
   birthdayStore.upsertBirthdayProfile({ guildId, userId: "100004", birthdayMmdd: "10-20", birthdayName: "STAY", bias: "Han" });
   const interaction = fakeInteraction("birthdayupcoming", guildId);
   await handleBirthdayManagerInteraction(interaction, "birthdayupcoming");
-  assert.match(interaction.responses[0].payload.embeds[0].data.footer.text, /Birthdays shown here come from member Welcome Passes/);
+  assert.match(interaction.responses[0].payload.embeds[0].data.footer.text, /Includes opted-in members and configured non-member birthdays/);
 });
 
 test("Birthday Manager content reports the existing system rather than a second data source", () => {
   const guildId = `birthday-content-${Date.now()}`;
-  assert.match(birthdayManagerContent(guildId), /existing Welcome Pass birthday profiles/);
+  assert.match(birthdayManagerContent(guildId), /existing birthday profiles/);
   assert.equal(birthdayManagerComponents().length, 3);
+});
+
+test("non-member birthdays have a separate admin flow and do not replace the Discord member picker", async () => {
+  const guildId = `birthday-nonmember-ui-${Date.now()}`;
+  const components = birthdayManagerComponents().flatMap((row) => row.components);
+  assert.ok(components.some((button) => button.data.label === "Non-Member Birthdays"));
+
+  const denied = fakeInteraction("birthdaynonmember", guildId, false);
+  await handleBirthdayManagerInteraction(denied, "birthdaynonmember");
+  assert.match(denied.responses[0].payload.content, /Only server administrators/);
+  assert.equal(denied.responses[0].payload.flags, 64);
+
+  const open = fakeInteraction("birthdaynonmember", guildId);
+  await handleBirthdayManagerInteraction(open, "birthdaynonmember");
+  assert.match(open.responses[0].payload.content, /not Discord server members/);
+  const add = fakeInteraction("birthdaynonmemberadd", guildId);
+  await handleBirthdayManagerInteraction(add, "birthdaynonmemberadd");
+  assert.equal(add.modal.data.title, "Add non-member birthday");
+  assert.equal(add.modal.toJSON().components[2].components[0].value, "Asia/Seoul");
+
+  const submit = fakeInteraction("birthdaynonmemberaddmodal", guildId, true, {
+    name: "Lee Know", birthday: "10-25", timezone: "Asia/Seoul",
+  }, { kind: "modal" });
+  await handleBirthdayManagerInteraction(submit, "birthdaynonmemberaddmodal");
+  const saved = birthdayStore.listNonDiscordBirthdayProfiles(guildId);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].birthday_name, "Lee Know");
+  assert.equal(saved[0].birthday_mmdd, "10-25");
+  assert.equal(saved[0].timezone, "Asia/Seoul");
+  assert.equal(saved[0].user_id, null);
+
+  const memberFlow = fakeInteraction("birthdayadd", guildId);
+  await handleBirthdayManagerInteraction(memberFlow, "birthdayadd");
+  assert.equal(memberFlow.responses[0].payload.components[0].components[0].data.type, 5);
+});
+
+test("non-member birthdays can be edited and explicitly removed from their scoped admin list", async () => {
+  const guildId = `birthday-nonmember-manage-${Date.now()}`;
+  const id = birthdayStore.upsertNonDiscordBirthdayProfile({ guildId, birthdayName: "Lee Know", birthdayMmdd: "10-25", timezone: "Asia/Seoul" });
+  const editButton = fakeInteraction("birthdaynonmemberedit", guildId, true, {}, { customId: `harmony-manager:community:birthdaynonmemberedit:${id}` });
+  await handleBirthdayManagerInteraction(editButton, "birthdaynonmemberedit");
+  assert.equal(editButton.modal.toJSON().components[0].components[0].value, "Lee Know");
+
+  const edit = fakeInteraction("birthdaynonmembereditmodal", guildId, true, {
+    name: "Lee Know", birthday: "10-25", timezone: "Asia/Seoul",
+  }, { kind: "modal", customId: `harmony-manager:community:birthdaynonmembereditmodal:${id}` });
+  await handleBirthdayManagerInteraction(edit, "birthdaynonmembereditmodal");
+  assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).birthday_mmdd, "10-25");
+
+  const remove = fakeInteraction("birthdaynonmemberdeleteconfirm", guildId, true, {}, { customId: `harmony-manager:community:birthdaynonmemberdeleteconfirm:${id}` });
+  await handleBirthdayManagerInteraction(remove, "birthdaynonmemberdeleteconfirm");
+  assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id), null);
 });

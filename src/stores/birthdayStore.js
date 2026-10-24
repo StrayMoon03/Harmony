@@ -222,6 +222,62 @@ function upsertBirthdayProfile({
   }
 }
 
+function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, timezone }) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const existing = db.prepare(`
+    SELECT id FROM birthday_profiles
+    WHERE guild_id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+      AND lower(birthday_name) = lower(?)
+  `).get(guildId, birthdayName);
+  if (existing) {
+    db.prepare(`
+      UPDATE birthday_profiles SET celebration_enabled = 1,
+        birthday_name = ?, birthday_mmdd = ?, timezone = ?, bias = 'Lee Know',
+        role_remove_at = NULL, updated_at = ? WHERE id = ?
+    `).run(birthdayName, birthdayMmdd, timezone, now, existing.id);
+    return existing.id;
+  }
+  const result = db.prepare(`
+    INSERT INTO birthday_profiles (
+      guild_id, user_id, celebration_enabled, birthday_mmdd, birthday_name,
+      timezone, bias, created_at, updated_at
+    ) VALUES (?, NULL, 1, ?, ?, ?, 'Lee Know', ?, ?)
+  `).run(guildId, birthdayMmdd, birthdayName, timezone, now, now);
+  return Number(result.lastInsertRowid);
+}
+
+function listNonDiscordBirthdayProfiles(guildId) {
+  return getDb().prepare(`
+    SELECT * FROM birthday_profiles
+    WHERE guild_id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+      AND celebration_enabled = 1 AND birthday_mmdd IS NOT NULL
+    ORDER BY birthday_mmdd, birthday_name
+  `).all(guildId);
+}
+
+function getNonDiscordBirthdayProfile(guildId, profileId) {
+  return getDb().prepare(`
+    SELECT * FROM birthday_profiles
+    WHERE guild_id = ? AND id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+  `).get(guildId, profileId) || null;
+}
+
+function updateNonDiscordBirthdayProfile(guildId, profileId, { birthdayName, birthdayMmdd, timezone }) {
+  return getDb().prepare(`
+    UPDATE birthday_profiles SET birthday_name = ?, birthday_mmdd = ?, timezone = ?,
+      updated_at = ?
+    WHERE guild_id = ? AND id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+  `).run(birthdayName, birthdayMmdd, timezone, new Date().toISOString(), guildId, profileId).changes > 0;
+}
+
+function deleteNonDiscordBirthdayProfile(guildId, profileId) {
+  return getDb().prepare(`
+    DELETE FROM birthday_profiles
+    WHERE guild_id = ? AND id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+  `).run(guildId, profileId).changes > 0;
+}
+
 function getBirthdayProfile(guildId, userId) {
   return getDb().prepare(
     "SELECT * FROM birthday_profiles WHERE guild_id = ? AND user_id = ?"
@@ -272,25 +328,26 @@ function clearBirthdayCustomization(guildId, userId) {
 function markBirthdayAnnounced(profileId, year, removeAt) {
   const db = getDb();
   const profile = db.prepare(
-    "SELECT guild_id, user_id, birthday_mmdd FROM birthday_profiles WHERE id = ?"
+    "SELECT guild_id, user_id, birthday_mmdd, birthday_name FROM birthday_profiles WHERE id = ?"
   ).get(profileId);
   if (!profile) return;
 
   db.prepare(`
     UPDATE birthday_profiles SET
       last_announced_year = ?,
-      role_remove_at = ?,
+      role_remove_at = CASE WHEN user_id IS NULL THEN NULL ELSE ? END,
       updated_at = ?
     WHERE id = ?
   `).run(year, removeAt, new Date().toISOString(), profileId);
 
   db.prepare(`
     INSERT OR IGNORE INTO birthday_announcement_history (
-      guild_id, user_id, birthday_mmdd, announced_at
-    ) VALUES (?, ?, ?, ?)
+      guild_id, user_id, birthday_name, birthday_mmdd, announced_at
+    ) VALUES (?, ?, ?, ?, ?)
   `).run(
     profile.guild_id,
     profile.user_id,
+    profile.birthday_name,
     profile.birthday_mmdd,
     new Date().toISOString()
   );
@@ -329,6 +386,11 @@ module.exports = {
   listUnlinkedWelcomePassBirthdayProfiles,
   attachWelcomePassBirthdayProfile,
   upsertBirthdayProfile,
+  upsertNonDiscordBirthdayProfile,
+  listNonDiscordBirthdayProfiles,
+  getNonDiscordBirthdayProfile,
+  updateNonDiscordBirthdayProfile,
+  deleteNonDiscordBirthdayProfile,
   getBirthdayProfile,
   listBirthdayProfiles,
   setBirthdayCustomization,

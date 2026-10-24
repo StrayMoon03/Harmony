@@ -94,11 +94,12 @@ function buildBirthdayEmbed(profile, year, preview = false) {
   const bias = normalizeBias(profile.bias);
   const message = profile.custom_message || presetFor(profile, year);
   const name = profile.birthday_name || "Birthday STAY";
+  const person = profile.user_id ? `<@${profile.user_id}>` : name;
   const embed = new EmbedBuilder()
     .setColor(0xc084fc)
     .setTitle(`🎂 Happy Birthday, ${name}!`)
     .setDescription([
-      preview ? `Preview for <@${profile.user_id}>` : `Today belongs to <@${profile.user_id}>!`,
+      preview ? `Preview for ${person}` : `Today belongs to ${person}!`,
       "",
       `**A fan-made birthday note inspired by ${bias}:**`,
       message,
@@ -136,6 +137,7 @@ async function announceBirthdays(client, settings, parts) {
 
   const profiles = store.listBirthdayProfiles(guild.id)
     .filter((profile) =>
+      Boolean(profile.user_id) &&
       profile.birthday_mmdd === parts.mmdd &&
       Number(profile.last_announced_year || 0) !== parts.year
     );
@@ -184,12 +186,57 @@ async function announceBirthdays(client, settings, parts) {
   }
 }
 
+async function announceNonDiscordBirthdays(client, settings, now = new Date()) {
+  const due = store.listNonDiscordBirthdayProfiles(settings.guild_id)
+    .filter((profile) => isNonDiscordBirthdayDue(profile, now, settings.announcement_hour));
+  if (!due.length) return;
+  const guild = await fetchGuild(client, settings.guild_id);
+  if (!guild) return;
+  const channel = await fetchTextChannel(guild, settings.channel_id);
+  if (!channel) throw new Error("Birthday announcement channel is unavailable.");
+  for (const profile of due) {
+    const local = zonedParts(now, profile.timezone);
+    await channel.send({
+      content: `🎉 @everyone, help us celebrate **${profile.birthday_name}** today!`,
+      embeds: [buildBirthdayEmbed(profile, local.year)],
+      allowedMentions: { parse: ["everyone"] },
+    });
+    store.markBirthdayAnnounced(profile.id, local.year, null);
+  }
+}
+
+function isNonDiscordBirthdayDue(profile, now = new Date(), announcementHour = null) {
+  if (!validTimezone(profile.timezone)) return false;
+  const local = zonedParts(now, profile.timezone);
+  return profile.birthday_mmdd === local.mmdd &&
+    Number(profile.last_announced_year || 0) !== local.year &&
+    (announcementHour === null || local.hour >= Number(announcementHour));
+}
+
+function daysUntilInTimezone(mmdd, timezone, now = new Date()) {
+  if (!validMmdd(mmdd) || !validTimezone(timezone)) return Number.POSITIVE_INFINITY;
+  const local = zonedParts(now, timezone);
+  const [month, day] = mmdd.split("-").map(Number);
+  let year = local.year;
+  let target = new Date(Date.UTC(year, month - 1, day));
+  const today = Date.UTC(local.year, local.month - 1, local.day);
+  if (target.getTime() < today ||
+      (month === 2 && day === 29 && target.getUTCMonth() !== 1)) {
+    do {
+      year += 1;
+      target = new Date(Date.UTC(year, month - 1, day));
+    } while (month === 2 && day === 29 && target.getUTCMonth() !== 1);
+  }
+  return Math.round((target.getTime() - today) / (24 * 60 * 60 * 1000));
+}
+
 function upcomingProfiles(guildId, limitDays = 7) {
   return store.listBirthdayProfiles(guildId)
     .map((profile) => ({
       ...profile,
-      daysAway: daysUntil(profile.birthday_mmdd),
-      nextDate: nextOccurrence(profile.birthday_mmdd),
+      daysAway: profile.user_id
+        ? daysUntil(profile.birthday_mmdd)
+        : daysUntilInTimezone(profile.birthday_mmdd, profile.timezone),
     }))
     .filter((profile) => profile.daysAway >= 0 && profile.daysAway <= limitDays)
     .sort((a, b) => a.daysAway - b.daysAway);
@@ -208,7 +255,7 @@ async function postWeeklyReminder(client, settings) {
       : profile.daysAway === 1
         ? "tomorrow"
         : `in ${profile.daysAway} days`;
-    return `🎂 <@${profile.user_id}> — ${formatMmdd(profile.birthday_mmdd)} (${when})`;
+    return `🎂 ${profile.user_id ? `<@${profile.user_id}>` : `**${profile.birthday_name}**`} — ${formatMmdd(profile.birthday_mmdd)} (${when})`;
   });
 
   await channel.send({
@@ -217,7 +264,7 @@ async function postWeeklyReminder(client, settings) {
         .setColor(0xf472b6)
         .setTitle("✨ Birthdays coming up this week")
         .setDescription(lines.join("\n"))
-        .setFooter({ text: "Only members who opted into birthday celebrations are shown." }),
+        .setFooter({ text: "Includes opted-in members and configured non-member birthdays." }),
     ],
     allowedMentions: { parse: [] },
   });
@@ -241,8 +288,10 @@ async function postMonthlyRecap(client, settings, parts) {
     month: "long",
     timeZone: "UTC",
   });
-  const members = [...new Set(history.map((item) => item.user_id))]
-    .map((id) => `<@${id}>`);
+  const celebrants = [...new Map(history.map((item) => [
+    item.user_id ? `user:${item.user_id}` : `name:${item.birthday_name || item.birthday_mmdd}`,
+    item.user_id ? `<@${item.user_id}>` : item.birthday_name || "Birthday celebration",
+  ])).values()];
 
   await channel.send({
     embeds: [
@@ -252,7 +301,7 @@ async function postMonthlyRecap(client, settings, parts) {
         .setDescription([
           "One more round of birthday love for the STAYs we celebrated:",
           "",
-          members.join("\n"),
+          celebrants.join("\n"),
           "",
           "Thank you for making their days feel special!",
         ].join("\n")),
@@ -297,6 +346,7 @@ async function processBirthdaySchedule(client) {
     try {
       if (!validTimezone(settings.timezone)) continue;
       const parts = zonedParts(new Date(), settings.timezone);
+      await announceNonDiscordBirthdays(client, settings);
       if (parts.hour !== Number(settings.announcement_hour)) continue;
 
       if (settings.last_daily_key !== parts.dateKey) {
@@ -360,10 +410,14 @@ function startBirthdayScheduler(client) {
 module.exports = {
   validTimezone,
   validMmdd,
+  zonedParts,
+  isNonDiscordBirthdayDue,
+  daysUntilInTimezone,
   formatMmdd,
   daysUntil,
   nextOccurrence,
   upcomingProfiles,
   buildBirthdayEmbed,
+  announceNonDiscordBirthdays,
   startBirthdayScheduler,
 };
