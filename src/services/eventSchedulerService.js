@@ -2765,6 +2765,7 @@ async function handleManagerInteraction(interaction) {
     "birthdaysettingsstep2", "birthdaysettingstimezone", "birthdaysettingstime", "birthdaysettingsday", "birthdaysettingssave", "birthdayweekly", "birthdaymonthly", "birthdaymatchall", "birthdaymatchmember",
     "birthdaymatchmembermodal", "birthdaynonmember", "birthdaynonmemberadd", "birthdaynonmemberaddmodal",
     "birthdaynonmemberselect", "birthdaynonmemberedit", "birthdaynonmembereditmodal",
+    "birthdaynonmembermessage", "birthdaynonmembermessagemodal",
     "birthdaynonmemberdelete", "birthdaynonmemberdeleteconfirm",
     "birthdayoff", "birthdayoffconfirm",
   ].includes(action)) {

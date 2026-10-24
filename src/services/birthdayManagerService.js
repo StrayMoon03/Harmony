@@ -204,10 +204,18 @@ function nonMemberBirthdayComponents(profiles = []) {
 }
 
 function nonMemberBirthdayModal(action, profile = {}) {
-  return textModal(`harmony-manager:community:${action}${profile.id ? `:${profile.id}` : ""}`, profile.id ? "Edit non-member birthday" : "Add non-member birthday", [
+  const fields = [
     { id: "name", label: "Display name", required: true, maxLength: 80, value: profile.birthday_name },
     { id: "birthday", label: "Birthday (MM-DD)", required: true, maxLength: 5, value: profile.birthday_mmdd },
     { id: "timezone", label: "IANA time zone", required: true, maxLength: 100, value: profile.timezone || "Asia/Seoul" },
+  ];
+  if (!profile.id) fields.push({ id: "message", label: "Custom announcement message (optional)", paragraph: true, maxLength: 3500 });
+  return textModal(`harmony-manager:community:${action}${profile.id ? `:${profile.id}` : ""}`, profile.id ? "Edit non-member birthday" : "Add non-member birthday", fields);
+}
+
+function nonMemberMessageModal(profile) {
+  return textModal(`harmony-manager:community:birthdaynonmembermessagemodal:${profile.id}`, "Edit birthday message", [
+    { id: "message", label: "Custom announcement message", paragraph: true, maxLength: 3500, value: profile.custom_message },
   ]);
 }
 
@@ -216,6 +224,7 @@ function renderNonMemberBirthday(profile) {
     `**${profile.birthday_name}**`,
     `Birthday: **${formatMmdd(profile.birthday_mmdd)}** (${profile.birthday_mmdd})`,
     `Time zone: **${profile.timezone}**`,
+    `Custom announcement message: **${profile.custom_message ? "Set" : "Default neutral message"}**`,
     "This annual birthday is not linked to a Discord member and does not receive a birthday role.",
   ].join("\n");
 }
@@ -381,11 +390,12 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     const name = interaction.fields.getTextInputValue("name").trim();
     const birthday = interaction.fields.getTextInputValue("birthday").trim();
     const timezone = interaction.fields.getTextInputValue("timezone").trim();
-    if (!name || name.length > 80 || !validMmdd(birthday) || !validTimezone(timezone)) {
+    const message = interaction.fields.getTextInputValue("message").trim();
+    if (!name || name.length > 80 || !validMmdd(birthday) || !validTimezone(timezone) || message.length > 3500) {
       await interaction.reply({ content: "Enter a display name, a valid MM-DD birthday, and a valid IANA time zone such as Asia/Seoul.", flags: 64 });
       return true;
     }
-    birthdayStore.upsertNonDiscordBirthdayProfile({ guildId: interaction.guildId, birthdayName: name, birthdayMmdd: birthday, timezone });
+    birthdayStore.upsertNonDiscordBirthdayProfile({ guildId: interaction.guildId, birthdayName: name, birthdayMmdd: birthday, timezone, customMessage: message });
     await interaction.reply({ content: `Saved **${name}** as an annual birthday on **${formatMmdd(birthday)}** in **${timezone}**.`, components: birthdayBackRow(), flags: 64 });
     return true;
   }
@@ -398,6 +408,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     await interaction.update({ content: renderNonMemberBirthday(profile), components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberedit:${profile.id}`).setLabel("Edit").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmembermessage:${profile.id}`).setLabel("Edit Message").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberdelete:${profile.id}`).setLabel("Remove").setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmember").setLabel("Back").setStyle(ButtonStyle.Secondary),
       ),
@@ -412,6 +423,27 @@ async function handleBirthdayManagerInteraction(interaction, action) {
       return true;
     }
     await interaction.showModal(nonMemberBirthdayModal("birthdaynonmembereditmodal", profile));
+    return true;
+  }
+  if (action === "birthdaynonmembermessage" && interaction.isButton?.()) {
+    const profileId = customParts(interaction)[3];
+    const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
+    if (!profile) {
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      return true;
+    }
+    await interaction.showModal(nonMemberMessageModal(profile));
+    return true;
+  }
+  if (action === "birthdaynonmembermessagemodal" && interaction.isModalSubmit?.()) {
+    const profileId = customParts(interaction)[3];
+    const message = interaction.fields.getTextInputValue("message").trim();
+    if (message.length > 3500) {
+      await interaction.reply({ content: "Keep the custom announcement message to 3,500 characters or fewer.", flags: 64 });
+      return true;
+    }
+    const updated = birthdayStore.updateNonDiscordBirthdayMessage(interaction.guildId, profileId, message);
+    await interaction.reply({ content: updated ? (message ? "Saved the custom birthday announcement message." : "Cleared the custom message. Harmony will use the neutral default.") : "That non-member birthday is no longer available.", components: birthdayBackRow(), flags: 64 });
     return true;
   }
   if (action === "birthdaynonmembereditmodal" && interaction.isModalSubmit?.()) {

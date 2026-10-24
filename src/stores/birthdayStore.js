@@ -222,7 +222,7 @@ function upsertBirthdayProfile({
   }
 }
 
-function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, timezone }) {
+function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, timezone, customMessage = null }) {
   const db = getDb();
   const now = new Date().toISOString();
   const existing = db.prepare(`
@@ -234,16 +234,17 @@ function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, 
     db.prepare(`
       UPDATE birthday_profiles SET celebration_enabled = 1,
         birthday_name = ?, birthday_mmdd = ?, timezone = ?, bias = 'Still deciding',
-        role_remove_at = NULL, updated_at = ? WHERE id = ?
-    `).run(birthdayName, birthdayMmdd, timezone, now, existing.id);
+        custom_message = COALESCE(?, custom_message), role_remove_at = NULL,
+        updated_at = ? WHERE id = ?
+    `).run(birthdayName, birthdayMmdd, timezone, String(customMessage || "").trim() || null, now, existing.id);
     return existing.id;
   }
   const result = db.prepare(`
     INSERT INTO birthday_profiles (
       guild_id, user_id, celebration_enabled, birthday_mmdd, birthday_name,
-      timezone, bias, created_at, updated_at
-    ) VALUES (?, NULL, 1, ?, ?, ?, 'Still deciding', ?, ?)
-  `).run(guildId, birthdayMmdd, birthdayName, timezone, now, now);
+      timezone, bias, custom_message, created_at, updated_at
+    ) VALUES (?, NULL, 1, ?, ?, ?, 'Still deciding', ?, ?, ?)
+  `).run(guildId, birthdayMmdd, birthdayName, timezone, String(customMessage || "").trim() || null, now, now);
   return Number(result.lastInsertRowid);
 }
 
@@ -269,6 +270,13 @@ function updateNonDiscordBirthdayProfile(guildId, profileId, { birthdayName, bir
       updated_at = ?
     WHERE guild_id = ? AND id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
   `).run(birthdayName, birthdayMmdd, timezone, new Date().toISOString(), guildId, profileId).changes > 0;
+}
+
+function updateNonDiscordBirthdayMessage(guildId, profileId, customMessage) {
+  return getDb().prepare(`
+    UPDATE birthday_profiles SET custom_message = ?, updated_at = ?
+    WHERE guild_id = ? AND id = ? AND user_id IS NULL AND welcome_pass_code IS NULL
+  `).run(String(customMessage || "").trim() || null, new Date().toISOString(), guildId, profileId).changes > 0;
 }
 
 function deleteNonDiscordBirthdayProfile(guildId, profileId) {
@@ -390,6 +398,7 @@ module.exports = {
   listNonDiscordBirthdayProfiles,
   getNonDiscordBirthdayProfile,
   updateNonDiscordBirthdayProfile,
+  updateNonDiscordBirthdayMessage,
   deleteNonDiscordBirthdayProfile,
   getBirthdayProfile,
   listBirthdayProfiles,

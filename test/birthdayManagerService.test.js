@@ -203,9 +203,10 @@ test("non-member birthdays have a separate admin flow and do not replace the Dis
   await handleBirthdayManagerInteraction(add, "birthdaynonmemberadd");
   assert.equal(add.modal.data.title, "Add non-member birthday");
   assert.equal(add.modal.toJSON().components[2].components[0].value, "Asia/Seoul");
+  assert.equal(add.modal.toJSON().components[3].components[0].style, 2);
 
   const submit = fakeInteraction("birthdaynonmemberaddmodal", guildId, true, {
-    name: "Lee Know", birthday: "10-25", timezone: "Asia/Seoul",
+    name: "Lee Know", birthday: "10-25", timezone: "Asia/Seoul", message: "Custom Lee Know note.\n\nSecond paragraph.",
   }, { kind: "modal" });
   await handleBirthdayManagerInteraction(submit, "birthdaynonmemberaddmodal");
   const saved = birthdayStore.listNonDiscordBirthdayProfiles(guildId);
@@ -214,6 +215,7 @@ test("non-member birthdays have a separate admin flow and do not replace the Dis
   assert.equal(saved[0].birthday_mmdd, "10-25");
   assert.equal(saved[0].timezone, "Asia/Seoul");
   assert.equal(saved[0].user_id, null);
+  assert.equal(saved[0].custom_message, "Custom Lee Know note.\n\nSecond paragraph.");
 
   const memberFlow = fakeInteraction("birthdayadd", guildId);
   await handleBirthdayManagerInteraction(memberFlow, "birthdayadd");
@@ -232,6 +234,13 @@ test("non-member birthdays can be edited and explicitly removed from their scope
   }, { kind: "modal", customId: `harmony-manager:community:birthdaynonmembereditmodal:${id}` });
   await handleBirthdayManagerInteraction(edit, "birthdaynonmembereditmodal");
   assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).birthday_mmdd, "10-25");
+
+  const messageButton = fakeInteraction("birthdaynonmembermessage", guildId, true, {}, { customId: `harmony-manager:community:birthdaynonmembermessage:${id}` });
+  await handleBirthdayManagerInteraction(messageButton, "birthdaynonmembermessage");
+  assert.equal(messageButton.modal.toJSON().components[0].components[0].style, 2);
+  const messageEdit = fakeInteraction("birthdaynonmembermessagemodal", guildId, true, { message: "Edited multi-paragraph note.\n\nSecond part." }, { kind: "modal", customId: `harmony-manager:community:birthdaynonmembermessagemodal:${id}` });
+  await handleBirthdayManagerInteraction(messageEdit, "birthdaynonmembermessagemodal");
+  assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).custom_message, "Edited multi-paragraph note.\n\nSecond part.");
 
   const remove = fakeInteraction("birthdaynonmemberdeleteconfirm", guildId, true, {}, { customId: `harmony-manager:community:birthdaynonmemberdeleteconfirm:${id}` });
   await handleBirthdayManagerInteraction(remove, "birthdaynonmemberdeleteconfirm");
