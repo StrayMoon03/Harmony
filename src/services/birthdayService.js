@@ -194,7 +194,7 @@ async function announceBirthdays(client, settings, parts) {
 
 async function announceNonDiscordBirthdays(client, settings, now = new Date()) {
   const due = store.listNonDiscordBirthdayProfiles(settings.guild_id)
-    .filter((profile) => isNonDiscordBirthdayDue(profile, now, settings.announcement_hour));
+    .filter((profile) => isNonDiscordBirthdayDue(profile, now));
   if (!due.length) return;
   const guild = await fetchGuild(client, settings.guild_id);
   if (!guild) return;
@@ -211,12 +211,15 @@ async function announceNonDiscordBirthdays(client, settings, now = new Date()) {
   }
 }
 
-function isNonDiscordBirthdayDue(profile, now = new Date(), announcementHour = null) {
+function isNonDiscordBirthdayDue(profile, now = new Date()) {
   if (!validTimezone(profile.timezone)) return false;
   const local = zonedParts(now, profile.timezone);
   return profile.birthday_mmdd === local.mmdd &&
-    Number(profile.last_announced_year || 0) !== local.year &&
-    (announcementHour === null || local.hour >= Number(announcementHour));
+    Number(profile.last_announced_year || 0) !== local.year;
+}
+
+function isMemberBirthdayAnnouncementTime(settings, parts) {
+  return parts.hour === Number(settings.announcement_hour);
 }
 
 function daysUntilInTimezone(mmdd, timezone, now = new Date()) {
@@ -350,10 +353,12 @@ async function processBirthdaySchedule(client) {
 
   for (const settings of store.listBirthdaySettings()) {
     try {
+      // Non-member birthdays have their own timezone and become due at local
+      // midnight, independently of the guild's member-birthday schedule.
+      await announceNonDiscordBirthdays(client, settings);
       if (!validTimezone(settings.timezone)) continue;
       const parts = zonedParts(new Date(), settings.timezone);
-      await announceNonDiscordBirthdays(client, settings);
-      if (parts.hour !== Number(settings.announcement_hour)) continue;
+      if (!isMemberBirthdayAnnouncementTime(settings, parts)) continue;
 
       if (settings.last_daily_key !== parts.dateKey) {
         await announceBirthdays(client, settings, parts);
@@ -418,6 +423,7 @@ module.exports = {
   validMmdd,
   zonedParts,
   isNonDiscordBirthdayDue,
+  isMemberBirthdayAnnouncementTime,
   daysUntilInTimezone,
   formatMmdd,
   daysUntil,
