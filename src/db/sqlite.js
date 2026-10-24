@@ -329,6 +329,8 @@ function migrate(database) {
       event_id            INTEGER NOT NULL REFERENCES scheduled_events(id) ON DELETE CASCADE,
       scheduled_for       TEXT NOT NULL,
       message             TEXT NOT NULL,
+      origin              TEXT NOT NULL DEFAULT 'unknown'
+                          CHECK (origin IN ('unknown', 'generated', 'manual')),
       status              TEXT NOT NULL DEFAULT 'pending'
                           CHECK (status IN ('pending', 'sending', 'sent', 'cancelled')),
       attempted_at        TEXT,
@@ -488,6 +490,14 @@ function migrate(database) {
   const scheduledEventColumns = new Set(
     database.prepare("PRAGMA table_info(scheduled_events)").all().map((column) => column.name)
   );
+  const scheduledAnnouncementColumns = new Set(
+    database.prepare("PRAGMA table_info(scheduled_announcements)").all().map((column) => column.name)
+  );
+  if (!scheduledAnnouncementColumns.has("origin")) {
+    // Existing rows have no trustworthy provenance. Preserve them as unknown;
+    // only rows created by the generated-announcement path are tagged generated.
+    database.exec("ALTER TABLE scheduled_announcements ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown' CHECK (origin IN ('unknown', 'generated', 'manual'))");
+  }
   if (!scheduledEventColumns.has("calendar_type")) {
     database.exec("ALTER TABLE scheduled_events ADD COLUMN calendar_type TEXT NOT NULL DEFAULT 'community'");
   }

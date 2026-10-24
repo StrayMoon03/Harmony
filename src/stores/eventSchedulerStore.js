@@ -81,8 +81,8 @@ function createEvent({ guildId, sourceChannelId, destinationChannelId, title, li
     const eventId = Number(result.lastInsertRowid);
     const insert = db.prepare(`
       INSERT INTO scheduled_announcements (
-        event_id, scheduled_for, message, status, created_at
-      ) VALUES (?, ?, ?, 'pending', ?)
+        event_id, scheduled_for, message, origin, status, created_at
+      ) VALUES (?, ?, ?, 'manual', 'pending', ?)
     `);
     for (const item of announcements || []) {
       insert.run(eventId, item.scheduledFor, item.message, now);
@@ -535,8 +535,8 @@ function addAnnouncement(guildId, eventId, scheduledFor, message) {
   if (duplicate) return { ok: false, reason: "duplicate" };
   const result = db.prepare(`
     INSERT INTO scheduled_announcements (
-      event_id, scheduled_for, message, status, created_at
-    ) VALUES (?, ?, ?, 'pending', ?)
+      event_id, scheduled_for, message, origin, status, created_at
+    ) VALUES (?, ?, ?, 'manual', 'pending', ?)
   `).run(eventId, scheduledFor, message, new Date().toISOString());
   return { ok: true, id: Number(result.lastInsertRowid) };
 }
@@ -667,6 +667,35 @@ function cancelEvent(guildId, eventId, cancelledBy) {
   }
 }
 
+function cancelOneOffEvent(guildId, eventId, cancelledBy) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const event = db.prepare("SELECT * FROM scheduled_events WHERE id = ? AND guild_id = ? AND cancelled_at IS NULL")
+      .get(eventId, guildId);
+    if (!event) {
+      db.exec("COMMIT");
+      return { event: null, changed: false };
+    }
+    db.prepare("UPDATE scheduled_events SET cancelled_at = ?, cancelled_by = ? WHERE id = ? AND guild_id = ? AND cancelled_at IS NULL")
+      .run(now, cancelledBy, eventId, guildId);
+    db.prepare("UPDATE scheduled_announcements SET status = 'cancelled' WHERE event_id = ? AND status = 'pending'")
+      .run(eventId);
+    if (event.discord_event_id) {
+      db.prepare("UPDATE discord_event_reminder_schedules SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+        .run(guildId, event.discord_event_id);
+      db.prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+        .run(guildId, event.discord_event_id);
+    }
+    db.exec("COMMIT");
+    return { event: { ...event, cancelled_at: now, cancelled_by: cancelledBy }, changed: true };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function cancelSeriesEvents(guildId, seriesId, cancelledBy, fromIndex = null) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -732,7 +761,7 @@ function saveEventAnnouncements(guildId, eventId, channelId, offsets, items, ann
         .run(channelId || null, JSON.stringify(normalized), guildId, eventId);
     }
     db.prepare("DELETE FROM scheduled_announcements WHERE event_id = ? AND status IN ('pending', 'sending')").run(eventId);
-    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)");
+    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, origin, status, created_at) VALUES (?, ?, ?, 'generated', 'pending', ?)");
     const now = new Date().toISOString();
     for (const item of items || []) {
       // Offset zero is a legacy representation of "starting now". It is no
@@ -757,7 +786,7 @@ function mergeEventAnnouncements(guildId, eventId, channelId, offsets, items, an
   try {
     if (announcementMessage !== undefined) db.prepare("UPDATE scheduled_events SET announcement_channel_id = ?, announcement_offsets = ?, announcement_message = ? WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL").run(channelId || null, JSON.stringify(normalized), announcementMessage || null, guildId, eventId);
     else db.prepare("UPDATE scheduled_events SET announcement_channel_id = ?, announcement_offsets = ? WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL").run(channelId || null, JSON.stringify(normalized), guildId, eventId);
-    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, status, created_at) SELECT ?, ?, ?, 'pending', ? WHERE NOT EXISTS (SELECT 1 FROM scheduled_announcements WHERE event_id = ? AND scheduled_for = ? AND status <> 'cancelled')");
+    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, origin, status, created_at) SELECT ?, ?, ?, 'generated', 'pending', ? WHERE NOT EXISTS (SELECT 1 FROM scheduled_announcements WHERE event_id = ? AND scheduled_for = ? AND status <> 'cancelled')");
     const now = new Date().toISOString();
     for (const item of items || []) {
       if (event.event_at && item.scheduledFor === event.event_at) continue;
@@ -766,6 +795,64 @@ function mergeEventAnnouncements(guildId, eventId, channelId, offsets, items, an
     db.exec("COMMIT");
     return getEvent(guildId, eventId);
   } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+function rebuildGeneratedEventAnnouncements(guildId, eventId, previousItems, nextItems) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const previous = new Set((previousItems || []).map((item) => `${item.scheduledFor}\u0000${item.message}`));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const event = db.prepare("SELECT id FROM scheduled_events WHERE guild_id = ? AND id = ? AND cancelled_at IS NULL").get(guildId, eventId);
+    if (!event) {
+      db.exec("COMMIT");
+      return false;
+    }
+    db.prepare("UPDATE scheduled_announcements SET status = 'cancelled' WHERE event_id = ? AND origin = 'generated' AND status = 'pending'")
+      .run(eventId);
+    const unknownPending = db.prepare("SELECT id, scheduled_for, message FROM scheduled_announcements WHERE event_id = ? AND origin = 'unknown' AND status = 'pending'").all(eventId);
+    const cancelUnknown = db.prepare("UPDATE scheduled_announcements SET status = 'cancelled' WHERE id = ? AND status = 'pending'");
+    for (const row of unknownPending) {
+      if (previous.has(`${row.scheduled_for}\u0000${row.message}`)) cancelUnknown.run(row.id);
+    }
+    const insert = db.prepare("INSERT INTO scheduled_announcements (event_id, scheduled_for, message, origin, status, created_at) VALUES (?, ?, ?, 'generated', 'pending', ?)");
+    for (const item of nextItems || []) insert.run(eventId, item.scheduledFor, item.message, now);
+    db.exec("COMMIT");
+    return true;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function rescheduleDiscordEventReminders(guildId, discordEventId, eventStartAt, now = new Date()) {
+  if (!guildId || !discordEventId || !eventStartAt) return { schedules: 0, legacy: 0 };
+  const start = new Date(eventStartAt).getTime();
+  if (!Number.isFinite(start)) return { schedules: 0, legacy: 0 };
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = db.prepare("SELECT user_id, reminder_offset_seconds FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+      .all(guildId, discordEventId);
+    const update = db.prepare("UPDATE discord_event_reminder_schedules SET remind_at = ?, status = ? WHERE guild_id = ? AND discord_event_id = ? AND user_id = ? AND reminder_offset_seconds = ? AND status = 'pending'");
+    for (const row of rows) {
+      const remindAtMs = start - Number(row.reminder_offset_seconds) * 1000;
+      update.run(new Date(remindAtMs).toISOString(), remindAtMs > nowMs ? "pending" : "cancelled", guildId, discordEventId, row.user_id, row.reminder_offset_seconds);
+    }
+    const legacyRows = db.prepare("SELECT user_id, reminder_offset_seconds FROM discord_event_reminders WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+      .all(guildId, discordEventId);
+    const updateLegacy = db.prepare("UPDATE discord_event_reminders SET remind_at = ?, status = ? WHERE guild_id = ? AND discord_event_id = ? AND user_id = ? AND status = 'pending'");
+    for (const row of legacyRows) {
+      const remindAtMs = start - Number(row.reminder_offset_seconds) * 1000;
+      updateLegacy.run(new Date(remindAtMs).toISOString(), remindAtMs > nowMs ? "pending" : "cancelled", guildId, discordEventId, row.user_id);
+    }
+    db.exec("COMMIT");
+    return { schedules: rows.length, legacy: legacyRows.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function refreshPendingAnnouncementMessages(eventId, items) {
@@ -873,6 +960,7 @@ module.exports = {
   addAnnouncement,
   listEvents,
   cancelEvent,
+  cancelOneOffEvent,
   cancelSeriesEvents,
   updateEvent,
   getManagerPanel,
@@ -882,6 +970,7 @@ module.exports = {
   markSent,
   markFailed,
   saveEventAnnouncements,
+  rebuildGeneratedEventAnnouncements,
   mergeEventAnnouncements,
   refreshPendingAnnouncementMessages,
   getDiscordEventReconciliation,
@@ -907,6 +996,7 @@ module.exports = {
   renameCalendarEventTitle,
   removeCalendarEventTitle,
   saveDiscordEventReminder,
+  rescheduleDiscordEventReminders,
   cancelDiscordEventReminder,
   dueDiscordEventReminders,
   markDiscordEventReminderSent,

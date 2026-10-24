@@ -13,6 +13,8 @@ const {
   CALENDAR_CATEGORIES,
   CALENDAR_CATEGORY_LABELS,
   installScheduleManagers,
+  cancelHarmonyOneOffEvent,
+  updateLinkedOneOffCalendarSchedule,
 } = require("../services/eventSchedulerService");
 
 const data = new SlashCommandBuilder()
@@ -149,8 +151,9 @@ async function execute(interaction) {
   if (action === "cancel") {
     const eventId = interaction.options.getInteger("event", true);
     const existing = store.getEvent(interaction.guildId, eventId);
-    const removed = store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
-    if (removed && existing?.event_date) await refreshPublishedCalendar(interaction.client, interaction.guildId, existing.calendar_type, existing.event_date).catch(() => {});
+    const oneOff = await cancelHarmonyOneOffEvent({ guildId: interaction.guildId, eventId, cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
+    const removed = oneOff.handled ? oneOff.changed : store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
+    if (!oneOff.handled && removed && existing?.event_date) await refreshPublishedCalendar(interaction.client, interaction.guildId, existing.calendar_type, existing.event_date).catch(() => {});
     await interaction.editReply(removed ? `Cancelled event #${eventId}.` : "I could not find that active event.");
     return;
   }
@@ -164,6 +167,9 @@ async function execute(interaction) {
     const allDay = allDayOption === null ? Boolean(existing.all_day) : allDayOption;
     const eventTime = interaction.options.getString("event-time");
     const eventAt = allDay ? null : (eventTime ? localToUtc(eventDate, eventTime, eventTimezone) : (existing.event_at ? new Date(existing.event_at) : null));
+    const eventEndAt = !allDay && !existing.all_day && eventAt && existing.event_at && existing.event_end_at && eventAt.getTime() !== new Date(existing.event_at).getTime()
+      ? new Date(eventAt.getTime() + (new Date(existing.event_end_at).getTime() - new Date(existing.event_at).getTime())).toISOString()
+      : existing.event_end_at;
     if (!eventDate || !validTimezone(eventTimezone) || !localToUtc(eventDate, "12:00", eventTimezone) || (!allDay && !eventAt)) {
       await interaction.editReply("Provide a valid event date, time, and timezone."); return;
     }
@@ -172,11 +178,13 @@ async function execute(interaction) {
       calendar_type: interaction.options.getString("calendar") || existing.calendar_type,
       event_date: eventDate,
       event_at: eventAt?.toISOString() || null,
+      event_end_at: eventEndAt,
       event_timezone: eventTimezone,
       category: interaction.options.getString("category") || existing.category || "other",
       description: interaction.options.getString("description") ?? existing.description,
       all_day: allDay ? 1 : 0,
     });
+    await updateLinkedOneOffCalendarSchedule(interaction.client, existing, updated, { syncDiscord: true });
     await refreshPublishedCalendar(interaction.client, interaction.guildId, existing.calendar_type, existing.event_date).catch(() => {});
     await refreshPublishedCalendar(interaction.client, interaction.guildId, updated.calendar_type, updated.event_date).catch(() => {});
     await interaction.editReply(`Updated event #${eventId}.`);
