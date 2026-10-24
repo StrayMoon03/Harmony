@@ -141,13 +141,14 @@ function settingsLines(settings) {
 function birthdayManagerContent(guildId) {
   const settings = birthdayStore.getBirthdaySettings(guildId);
   const profiles = birthdayStore.listBirthdayProfiles(guildId);
+  const memberProfiles = profiles.filter((profile) => profile.user_id).length;
   return [
     "🎂 **BIRTHDAY MANAGER**",
     "",
     ...settingsLines(settings),
-    `Opted-in profiles: **${profiles.length}**`,
+    `Opted-in member birthdays: **${memberProfiles}**`,
     "",
-    "This panel uses the existing Welcome Pass birthday profiles, scheduler, presets, and role behavior.",
+    "This panel uses Harmony's existing birthday profiles, scheduler, presets, and role behavior.",
   ].join("\n");
 }
 
@@ -164,6 +165,7 @@ function birthdayManagerComponents() {
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaypreview").setLabel("Preview").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchall").setLabel("Connect Welcome Passes").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchmember").setLabel("Resolve One Welcome Pass").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmember").setLabel("Non-Member Birthdays").setStyle(ButtonStyle.Primary),
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettings").setLabel("Settings").setStyle(ButtonStyle.Primary),
@@ -179,6 +181,43 @@ function birthdayBackRow() {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Back to Birthday Manager").setStyle(ButtonStyle.Secondary),
   )];
+}
+
+function nonMemberBirthdayComponents(profiles = []) {
+  const rows = [];
+  if (profiles.length) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("harmony-manager:community:birthdaynonmemberselect")
+        .setPlaceholder("Choose a non-member birthday to manage")
+        .addOptions(profiles.slice(0, 25).map((profile) => ({
+          label: `${profile.birthday_name} — ${profile.birthday_mmdd}`.slice(0, 100),
+          value: String(profile.id),
+        }))),
+    ));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmemberadd").setLabel("Add Birthday").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Back to Birthday Manager").setStyle(ButtonStyle.Secondary),
+  ));
+  return rows;
+}
+
+function nonMemberBirthdayModal(action, profile = {}) {
+  return textModal(`harmony-manager:community:${action}${profile.id ? `:${profile.id}` : ""}`, profile.id ? "Edit non-member birthday" : "Add non-member birthday", [
+    { id: "name", label: "Display name", required: true, maxLength: 80, value: profile.birthday_name },
+    { id: "birthday", label: "Birthday (MM-DD)", required: true, maxLength: 5, value: profile.birthday_mmdd },
+    { id: "timezone", label: "IANA time zone", required: true, maxLength: 100, value: profile.timezone || "Asia/Seoul" },
+  ]);
+}
+
+function renderNonMemberBirthday(profile) {
+  return [
+    `**${profile.birthday_name}**`,
+    `Birthday: **${formatMmdd(profile.birthday_mmdd)}** (${profile.birthday_mmdd})`,
+    `Time zone: **${profile.timezone}**`,
+    "This annual birthday is not linked to a Discord member and does not receive a birthday role.",
+  ].join("\n");
 }
 
 function textModal(customId, title, fields) {
@@ -213,9 +252,9 @@ function profileEditModal(action, memberId, bias = null, profile = null) {
 function renderUpcoming(guildId) {
   const profiles = upcomingProfiles(guildId, 30);
   const description = profiles.length
-    ? profiles.map((p) => `🎂 <@${p.user_id}> — ${formatMmdd(p.birthday_mmdd)}${p.daysAway === 0 ? " (today)" : ` (in ${p.daysAway} days)`}`).join("\n")
-    : "No opted-in birthdays are coming up in the next 30 days.";
-  return new EmbedBuilder().setColor(0xc084fc).setTitle("📅 Upcoming birthdays").setDescription(description).setFooter({ text: "Birthdays shown here come from member Welcome Passes." });
+    ? profiles.map((p) => `🎂 ${p.user_id ? `<@${p.user_id}>` : `**${p.birthday_name}**`} — ${formatMmdd(p.birthday_mmdd)}${p.daysAway === 0 ? " (today)" : ` (in ${p.daysAway} days)`}`).join("\n")
+    : "No birthdays are coming up in the next 30 days.";
+  return new EmbedBuilder().setColor(0xc084fc).setTitle("📅 Upcoming birthdays").setDescription(description).setFooter({ text: "Includes opted-in members and configured non-member birthdays." });
 }
 
 async function saveSettings(interaction, selected = {}) {
@@ -324,6 +363,88 @@ async function handleBirthdayManagerInteraction(interaction, action) {
   }
   if (action === "birthdayadd" && interaction.isButton?.()) {
     await interaction.update(memberPrompt("add", "Choose the Discord member whose birthday you want to manage."));
+    return true;
+  }
+  if (action === "birthdaynonmember" && interaction.isButton?.()) {
+    const profiles = birthdayStore.listNonDiscordBirthdayProfiles(interaction.guildId);
+    await interaction.update({
+      content: ["🎂 **NON-MEMBER BIRTHDAYS**", "Add recurring birthdays for people who are not Discord server members. Each birthday uses its own IANA time zone; no Discord account or birth year is stored.", profiles.length ? `\nSaved birthdays: **${profiles.length}**` : "\nNo non-member birthdays are configured yet."].join("\n"),
+      components: nonMemberBirthdayComponents(profiles), embeds: [],
+    });
+    return true;
+  }
+  if (action === "birthdaynonmemberadd" && interaction.isButton?.()) {
+    await interaction.showModal(nonMemberBirthdayModal("birthdaynonmemberaddmodal"));
+    return true;
+  }
+  if (action === "birthdaynonmemberaddmodal" && interaction.isModalSubmit?.()) {
+    const name = interaction.fields.getTextInputValue("name").trim();
+    const birthday = interaction.fields.getTextInputValue("birthday").trim();
+    const timezone = interaction.fields.getTextInputValue("timezone").trim();
+    if (!name || name.length > 80 || !validMmdd(birthday) || !validTimezone(timezone)) {
+      await interaction.reply({ content: "Enter a display name, a valid MM-DD birthday, and a valid IANA time zone such as Asia/Seoul.", flags: 64 });
+      return true;
+    }
+    birthdayStore.upsertNonDiscordBirthdayProfile({ guildId: interaction.guildId, birthdayName: name, birthdayMmdd: birthday, timezone });
+    await interaction.reply({ content: `Saved **${name}** as an annual birthday on **${formatMmdd(birthday)}** in **${timezone}**.`, components: birthdayBackRow(), flags: 64 });
+    return true;
+  }
+  if (action === "birthdaynonmemberselect" && interaction.isStringSelectMenu?.()) {
+    const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, interaction.values?.[0]);
+    if (!profile) {
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      return true;
+    }
+    await interaction.update({ content: renderNonMemberBirthday(profile), components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberedit:${profile.id}`).setLabel("Edit").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberdelete:${profile.id}`).setLabel("Remove").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmember").setLabel("Back").setStyle(ButtonStyle.Secondary),
+      ),
+    ], embeds: [] });
+    return true;
+  }
+  if (action === "birthdaynonmemberedit" && interaction.isButton?.()) {
+    const profileId = customParts(interaction)[3];
+    const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
+    if (!profile) {
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      return true;
+    }
+    await interaction.showModal(nonMemberBirthdayModal("birthdaynonmembereditmodal", profile));
+    return true;
+  }
+  if (action === "birthdaynonmembereditmodal" && interaction.isModalSubmit?.()) {
+    const profileId = customParts(interaction)[3];
+    const name = interaction.fields.getTextInputValue("name").trim();
+    const birthday = interaction.fields.getTextInputValue("birthday").trim();
+    const timezone = interaction.fields.getTextInputValue("timezone").trim();
+    if (!profileId || !name || name.length > 80 || !validMmdd(birthday) || !validTimezone(timezone)) {
+      await interaction.reply({ content: "Enter a display name, a valid MM-DD birthday, and a valid IANA time zone such as Asia/Seoul.", flags: 64 });
+      return true;
+    }
+    const updated = birthdayStore.updateNonDiscordBirthdayProfile(interaction.guildId, profileId, { birthdayName: name, birthdayMmdd: birthday, timezone });
+    await interaction.reply({ content: updated ? `Updated **${name}** to **${formatMmdd(birthday)}** in **${timezone}**.` : "That non-member birthday is no longer available.", components: birthdayBackRow(), flags: 64 });
+    return true;
+  }
+  if (action === "birthdaynonmemberdelete" && interaction.isButton?.()) {
+    const profileId = customParts(interaction)[3];
+    const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
+    if (!profile) {
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      return true;
+    }
+    await interaction.update({ content: `Remove the recurring birthday for **${profile.birthday_name}**? Past announcement history will remain.`, components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberdeleteconfirm:${profile.id}`).setLabel("Confirm Remove").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`harmony-manager:community:birthdaynonmemberedit:${profile.id}`).setLabel("Keep / Edit").setStyle(ButtonStyle.Secondary),
+    )], embeds: [] });
+    return true;
+  }
+  if (action === "birthdaynonmemberdeleteconfirm" && interaction.isButton?.()) {
+    const profileId = customParts(interaction)[3];
+    const removed = birthdayStore.deleteNonDiscordBirthdayProfile(interaction.guildId, profileId);
+    const profiles = birthdayStore.listNonDiscordBirthdayProfiles(interaction.guildId);
+    await interaction.update({ content: removed ? "Non-member birthday removed. Past announcement history remains." : "That non-member birthday is no longer available.", components: nonMemberBirthdayComponents(profiles), embeds: [] });
     return true;
   }
   if (action === "birthdaycustomize" && interaction.isButton?.()) {

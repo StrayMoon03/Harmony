@@ -274,7 +274,8 @@ function migrate(database) {
     CREATE TABLE IF NOT EXISTS birthday_announcement_history (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id       TEXT NOT NULL,
-      user_id        TEXT NOT NULL,
+      user_id        TEXT,
+      birthday_name  TEXT,
       birthday_mmdd  TEXT NOT NULL,
       announced_at   TEXT NOT NULL,
       UNIQUE (guild_id, user_id, announced_at)
@@ -477,6 +478,8 @@ function migrate(database) {
     );
   `);
 
+  migrateBirthdayHistoryForNonMembers(database);
+
   migrateSharesToGuildScope(database);
 
   // Preserve reminders created before multi-select schedules were introduced.
@@ -654,6 +657,47 @@ function migrate(database) {
     database.exec(
       "ALTER TABLE birthday_profiles ADD COLUMN discord_username TEXT"
     );
+  }
+}
+
+/**
+ * Keep existing announcement history intact while allowing a named birthday
+ * without a Discord user ID to appear in future recaps.
+ * @param {import("node:sqlite").DatabaseSync} database
+ */
+function migrateBirthdayHistoryForNonMembers(database) {
+  const columns = database.prepare("PRAGMA table_info(birthday_announcement_history)").all();
+  const userId = columns.find((column) => column.name === "user_id");
+  const hasName = columns.some((column) => column.name === "birthday_name");
+  if (userId && !userId.notnull && hasName) return;
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec("DROP INDEX IF EXISTS idx_birthday_history_guild_time");
+    database.exec("ALTER TABLE birthday_announcement_history RENAME TO birthday_announcement_history_legacy");
+    database.exec(`
+      CREATE TABLE birthday_announcement_history (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id       TEXT NOT NULL,
+        user_id        TEXT,
+        birthday_name  TEXT,
+        birthday_mmdd  TEXT NOT NULL,
+        announced_at   TEXT NOT NULL,
+        UNIQUE (guild_id, user_id, announced_at)
+      )
+    `);
+    const legacyColumns = new Set(database.prepare("PRAGMA table_info(birthday_announcement_history_legacy)").all().map((column) => column.name));
+    database.exec(`
+      INSERT INTO birthday_announcement_history (id, guild_id, user_id, birthday_name, birthday_mmdd, announced_at)
+      SELECT id, guild_id, user_id, ${legacyColumns.has("birthday_name") ? "birthday_name" : "NULL"}, birthday_mmdd, announced_at
+      FROM birthday_announcement_history_legacy
+    `);
+    database.exec("DROP TABLE birthday_announcement_history_legacy");
+    database.exec("CREATE INDEX IF NOT EXISTS idx_birthday_history_guild_time ON birthday_announcement_history (guild_id, announced_at)");
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
   }
 }
 

@@ -78,10 +78,10 @@ const data = new SlashCommandBuilder()
       .setName("member")
       .setDescription("Correct Discord member")
       .setRequired(true)))
-  .addSubcommand((sub) => sub.setName("next").setDescription("Show the next opted-in birthdays"))
+  .addSubcommand((sub) => sub.setName("next").setDescription("Show the next birthdays"))
   .addSubcommand((sub) => sub
     .setName("month")
-    .setDescription("Show opted-in birthdays for a month")
+    .setDescription("Show birthdays for a month")
     .addIntegerOption((o) => o.setName("month").setDescription("Month number").setMinValue(1).setMaxValue(12)))
   .addSubcommand((sub) => sub.setName("off").setDescription("Turn scheduled birthday posts off"));
 
@@ -91,8 +91,8 @@ function isAdmin(interaction) {
 
 function listEmbed(title, profiles) {
   const description = profiles.length
-    ? profiles.map((p) => `🎂 <@${p.user_id}> — ${formatMmdd(p.birthday_mmdd)}${p.bias ? ` • ${p.bias}` : ""}`).join("\n")
-    : "No opted-in birthdays were found for that time.";
+    ? profiles.map((p) => `🎂 ${p.user_id ? `<@${p.user_id}>` : `**${p.birthday_name}**`} — ${formatMmdd(p.birthday_mmdd)}${p.bias ? ` • ${p.bias}` : ""}`).join("\n")
+    : "No birthdays were found for that time.";
   return new EmbedBuilder()
     .setColor(0xc084fc)
     .setTitle(title)
