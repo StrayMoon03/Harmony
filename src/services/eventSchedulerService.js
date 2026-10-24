@@ -691,7 +691,7 @@ function calendarAnnouncementMessage(event, offsetSeconds = null, body = null) {
   return lines.filter(Boolean).join("\n");
 }
 
-function calendarAnnouncementItems(event, offsets) {
+function calendarAnnouncementItems(event, offsets, now = Date.now()) {
   if (event?.all_day) return [];
   const start = event?.event_at
     ? new Date(event.event_at)
@@ -699,7 +699,6 @@ function calendarAnnouncementItems(event, offsets) {
       ? new Date(`${event.event_date}T09:00:00.000Z`)
       : null;
   if (!start || Number.isNaN(start.getTime())) return [];
-  const now = Date.now();
   return [...new Set(offsets || [])].map(Number).filter((offset) => [3600, 86400, 259200, 604800].includes(offset)).map((offset) => ({
     scheduledFor: new Date(start.getTime() - offset * 1000).toISOString(),
     message: calendarAnnouncementMessage(event, offset),
@@ -764,6 +763,56 @@ function refreshEventAnnouncementSchedules(guildId, events) {
     const offsets = announcementOffsetsFromEvent(event);
     if (offsets.length || event.announcement_channel_id) persistCalendarAnnouncements(guildId, event, offsets, event.announcement_channel_id);
   }
+}
+
+function oneOffTimedScheduleChanged(before, after) {
+  return before?.event_at !== after?.event_at || before?.event_end_at !== after?.event_end_at || before?.event_date !== after?.event_date;
+}
+
+function isLinkedOneOffTimedEdit(before, after) {
+  return Boolean(before?.discord_event_id && after?.discord_event_id === before.discord_event_id &&
+    !isRecurringLinkedNativeEvent(before, null) && !isRecurringLinkedNativeEvent(after, null) &&
+    !before?.all_day && !after?.all_day && before?.event_at && after?.event_at);
+}
+
+async function updateLinkedOneOffCalendarSchedule(client, before, after, { syncDiscord = false, refreshCalendar = true, now = new Date() } = {}) {
+  if (!isLinkedOneOffTimedEdit(before, after)) return { handled: false, changed: false };
+  const changed = oneOffTimedScheduleChanged(before, after);
+  if (!changed) return { handled: true, changed: false };
+  const offsets = announcementOffsetsFromEvent(before);
+  store.rebuildGeneratedEventAnnouncements(
+    before.guild_id,
+    before.id,
+    calendarAnnouncementItems(before, offsets, Number.NEGATIVE_INFINITY),
+    calendarAnnouncementItems(after, offsets),
+  );
+  if (before.event_at !== after.event_at) {
+    store.rescheduleDiscordEventReminders(after.guild_id, after.discord_event_id, after.event_at, now);
+  }
+  if (syncDiscord) {
+    try { await syncNativeScheduledEvent(client, after); }
+    catch (error) { console.error("Linked Discord event sync after time edit failed:", error); }
+  }
+  if (refreshCalendar) {
+    await refreshPublishedCalendar(client, after.guild_id, after.calendar_type, before.event_date).catch(() => {});
+    if (after.event_date !== before.event_date) {
+      await refreshPublishedCalendar(client, after.guild_id, after.calendar_type, after.event_date).catch(() => {});
+    }
+  }
+  return { handled: true, changed: true };
+}
+
+async function cancelHarmonyOneOffEvent({ guildId, eventId, cancelledBy, client, guild }) {
+  const event = store.getEvent(guildId, eventId);
+  if (!event || isRecurringLinkedNativeEvent(event, null)) return { handled: false, changed: false, event };
+  const result = store.cancelOneOffEvent(guildId, eventId, cancelledBy);
+  if (!result.changed) return { handled: true, changed: false, event: result.event || event };
+  if (result.event.discord_event_id) {
+    const resolvedGuild = guild || client?.guilds?.cache?.get(guildId) || await client?.guilds?.fetch(guildId).catch(() => null);
+    await cancelLinkedNativeEvents({ guildId, guild: resolvedGuild, client }, [result.event]);
+  }
+  await refreshPublishedCalendar(client, guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
+  return { handled: true, changed: true, event: result.event };
 }
 
 function announcementTargets(guildId, event, scope) {
@@ -2219,10 +2268,14 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
     event_end_at: isNativeSeriesAnchor ? linked.event_end_at : event.scheduledEndAt?.toISOString() || null,
     event_date: isNativeSeriesAnchor ? linked.event_date : `${localDate.year}-${localDate.month}-${localDate.day}`,
   };
+  const scheduleChanged = !isNativeSeriesAnchor && oneOffTimedScheduleChanged(linked, changes);
   if (Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) changes.recurrence_rule = nextNativeRule;
   const updated = store.updateEvent(event.guildId, linked.id, changes);
+  if (scheduleChanged && updated && !isRecurringLinkedNativeEvent(linked, event)) {
+    await updateLinkedOneOffCalendarSchedule(client, linked, updated);
+  }
   if (updated?.recurrence_series_id && Number(updated.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule) await syncDiscordRecurringSeries(event.guildId, updated).catch((error) => console.error("Discord recurring series update failed:", error));
-  await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
+  if (!scheduleChanged) await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
 }
 
 async function handleGuildScheduledEventDelete(client, event) {
@@ -2442,7 +2495,8 @@ async function handleEventSchedulerInteraction(interaction) {
     return true;
   }
   if (action === "cancel" && interaction.isButton()) {
-    store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
+    const result = await cancelHarmonyOneOffEvent({ guildId: interaction.guildId, eventId, cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
+    if (!result.handled) store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
     await interaction.update({ content: `Cancelled event #${eventId}.`, components: [] });
     return true;
   }
@@ -3614,8 +3668,12 @@ async function handleManagerInteraction(interaction) {
       const savedChanges = applyRecurringChanges(interaction.guildId, existing, draft.scope || "this", { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
       const saved = savedChanges.find((item) => item.id === existing.id) || savedChanges[0];
       await interaction.update(youtifulEditPanel(saved));
-      await syncChangedNativeEvents(interaction.client, savedChanges);
-      refreshEventAnnouncementSchedules(interaction.guildId, savedChanges);
+      const oneOffSync = await updateLinkedOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true });
+      if (oneOffSync.handled && !oneOffSync.changed && existing.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+      if (!oneOffSync.handled) {
+        await syncChangedNativeEvents(interaction.client, savedChanges);
+        refreshEventAnnouncementSchedules(interaction.guildId, savedChanges);
+      }
       await refreshRecurringMonths(interaction.client, interaction.guildId, savedChanges).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
     } catch (error) {
       await interaction.update({ content: error.message, components: editTimezoneComponents("community", "edittimezone", eventId, interaction.values[0]) });
@@ -3642,7 +3700,9 @@ async function handleManagerInteraction(interaction) {
         event_end_at: parsed.eventEndAt,
       });
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...parsed, eventId, existing: saved });
-      if (saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+      const oneOffSync = await updateLinkedOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true, refreshCalendar: false });
+      if (oneOffSync.handled && !oneOffSync.changed && saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+      if (!oneOffSync.handled && saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
       await interaction.update({ content: "Choose a category for this event, or keep the current one.", components: editCategoryComponents(eventId, saved.category || existing.category || "other") });
     } catch (error) {
@@ -3733,9 +3793,13 @@ async function handleManagerInteraction(interaction) {
   }
   if (action === "cancelconfirm" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(eventId));
-    const removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
-    if (removed && event?.discord_event_id) await cancelLinkedNativeEvents(interaction, [event]);
-    if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
+    const oneOff = await cancelHarmonyOneOffEvent({ guildId: interaction.guildId, eventId: Number(eventId), cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
+    let removed = oneOff.changed;
+    if (!oneOff.handled) {
+      removed = store.cancelEvent(interaction.guildId, Number(eventId), interaction.user.id);
+      if (removed && event?.discord_event_id) await cancelLinkedNativeEvents(interaction, [event]);
+      if (removed && event) await refreshPublishedCalendar(interaction.client, interaction.guildId, calendarType, event.event_date).catch(() => {});
+    }
     await interaction.update({ content: removed ? `Cancelled calendar event #${eventId}.` : "That event is no longer active.", components: [] });
     return;
   }
@@ -3861,7 +3925,8 @@ async function handleEventSchedulerMessage(message) {
 
   const cancel = /^harmony\s+event\s+cancel\s+(\d+)\s*$/i.exec(message.content.trim());
   if (cancel) {
-    const removed = store.cancelEvent(message.guild.id, Number(cancel[1]), message.author.id);
+    const result = await cancelHarmonyOneOffEvent({ guildId: message.guild.id, eventId: Number(cancel[1]), cancelledBy: message.author.id, client: message.client, guild: message.guild });
+    const removed = result.handled ? result.changed : store.cancelEvent(message.guild.id, Number(cancel[1]), message.author.id);
     await message.reply({ content: removed ? `Cancelled event #${cancel[1]}.` : "I could not find that active event.", allowedMentions: { repliedUser: false } });
     return true;
   }
@@ -4029,6 +4094,8 @@ module.exports = {
   createYoutifulOccurrences,
   applyRecurringChanges,
   cancelRecurringEvents,
+  cancelHarmonyOneOffEvent,
+  updateLinkedOneOffCalendarSchedule,
   MAX_RECURRENCE_OCCURRENCES,
   RECURRENCE_TYPES,
   youtifulBirthdayEvents,
