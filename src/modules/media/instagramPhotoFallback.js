@@ -34,7 +34,18 @@ async function downloadInstagramPhotos(url, jobDir) {
   const parsed = new URL(url);
   const match = parsed.pathname.match(/^\/(?:[A-Za-z0-9._]+\/)?p\/([A-Za-z0-9_-]+)\/?$/);
   if (parsed.protocol !== "https:" || !match || !["instagram.com", "www.instagram.com"].includes(parsed.hostname)) throw new Error("Instagram photo fallback requires an exact post URL");
-  const { stdout } = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramPhotoBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+  let output;
+  try {
+    output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramPhotoBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+  } catch (error) {
+    if (String(error?.stderr || "").includes("HARMONY_INSTAGRAM_AUTH_REQUIRED")) {
+      const authError = new Error("Instagram requires authentication to access this post.");
+      authError.code = "INSTAGRAM_AUTH_REQUIRED";
+      throw authError;
+    }
+    throw new Error("Instagram browser could not verify a complete photo post");
+  }
+  const { stdout } = output;
   const line = stdout.split(/\r?\n/).find((x) => x.startsWith("HARMONY_INSTAGRAM_PHOTOS:"));
   if (!line) throw new Error("Instagram browser returned no verified photos");
   const result = JSON.parse(line.slice("HARMONY_INSTAGRAM_PHOTOS:".length));

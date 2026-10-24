@@ -5,6 +5,14 @@ import sys
 from urllib.parse import urlparse
 
 
+class InstagramAuthenticationRequired(Exception):
+    pass
+
+
+def is_login_route(value):
+    return bool(re.search(r"/(?:accounts/)?login(?:/|$)", urlparse(value).path, re.IGNORECASE))
+
+
 def exact_code(url):
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in ("instagram.com", "www.instagram.com"):
@@ -56,6 +64,8 @@ def main():
             page = browser.new_page()
             page.goto(f"https://www.instagram.com/p/{code}/", wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
+            if is_login_route(page.url):
+                raise InstagramAuthenticationRequired()
             if exact_code(page.url) != code:
                 raise ValueError("Instagram did not open the requested post")
             payloads = []
@@ -72,6 +82,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except InstagramAuthenticationRequired:
+        print("HARMONY_INSTAGRAM_AUTH_REQUIRED", file=sys.stderr)
+        sys.exit(2)
     except Exception:
         print("Instagram browser could not verify a complete photo post", file=sys.stderr)
         sys.exit(1)

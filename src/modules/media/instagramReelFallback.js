@@ -29,6 +29,13 @@ function sanitizedBrowserDiagnostics(stderr) {
 function logBrowserDiagnostics(stderr) {
   const safe = sanitizedBrowserDiagnostics(stderr);
   if (safe && Object.keys(safe).length) console.warn("HARMONY_INSTAGRAM_DIAGNOSTICS:" + JSON.stringify(safe));
+  return safe;
+}
+
+function authenticationRequiredError() {
+  const error = new Error("Instagram requires authentication to access this reel.");
+  error.code = "INSTAGRAM_AUTH_REQUIRED";
+  return error;
 }
 
 function exactReelCode(value) {
@@ -89,15 +96,22 @@ async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
   throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
 }
 
-async function downloadInstagramReel(url, jobDir) {
+async function downloadInstagramReel(url, jobDir, options = {}) {
   const code = exactReelCode(url);
   let stdout;
+  let diagnostics;
+  const env = {
+    ...process.env,
+    // An anonymous attempt must not inherit the configured session path.
+    INSTAGRAM_COOKIES: options.useCookies === true ? process.env.INSTAGRAM_COOKIES || "" : "",
+  };
   try {
-    const output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+    const output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024, env }));
     stdout = output.stdout;
-    logBrowserDiagnostics(output.stderr);
+    diagnostics = logBrowserDiagnostics(output.stderr);
   } catch (error) {
-    logBrowserDiagnostics(error.stderr);
+    diagnostics = logBrowserDiagnostics(error.stderr);
+    if (diagnostics?.loginRoute) throw authenticationRequiredError();
     throw new Error("Instagram browser could not verify the requested reel");
   }
   const line = stdout.split(/\r?\n/).find(x => x.startsWith("HARMONY_INSTAGRAM_REEL:"));
