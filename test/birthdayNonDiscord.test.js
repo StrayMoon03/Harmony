@@ -33,6 +33,28 @@ test("non-Discord birthday storage needs no member or birth year and keeps annua
   assert.equal(birthdayStore.listNonDiscordBirthdayProfiles(guildId).length, 1);
 });
 
+test("custom non-member messages persist independently from date and timezone edits", () => {
+  const guildId = `birthday-nondiscord-message-store-${Date.now()}`;
+  const customMessage = "First paragraph.\n\nSecond paragraph.";
+  const id = birthdayStore.upsertNonDiscordBirthdayProfile({ guildId, birthdayName: "Lee Know", birthdayMmdd: "10-25", timezone: "Asia/Seoul", customMessage });
+  assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).custom_message, customMessage);
+
+  assert.equal(birthdayStore.updateNonDiscordBirthdayProfile(guildId, id, {
+    birthdayName: "Lee Know", birthdayMmdd: "10-26", timezone: "Asia/Tokyo",
+  }), true);
+  let row = birthdayStore.getNonDiscordBirthdayProfile(guildId, id);
+  assert.equal(row.custom_message, customMessage);
+  assert.equal(row.birthday_mmdd, "10-26");
+  assert.equal(row.timezone, "Asia/Tokyo");
+
+  const revisedMessage = "New opening.\n\nNew second paragraph.";
+  assert.equal(birthdayStore.updateNonDiscordBirthdayMessage(guildId, id, revisedMessage), true);
+  row = birthdayStore.getNonDiscordBirthdayProfile(guildId, id);
+  assert.equal(row.custom_message, revisedMessage);
+  assert.equal(row.birthday_mmdd, "10-26");
+  assert.equal(row.timezone, "Asia/Tokyo");
+});
+
 test("Asia/Seoul birthday date boundary and announcement hour follow the profile timezone", () => {
   const profile = { birthday_mmdd: "10-25", timezone: "Asia/Seoul", last_announced_year: null };
   const beforeSeoulBirthday = new Date("2026-10-24T23:59:00.000Z"); // 08:59 on Oct 25 in Seoul
@@ -61,6 +83,21 @@ test("scheduler announces a Seoul birthday once after its local announcement hou
   assert.match(sent[0].content, /Lee Know/);
   assert.doesNotMatch(sent[0].content, /<@/);
   assert.equal(sent[0].allowedMentions.users, undefined);
+  assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).last_announced_year, 2026);
+});
+
+test("birthday announcement uses only the saved custom non-member message", async () => {
+  const guildId = `birthday-nondiscord-custom-announce-${Date.now()}`;
+  const customMessage = "Lee Know's first paragraph.\n\nLee Know's second paragraph.";
+  const id = birthdayStore.upsertNonDiscordBirthdayProfile({ guildId, birthdayName: "Lee Know", birthdayMmdd: "10-25", timezone: "Asia/Seoul", customMessage });
+  const sent = [];
+  const channel = { isTextBased: () => true, send: async (payload) => sent.push(payload) };
+  const guild = { id: guildId, channels: { cache: new Map([["birthday-channel", channel]]) } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  await announceNonDiscordBirthdays(client, { guild_id: guildId, channel_id: "birthday-channel", announcement_hour: 9 }, new Date("2026-10-25T00:00:00.000Z"));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].embeds[0].data.description, customMessage);
+  assert.doesNotMatch(sent[0].embeds[0].data.description, /Still deciding|inspired by|spotlight|rotating/);
   assert.equal(birthdayStore.getNonDiscordBirthdayProfile(guildId, id).last_announced_year, 2026);
 });
 

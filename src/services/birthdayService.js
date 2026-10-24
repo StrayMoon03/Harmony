@@ -98,10 +98,9 @@ function buildBirthdayEmbed(profile, year, preview = false) {
   const message = profile.custom_message || presetFor({ ...profile, bias }, year);
   const name = profile.birthday_name || "Birthday STAY";
   const person = profile.user_id ? `<@${profile.user_id}>` : name;
-  const embed = new EmbedBuilder()
-    .setColor(0xc084fc)
-    .setTitle(`🎂 Happy Birthday, ${name}!`)
-    .setDescription([
+  const description = !profile.user_id && profile.custom_message?.trim()
+    ? profile.custom_message.trim()
+    : [
       preview ? `Preview for ${person}` : `Today belongs to ${person}!`,
       "",
       `**A fan-made birthday note inspired by ${bias}:**`,
@@ -110,7 +109,11 @@ function buildBirthdayEmbed(profile, year, preview = false) {
       spotlightFor(bias),
       "",
       "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
-    ].join("\n"))
+    ].join("\n");
+  const embed = new EmbedBuilder()
+    .setColor(0xc084fc)
+    .setTitle(`🎂 Happy Birthday, ${name}!`)
+    .setDescription(description)
     .setFooter({ text: `Birthday: ${formatMmdd(profile.birthday_mmdd)} • No age or birth year stored` })
     .setTimestamp(new Date());
 
