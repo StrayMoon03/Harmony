@@ -667,6 +667,49 @@ function cancelEvent(guildId, eventId, cancelledBy) {
   }
 }
 
+// Mode 1 Harmony recurrences persist one row per occurrence and, when linked,
+// one Discord Scheduled Event ID per row. Cancel only that occurrence and its
+// pending work; keep the Discord ID and all sent/cancelled history intact.
+function cancelHarmonyOwnedRecurringOccurrence(guildId, eventId, cancelledBy = "harmony") {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const event = db.prepare(`
+      SELECT * FROM scheduled_events
+      WHERE guild_id = ? AND id = ? AND recurrence_series_id IS NOT NULL
+        AND recurrence_native_enabled = 1
+    `).get(guildId, eventId);
+    if (!event) {
+      db.exec("COMMIT");
+      return { event: null, changed: false };
+    }
+
+    const changed = !event.cancelled_at;
+    db.prepare(`
+      UPDATE scheduled_events
+      SET cancelled_at = COALESCE(cancelled_at, ?), cancelled_by = COALESCE(cancelled_by, ?)
+      WHERE guild_id = ? AND id = ?
+    `).run(now, cancelledBy, guildId, eventId);
+    db.prepare("UPDATE scheduled_announcements SET status = 'cancelled' WHERE event_id = ? AND status = 'pending'")
+      .run(eventId);
+    if (event.discord_event_id) {
+      db.prepare("UPDATE discord_event_reminder_schedules SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+        .run(guildId, event.discord_event_id);
+      db.prepare("UPDATE discord_event_reminders SET status = 'cancelled' WHERE guild_id = ? AND discord_event_id = ? AND status = 'pending'")
+        .run(guildId, event.discord_event_id);
+    }
+    db.exec("COMMIT");
+    return {
+      event: { ...event, cancelled_at: event.cancelled_at || now, cancelled_by: event.cancelled_by || cancelledBy },
+      changed,
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function cancelOneOffEvent(guildId, eventId, cancelledBy) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -960,6 +1003,7 @@ module.exports = {
   addAnnouncement,
   listEvents,
   cancelEvent,
+  cancelHarmonyOwnedRecurringOccurrence,
   cancelOneOffEvent,
   cancelSeriesEvents,
   updateEvent,
