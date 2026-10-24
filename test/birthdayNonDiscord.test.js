@@ -23,6 +23,7 @@ test("non-Discord birthday storage needs no member or birth year and keeps annua
   assert.equal(row.birthday_name, "Lee Know");
   assert.equal(row.birthday_mmdd, "10-25");
   assert.equal(row.timezone, "Asia/Seoul");
+  assert.equal(row.bias, "Still deciding");
   assert.equal(Object.hasOwn(row, "birth_year"), false);
 
   const same = birthdayStore.upsertNonDiscordBirthdayProfile({
@@ -94,4 +95,19 @@ test("non-member reminders and previews use a display name while member birthday
   assert.doesNotMatch(preview, /<@undefined>/);
   assert.match(buildBirthdayEmbed(member, 2026, true).data.description, /Preview for <@918273>/);
   assert.equal(upcomingProfiles(guildId, 365).some((profile) => profile.user_id === "918273"), true);
+});
+
+test("non-member announcement copy uses the neutral preset regardless of the person's name or stale bias", () => {
+  for (const name of ["Lee Know", "Bang Chan"]) {
+    const profile = {
+      user_id: null,
+      birthday_name: name,
+      birthday_mmdd: "10-25",
+      bias: "Lee Know", // Simulate an older or incorrectly populated row.
+    };
+    const embed = buildBirthdayEmbed(profile, 2026);
+    assert.match(embed.data.title, new RegExp(name));
+    assert.match(embed.data.description, /inspired by Still deciding/);
+    assert.doesNotMatch(embed.data.description, /calm, delightfully unpredictable|one full day of doing things your way/);
+  }
 });

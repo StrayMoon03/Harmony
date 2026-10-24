@@ -233,7 +233,7 @@ function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, 
   if (existing) {
     db.prepare(`
       UPDATE birthday_profiles SET celebration_enabled = 1,
-        birthday_name = ?, birthday_mmdd = ?, timezone = ?, bias = 'Lee Know',
+        birthday_name = ?, birthday_mmdd = ?, timezone = ?, bias = 'Still deciding',
         role_remove_at = NULL, updated_at = ? WHERE id = ?
     `).run(birthdayName, birthdayMmdd, timezone, now, existing.id);
     return existing.id;
@@ -242,7 +242,7 @@ function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, 
     INSERT INTO birthday_profiles (
       guild_id, user_id, celebration_enabled, birthday_mmdd, birthday_name,
       timezone, bias, created_at, updated_at
-    ) VALUES (?, NULL, 1, ?, ?, ?, 'Lee Know', ?, ?)
+    ) VALUES (?, NULL, 1, ?, ?, ?, 'Still deciding', ?, ?)
   `).run(guildId, birthdayMmdd, birthdayName, timezone, now, now);
   return Number(result.lastInsertRowid);
 }

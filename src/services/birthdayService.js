@@ -91,8 +91,11 @@ function daysUntil(mmdd, now = new Date()) {
 }
 
 function buildBirthdayEmbed(profile, year, preview = false) {
-  const bias = normalizeBias(profile.bias);
-  const message = profile.custom_message || presetFor(profile, year);
+  // A non-member profile is an event/person record, not a Discord member's
+  // bias selection. Keep its generated copy neutral even if an old row has a
+  // member-specific bias value.
+  const bias = profile.user_id ? normalizeBias(profile.bias) : "Still deciding";
+  const message = profile.custom_message || presetFor({ ...profile, bias }, year);
   const name = profile.birthday_name || "Birthday STAY";
   const person = profile.user_id ? `<@${profile.user_id}>` : name;
   const embed = new EmbedBuilder()
