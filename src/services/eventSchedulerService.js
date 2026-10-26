@@ -93,7 +93,7 @@ function calendarLabel(calendarType) {
 function managerPanelContent(calendarType) {
   const label = calendarLabel(calendarType);
   const icon = calendarType === "stray_kids" ? "⭐" : "❤️";
-  return `${icon} **${label} SCHEDULE MANAGER**\nUse the private controls below to manage this calendar. Calendar events do not require an announcement.\nDiscord Scheduled Event reconciliation also requires Harmony to have **View Channel** permission for each associated voice or stage channel.`;
+  return `${icon} **${label} SCHEDULE MANAGER**\nUse the admin controls below to manage this calendar. Calendar events do not require an announcement.\nDiscord Scheduled Event reconciliation also requires Harmony to have **View Channel** permission for each associated voice or stage channel.`;
 }
 
 function managerPanelComponents(calendarType, guildId = null) {
@@ -769,14 +769,17 @@ function oneOffTimedScheduleChanged(before, after) {
   return before?.event_at !== after?.event_at || before?.event_end_at !== after?.event_end_at || before?.event_date !== after?.event_date;
 }
 
-function isLinkedOneOffTimedEdit(before, after) {
-  return Boolean(before?.discord_event_id && after?.discord_event_id === before.discord_event_id &&
+function isOneOffTimedEdit(before, after) {
+  return Boolean(!before?.recurrence_series_id && !after?.recurrence_series_id &&
     !isRecurringLinkedNativeEvent(before, null) && !isRecurringLinkedNativeEvent(after, null) &&
     !before?.all_day && !after?.all_day && before?.event_at && after?.event_at);
 }
 
-async function updateLinkedOneOffCalendarSchedule(client, before, after, { syncDiscord = false, refreshCalendar = true, now = new Date() } = {}) {
-  if (!isLinkedOneOffTimedEdit(before, after)) return { handled: false, changed: false };
+async function updateOneOffCalendarSchedule(client, before, after, { syncDiscord = false, refreshCalendar = true, now = new Date() } = {}) {
+  // Both Harmony entry points use this for equivalent timed one-off edits.
+  // Recurring rows and either side of timed/all-day conversion stay on their
+  // existing paths so their separate product semantics are unchanged.
+  if (!isOneOffTimedEdit(before, after)) return { handled: false, changed: false };
   const changed = oneOffTimedScheduleChanged(before, after);
   if (!changed) return { handled: true, changed: false };
   const offsets = announcementOffsetsFromEvent(before);
@@ -786,10 +789,10 @@ async function updateLinkedOneOffCalendarSchedule(client, before, after, { syncD
     calendarAnnouncementItems(before, offsets, Number.NEGATIVE_INFINITY),
     calendarAnnouncementItems(after, offsets),
   );
-  if (before.event_at !== after.event_at) {
+  if (before.discord_event_id && before.discord_event_id === after.discord_event_id && before.event_at !== after.event_at) {
     store.rescheduleDiscordEventReminders(after.guild_id, after.discord_event_id, after.event_at, now);
   }
-  if (syncDiscord) {
+  if (syncDiscord && after.discord_event_id) {
     try { await syncNativeScheduledEvent(client, after); }
     catch (error) { console.error("Linked Discord event sync after time edit failed:", error); }
   }
@@ -802,6 +805,9 @@ async function updateLinkedOneOffCalendarSchedule(client, before, after, { syncD
   return { handled: true, changed: true };
 }
 
+// Compatibility alias for callers/tests that used the original linked-only name.
+const updateLinkedOneOffCalendarSchedule = updateOneOffCalendarSchedule;
+
 async function cancelHarmonyOneOffEvent({ guildId, eventId, cancelledBy, client, guild }) {
   const event = store.getEvent(guildId, eventId);
   if (!event || isRecurringLinkedNativeEvent(event, null)) return { handled: false, changed: false, event };
@@ -813,6 +819,21 @@ async function cancelHarmonyOneOffEvent({ guildId, eventId, cancelledBy, client,
   }
   await refreshPublishedCalendar(client, guildId, result.event.calendar_type, result.event.event_date).catch(() => {});
   return { handled: true, changed: true, event: result.event };
+}
+
+function cancellationConfirmationComponents(eventId, recurring = false) {
+  if (!recurring) return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-schedule:cancelconfirm:${eventId}`).setLabel("Confirm cancellation").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`harmony-schedule:cancelno:${eventId}`).setLabel("Keep event").setStyle(ButtonStyle.Secondary),
+  )];
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-schedule:cancelscope:${eventId}:this`).setLabel("This occurrence").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`harmony-schedule:cancelscope:${eventId}:future`).setLabel("This and future").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`harmony-schedule:cancelscope:${eventId}:series`).setLabel("Entire series").setStyle(ButtonStyle.Danger),
+    ),
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-schedule:cancelno:${eventId}`).setLabel("Keep event").setStyle(ButtonStyle.Secondary)),
+  ];
 }
 
 function announcementTargets(guildId, event, scope) {
@@ -1204,16 +1225,19 @@ function applyRecurringChanges(guildId, event, scope, changes) {
   return updated.filter(Boolean);
 }
 
-async function cancelRecurringEvents(interaction, event, scope) {
-  const events = event.recurrence_series_id ? store.listSeriesEvents(interaction.guildId, event.recurrence_series_id) : [event];
-  const targets = scope === "series" ? events : scope === "future" ? events.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index)) : [event];
+async function cancelHarmonyRecurringEvents({ guildId, event, scope, cancelledBy, client, guild }) {
+  if (!event?.recurrence_series_id || !["this", "future", "series"].includes(scope)) return [];
+  const series = store.listSeriesEvents(guildId, event.recurrence_series_id);
+  const targets = scope === "series" ? series : scope === "future"
+    ? series.filter((item) => Number(item.recurrence_index) >= Number(event.recurrence_index))
+    : [event];
   for (const item of targets) {
-    if (isHarmonyOwnedRecurringOccurrence(item)) {
-      store.cancelHarmonyOwnedRecurringOccurrence(interaction.guildId, item.id, interaction.user.id);
-    } else {
-      store.cancelEvent(interaction.guildId, item.id, interaction.user.id);
-    }
+    if (isHarmonyOwnedRecurringOccurrence(item)) store.cancelHarmonyOwnedRecurringOccurrence(guildId, item.id, cancelledBy);
+    else store.cancelEvent(guildId, item.id, cancelledBy);
   }
+  const context = { guildId, guild: guild || client?.guilds?.cache?.get(guildId), client };
+  await cancelLinkedNativeEvents(context, targets);
+  await refreshRecurringMonths(client, guildId, targets).catch((error) => console.error("Calendar refresh after recurring cancellation failed:", error));
   return targets;
 }
 
@@ -1958,6 +1982,61 @@ function reconciliationReviewPayload(event, candidates) {
   };
 }
 
+function pagedSelectPayload({ content, customId, placeholder, entries, page = 0, labelFor, valueFor }) {
+  const pages = Math.max(1, Math.ceil(entries.length / 25));
+  const current = Math.max(0, Math.min(Math.trunc(page) || 0, pages - 1));
+  const pageEntries = entries.slice(current * 25, current * 25 + 25);
+  const components = [];
+  if (pageEntries.length) components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(customId)
+    .setPlaceholder(placeholder)
+    .addOptions(pageEntries.map((entry) => ({ label: labelFor(entry), value: String(valueFor(entry)) })))));
+  if (pages > 1) components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${customId}:page:${current - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(current === 0),
+    new ButtonBuilder().setCustomId(`${customId}:page:${current + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(current === pages - 1),
+  ));
+  return { content: `${content}${pages > 1 ? ` (page ${current + 1} of ${pages})` : ""}`, components, flags: 64, allowedMentions: { parse: [] } };
+}
+
+function discoveredCandidatePickerPayload(guildId, page = 0) {
+  const candidates = store.listCalendarCandidates(guildId, "open");
+  return pagedSelectPayload({
+    content: candidates.length ? `Choose a discovered or submitted candidate to review. ${candidates.length} awaiting review; nothing is added automatically.` : "There are no open calendar candidates to review.",
+    customId: "harmony-calendar:review-select",
+    placeholder: "Choose a calendar candidate",
+    entries: candidates,
+    page,
+    labelFor: (item) => `${item.proposed_event_date || "Date pending"} • ${item.title || "Untitled event"}`.slice(0, 100),
+    valueFor: (item) => item.id,
+  });
+}
+
+async function nativeReconciliationPickerPayload(guild, page = 0) {
+  const events = await fetchExistingNativeEvents(guild).catch(() => []);
+  return pagedSelectPayload({
+    content: events.length ? `Choose an active Discord Scheduled Event to reconcile with Harmony. ${events.length} available; this will not change the Discord event.` : "Harmony could not find active Discord Scheduled Events to reconcile.",
+    customId: "harmony-calendar:reconcile-select",
+    placeholder: "Choose a Discord Scheduled Event",
+    entries: events,
+    page,
+    labelFor: nativeEventSelectionLabel,
+    valueFor: (item) => item.id,
+  });
+}
+
+async function beginNativeEventReconciliation(guild, guildId, nativeId) {
+  let native = null;
+  try { native = await guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
+  if (!native) return { error: "That Discord Scheduled Event is no longer available." };
+  const linked = store.getEventByDiscordId(guildId, nativeId);
+  if (linked) return { error: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.` };
+  const reconciliation = store.getDiscordEventReconciliation(guildId, nativeId);
+  if (reconciliation && reconciliation.status !== "open") store.saveDiscordEventReconciliation(guildId, nativeId, null, "open");
+  if (!reconciliation) store.saveDiscordEventReconciliation(guildId, nativeId, null, "open");
+  const candidates = store.listUnlinkedCommunityEvents(guildId).filter((item) => item.title === native.name);
+  return { native, candidates, payload: reconciliationReviewPayload(native, candidates) };
+}
+
 function nativeHarmonyDescriptionModal(customId, nativeEvent) {
   return managerModal(customId, "Harmony calendar description", [
     {
@@ -2291,7 +2370,7 @@ async function handleGuildScheduledEventUpdate(client, oldEvent, event) {
   if (Number(linked.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE) changes.recurrence_rule = nextNativeRule;
   const updated = store.updateEvent(event.guildId, linked.id, changes);
   if (scheduleChanged && updated && !isRecurringLinkedNativeEvent(linked, event)) {
-    await updateLinkedOneOffCalendarSchedule(client, linked, updated);
+    await updateOneOffCalendarSchedule(client, linked, updated);
   }
   if (updated?.recurrence_series_id && Number(updated.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE && nextNativeRule) await syncDiscordRecurringSeries(event.guildId, updated).catch((error) => console.error("Discord recurring series update failed:", error));
   if (!scheduleChanged) await refreshPublishedCalendar(client, event.guildId, linked.calendar_type, `${localDate.year}-${localDate.month}-${localDate.day}`).catch(() => {});
@@ -2457,6 +2536,35 @@ async function linkNativeEventToHarmony(interaction, nativeId, linkedId, descrip
 async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
   if (customId.startsWith("harmony-reminder:") || customId.startsWith("harmony-reminders:")) return handleReminderInteraction(interaction);
+  if (customId.startsWith("harmony-calendar:")) {
+    const allowed = Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
+    if (!allowed) { await interaction.reply({ content: "Only server admins can review calendar candidates or reconcile Discord events.", flags: 64 }); return true; }
+    const [, action, third, fourth] = customId.split(":");
+    if (action === "review-select" && interaction.isButton?.() && third === "page") {
+      const payload = discoveredCandidatePickerPayload(interaction.guildId, Number(fourth));
+      delete payload.flags;
+      await interaction.update(payload);
+      return true;
+    }
+    if (action === "reconcile-select" && interaction.isButton?.() && third === "page") {
+      const payload = await nativeReconciliationPickerPayload(interaction.guild, Number(fourth));
+      delete payload.flags;
+      await interaction.update(payload);
+      return true;
+    }
+    if (action === "review-select" && interaction.isStringSelectMenu?.()) {
+      const candidate = store.getCalendarCandidate(interaction.guildId, Number(interaction.values[0]));
+      if (!candidate || candidate.status !== "open") { await interaction.reply({ content: "That candidate has already been reviewed.", flags: 64 }); return true; }
+      await interaction.reply({ ...candidateReviewPayload(candidate, store.findCandidateCalendarMatches(interaction.guildId, candidate)), flags: 64 });
+      return true;
+    }
+    if (action === "reconcile-select" && interaction.isStringSelectMenu?.()) {
+      const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, interaction.values[0]);
+      await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.payload);
+      return true;
+    }
+    return false;
+  }
   if (customId.startsWith("harmony-manager:")) {
     try {
       await handleManagerInteraction(interaction);
@@ -2477,11 +2585,32 @@ async function handleEventSchedulerInteraction(interaction) {
     await interaction.reply({ content: "Only server admins can change scheduled events.", flags: 64 });
     return true;
   }
-  const [, action, rawEventId] = customId.split(":");
+  const [, action, rawEventId, rawScope] = customId.split(":");
   const eventId = Number(rawEventId);
   const event = store.getEvent(interaction.guildId, eventId);
   if (!event) {
     await interaction.reply({ content: "That scheduled event is no longer active.", flags: 64 });
+    return true;
+  }
+  if (action === "cancelno" && interaction.isButton()) {
+    await interaction.update({ content: "Cancellation cancelled. The event is unchanged.", components: [] });
+    return true;
+  }
+  if (action === "cancelconfirm" && interaction.isButton()) {
+    if (event.recurrence_series_id) {
+      await interaction.update({ content: `Choose a cancellation scope for **${event.title}**.`, components: cancellationConfirmationComponents(eventId, true) });
+      return true;
+    }
+    const result = await cancelHarmonyOneOffEvent({ guildId: interaction.guildId, eventId, cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
+    const removed = result.handled ? result.changed : store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
+    if (removed && !result.handled && event.discord_event_id) await cancelLinkedNativeEvents(interaction, [event]);
+    if (removed && !result.handled) await refreshPublishedCalendar(interaction.client, interaction.guildId, event.calendar_type, event.event_date).catch(() => {});
+    await interaction.update({ content: removed ? `Cancelled event #${eventId}.` : "That event is no longer active.", components: [] });
+    return true;
+  }
+  if (action === "cancelscope" && interaction.isButton()) {
+    const targets = await cancelHarmonyRecurringEvents({ guildId: interaction.guildId, event, scope: rawScope, cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
+    await interaction.update({ content: targets.length ? `Cancelled ${rawScope === "series" ? "the entire series" : rawScope === "future" ? "this and future occurrences" : "this occurrence"}.` : "That cancellation scope is no longer available.", components: [] });
     return true;
   }
   if (action === "add" && interaction.isButton()) {
@@ -2787,31 +2916,8 @@ async function handleManagerInteraction(interaction) {
 
   if (calendarType === "community" && action === "findnativeselect" && interaction.isStringSelectMenu()) {
     const nativeId = interaction.values[0];
-    let native;
-    try {
-      native = await interaction.guild?.scheduledEvents?.fetch(nativeId);
-    } catch {
-      native = null;
-    }
-    if (!native) {
-      await interaction.reply({ content: "That Discord Scheduled Event is no longer available.", flags: 64 });
-      return;
-    }
-    const linked = store.getEventByDiscordId(interaction.guildId, nativeId);
-    if (linked) {
-      await interaction.reply({ content: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.`, flags: 64 });
-      return;
-    }
-    const reconciliation = store.getDiscordEventReconciliation(interaction.guildId, nativeId);
-    if (reconciliation && reconciliation.status !== "open") {
-      // Find Discord Event is an explicit admin retry path. If the native event
-      // is still unlinked, reopen the old review record rather than permanently
-      // blocking reconciliation because of a prior dismiss/failed attempt.
-      store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
-    }
-    if (!reconciliation) store.saveDiscordEventReconciliation(interaction.guildId, nativeId, null, "open");
-    const candidates = store.listUnlinkedCommunityEvents(interaction.guildId).filter((item) => item.title === native.name);
-    await interaction.reply(reconciliationReviewPayload(native, candidates));
+    const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, nativeId);
+    await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.payload);
     return;
   }
 
@@ -3531,7 +3637,8 @@ async function handleManagerInteraction(interaction) {
           all_day: parsed.allDay ? 1 : 0, event_end_at: parsed.eventEndAt,
         });
         managerDrafts.set(draftKey(interaction, calendarType, selectedEventId), { ...parsed, eventId: Number(selectedEventId), existing: saved });
-        if (saved.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
+        const oneOffSync = await updateOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true, refreshCalendar: false });
+        if (saved.discord_event_id && !saved.all_day && (!oneOffSync.handled || !oneOffSync.changed)) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
         await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((error) => console.error("Published calendar refresh after Edit Event failed:", error));
         await interaction.update({ content: "Choose a category for this event, or keep the current one.", components: editCategoryComponents(selectedEventId, saved.category || existing.category || "other") });
       } catch (error) {
@@ -3699,7 +3806,7 @@ async function handleManagerInteraction(interaction) {
       const savedChanges = applyRecurringChanges(interaction.guildId, existing, draft.scope || "this", { title: parsed.title, event_date: parsed.eventDate, event_at: parsed.eventAt, event_timezone: parsed.eventTimezone, timezone: parsed.timezone, link: parsed.link, description: parsed.description, all_day: parsed.allDay ? 1 : 0, member: existing.member || null, event_end_at: parsed.eventEndAt });
       const saved = savedChanges.find((item) => item.id === existing.id) || savedChanges[0];
       await interaction.update(youtifulEditPanel(saved));
-      const oneOffSync = await updateLinkedOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true });
+      const oneOffSync = await updateOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true });
       if (oneOffSync.handled && !oneOffSync.changed && existing.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
       if (!oneOffSync.handled) {
         await syncChangedNativeEvents(interaction.client, savedChanges);
@@ -3731,7 +3838,7 @@ async function handleManagerInteraction(interaction) {
         event_end_at: parsed.eventEndAt,
       });
       managerDrafts.set(draftKey(interaction, calendarType, eventId), { ...parsed, eventId, existing: saved });
-      const oneOffSync = await updateLinkedOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true, refreshCalendar: false });
+      const oneOffSync = await updateOneOffCalendarSchedule(interaction.client, existing, saved, { syncDiscord: true, refreshCalendar: false });
       if (oneOffSync.handled && !oneOffSync.changed && saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
       if (!oneOffSync.handled && saved?.discord_event_id && !saved.all_day) await syncNativeScheduledEvent(interaction.client, saved).catch((error) => console.error("Linked Discord event sync after edit failed:", error));
       await refreshEditedMonths(interaction.client, interaction.guildId, calendarType, existing.event_date, saved.event_date).catch((refreshError) => console.error("Published calendar refresh after Edit Event failed:", refreshError));
@@ -3816,10 +3923,8 @@ async function handleManagerInteraction(interaction) {
   if (action === "cancelscope" && interaction.isButton()) {
     const event = store.getEvent(interaction.guildId, Number(parts[4]));
     if (!event) { await interaction.update({ content: "That event is no longer active.", components: [] }); return; }
-    const targets = await cancelRecurringEvents(interaction, event, parts[3]);
+    const targets = await cancelHarmonyRecurringEvents({ guildId: interaction.guildId, event, scope: parts[3], cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
     await interaction.update({ content: `Cancelled ${parts[3] === "series" ? "the entire series" : parts[3] === "future" ? "this and future occurrences" : "this occurrence"}.`, components: [] });
-    await cancelLinkedNativeEvents(interaction, targets);
-    await refreshRecurringMonths(interaction.client, interaction.guildId, targets).catch((error) => console.error("Calendar refresh after recurring cancellation failed:", error));
     return;
   }
   if (action === "cancelconfirm" && interaction.isButton()) {
@@ -4125,8 +4230,10 @@ module.exports = {
   recurrenceOccurrences,
   createYoutifulOccurrences,
   applyRecurringChanges,
-  cancelRecurringEvents,
+  cancelHarmonyRecurringEvents,
+  cancellationConfirmationComponents,
   cancelHarmonyOneOffEvent,
+  updateOneOffCalendarSchedule,
   updateLinkedOneOffCalendarSchedule,
   MAX_RECURRENCE_OCCURRENCES,
   RECURRENCE_TYPES,
@@ -4158,5 +4265,9 @@ module.exports = {
   submitCalendarCandidate,
   candidateReviewPayload,
   candidateNoticePayload,
+  discoveredCandidatePickerPayload,
+  nativeReconciliationPickerPayload,
+  fetchExistingNativeEvents,
+  beginNativeEventReconciliation,
 };
 

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 const { getDb } = require("../src/db/sqlite");
 const { execute } = require("../src/commands/eventSchedule");
+const { handleEventSchedulerInteraction } = require("../src/services/eventSchedulerService");
 
 function makeEvent(guildId, discordEventId) {
   const id = store.createCalendarEvent({
@@ -56,7 +57,7 @@ test("/harmony-schedule update edits linked Discord time and rebuilds generated 
   assert.match(interaction.responses[0], /Updated event/);
 });
 
-test("/harmony-schedule cancel runs shared local cleanup even when Discord cannot be fetched", async () => {
+test("/harmony-schedule cancel asks for confirmation before running shared cleanup", async () => {
   const guildId = `phase2-slash-cancel-${Date.now()}`;
   const discordEventId = `${guildId}-native`;
   const event = makeEvent(guildId, discordEventId);
@@ -65,8 +66,18 @@ test("/harmony-schedule cancel runs shared local cleanup even when Discord canno
   const client = { guilds: { cache: new Map([[guildId, guild]]) } };
   const interaction = commandInteraction({ guildId, client, guild, action: "cancel", eventId: event.id });
   await execute(interaction);
+  assert.equal(interaction.responses[0].components[0].components[0].data.custom_id, `harmony-schedule:cancelconfirm:${event.id}`);
+  assert.equal(store.getEventByDiscordIdIncludingCancelled(guildId, discordEventId).cancelled_at, null);
+  assert.equal(getDb().prepare("SELECT status FROM scheduled_announcements WHERE event_id = ? AND status = 'pending'").get(event.id).status, "pending");
+  const confirm = {
+    customId: `harmony-schedule:cancelconfirm:${event.id}`, guildId, guild, client,
+    user: { id: "admin" }, memberPermissions: { has: () => true },
+    isButton: () => true, isStringSelectMenu: () => false, isModalSubmit: () => false,
+    update: async (payload) => interaction.responses.push(payload), reply: async (payload) => interaction.responses.push(payload),
+  };
+  await handleEventSchedulerInteraction(confirm);
   assert.ok(store.getEventByDiscordIdIncludingCancelled(guildId, discordEventId).cancelled_at);
   assert.equal(getDb().prepare("SELECT status FROM scheduled_announcements WHERE event_id = ? AND status = 'pending'").get(event.id), undefined);
   assert.equal(getDb().prepare("SELECT status FROM discord_event_reminder_schedules WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId).status, "cancelled");
-  assert.match(interaction.responses[0], /Cancelled event/);
+  assert.match(interaction.responses[1].content, /Cancelled event/);
 });

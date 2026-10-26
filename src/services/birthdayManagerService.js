@@ -13,7 +13,7 @@ const {
   TextInputStyle,
 } = require("discord.js");
 const birthdayStore = require("../stores/birthdayStore");
-const { linkWelcomePassCode } = require("../stores/welcomePassStore");
+const { matchAllImportedBirthdays, matchOneImportedBirthday } = require("./birthdayMatchingService");
 const { normalizeBias, BIASES } = require("./birthdayPresets");
 const {
   validTimezone,
@@ -132,7 +132,8 @@ function settingsLines(settings) {
     `Announcement channel: ${settings.channel_id ? `<#${settings.channel_id}>` : "Not set"}`,
     `Birthday role: ${settings.role_id ? `<@&${settings.role_id}>` : "Not set"}`,
     `Time zone: **${timezoneLabel(settings.timezone)}**`,
-    `Announcement time: **${hourLabel(settings.announcement_hour)}**`,
+    `Discord-member birthday announcement time: **${hourLabel(settings.announcement_hour)}**`,
+    "Non-member birthdays announce at 12:00 AM in each profile's configured IANA time zone.",
     `Weekly reminder: **${settings.weekly_enabled ? "On" : "Off"}**`,
     `Monthly recap: **${settings.monthly_recap_enabled ? "On" : "Off"}**`,
   ];
@@ -297,40 +298,6 @@ function settingsStep2Components(settings) {
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
     ),
   ];
-}
-
-function normalizeName(value) {
-  return String(value || "").trim().replace(/^@/, "").toLocaleLowerCase();
-}
-
-function memberNames(member) {
-  return new Set([
-    member.user?.username,
-    member.user?.globalName,
-    member.displayName,
-    member.user?.discriminator && member.user.discriminator !== "0"
-      ? `${member.user.username}#${member.user.discriminator}` : null,
-  ].map(normalizeName).filter(Boolean));
-}
-
-async function matchAllImportedBirthdays(interaction) {
-  const pending = birthdayStore.listUnlinkedWelcomePassBirthdayProfiles();
-  const fetched = await interaction.guild.members.fetch().catch(() => null);
-  if (!fetched) throw new Error("Harmony could not read the server member list. Confirm Server Members Intent is enabled.");
-  const members = [...fetched.values()].filter((member) => !member.user.bot);
-  const result = { connected: 0, unresolved: [] };
-  for (const profile of pending) {
-    const target = normalizeName(profile.discord_username);
-    const label = profile.birthday_name || profile.discord_username || profile.welcome_pass_code;
-    if (!target) { result.unresolved.push({ name: label, reason: "missing Discord username" }); continue; }
-    const usernameMatches = members.filter((member) => normalizeName(member.user.username) === target || (member.user.discriminator !== "0" && normalizeName(`${member.user.username}#${member.user.discriminator}`) === target));
-    const matches = usernameMatches.length ? usernameMatches : members.filter((member) => memberNames(member).has(target));
-    if (matches.length !== 1) { result.unresolved.push({ name: label, reason: matches.length ? "more than one member has that name" : "no matching server member" }); continue; }
-    const linked = linkWelcomePassCode({ code: profile.welcome_pass_code, guildId: interaction.guildId, userId: matches[0].id });
-    if (!linked.ok || !birthdayStore.attachWelcomePassBirthdayProfile(profile.welcome_pass_code)) result.unresolved.push({ name: label, reason: "Welcome Pass link conflict" });
-    else result.connected += 1;
-  }
-  return result;
 }
 
 function customParts(interaction) {
@@ -626,7 +593,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
   }
   if (action === "birthdaymatchall" && interaction.isButton?.()) {
     try {
-      const result = await matchAllImportedBirthdays(interaction);
+      const result = await matchAllImportedBirthdays({ guild: interaction.guild, guildId: interaction.guildId });
       const unresolved = result.unresolved.slice(0, 15).map((item) => `• ${item.name} — ${item.reason}`);
       await interaction.reply({ content: [`🎂 **Birthday matching complete**`, `Connected: **${result.connected}**`, `Still needs attention: **${result.unresolved.length}**`, ...unresolved].join("\n"), components: birthdayBackRow(), flags: 64 });
     } catch (error) { await interaction.reply({ content: error.message, components: birthdayBackRow(), flags: 64 }); }
@@ -637,14 +604,12 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     return true;
   }
   if (action === "birthdaymatchmembermodal" && interaction.isModalSubmit?.()) {
-    const importedName = normalizeName(interaction.fields.getTextInputValue("imported-name"));
+    const importedName = interaction.fields.getTextInputValue("imported-name");
     const [, , , memberId] = customParts(interaction);
-    const matches = birthdayStore.listUnlinkedWelcomePassBirthdayProfiles().filter((profile) => [profile.birthday_name, profile.discord_username, profile.welcome_pass_code].some((value) => normalizeName(value) === importedName));
-    if (matches.length !== 1 || !memberId) { await interaction.reply({ content: matches.length > 1 ? "More than one Welcome Pass birthday matches. Use the exact Welcome Pass code." : "No unique Welcome Pass birthday matched that name.", flags: 64 }); return true; }
-    const linked = linkWelcomePassCode({ code: matches[0].welcome_pass_code, guildId: interaction.guildId, userId: memberId });
-    if (!linked.ok || !birthdayStore.attachWelcomePassBirthdayProfile(matches[0].welcome_pass_code)) { await interaction.reply({ content: "Harmony could not connect that Welcome Pass record.", flags: 64 }); return true; }
+    const result = memberId && matchOneImportedBirthday({ guildId: interaction.guildId, importedName, memberId });
+    if (!result || result.status !== "connected") { await interaction.reply({ content: result?.status === "ambiguous" ? "More than one Welcome Pass birthday matches. Use the exact Welcome Pass code." : result?.status === "not-found" ? "No unique Welcome Pass birthday matched that name." : "Harmony could not connect that Welcome Pass record.", flags: 64 }); return true; }
     clearSession(interaction);
-    await interaction.reply({ content: `Connected **${matches[0].birthday_name || importedName}** to <@${memberId}>.`, components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: `Connected **${result.profile.birthday_name || importedName}** to <@${memberId}>.`, components: birthdayBackRow(), flags: 64 });
     return true;
   }
   if (action === "birthdayoff" && interaction.isButton?.()) {
@@ -662,4 +627,4 @@ async function handleBirthdayManagerInteraction(interaction, action) {
   return false;
 }
 
-module.exports = { birthdayManagerContent, birthdayManagerComponents, handleBirthdayManagerInteraction };
+module.exports = { birthdayManagerContent, birthdayManagerComponents, handleBirthdayManagerInteraction, isBirthdayAdmin };

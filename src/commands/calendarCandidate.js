@@ -1,10 +1,10 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
-const { submitCalendarCandidate } = require("../services/eventSchedulerService");
+const { submitCalendarCandidate, discoveredCandidatePickerPayload, nativeReconciliationPickerPayload } = require("../services/eventSchedulerService");
 const { runDiscovery } = require("../services/calendarDiscoveryService");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-calendar")
-  .setDescription("Submit a possible Stray Kids calendar event")
+  .setDescription("Submit, discover, and review Stray Kids calendar events")
   .addSubcommand((sub) => sub
     .setName("submit")
     .setDescription("Send Harmony a possible event source for admin review")
@@ -12,14 +12,28 @@ const data = new SlashCommandBuilder()
     .addStringOption((o) => o.setName("note").setDescription("Optional context for the admin reviewer").setMaxLength(500)))
   .addSubcommand((sub) => sub
     .setName("discover")
-    .setDescription("Check the official Stray Kids schedule for new candidates"));
+    .setDescription("Check the official Stray Kids schedule for new candidates"))
+  .addSubcommand((sub) => sub
+    .setName("review")
+    .setDescription("Review open discovered and submitted calendar candidates"))
+  .addSubcommand((sub) => sub
+    .setName("reconcile")
+    .setDescription("Review active Discord Scheduled Events for Harmony linking"));
 
 async function execute(interaction) {
   const subcommand = interaction.options.getSubcommand?.() || "submit";
-  if (subcommand === "discover") {
+  if (["discover", "review", "reconcile"].includes(subcommand)) {
     const allowed = Boolean(interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageGuild) || interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator));
     if (!allowed) {
-      await interaction.reply({ content: "Only Harmony calendar administrators can run discovery.", flags: 64 });
+      await interaction.reply({ content: "Only server admins with Manage Server or Administrator permission can use calendar discovery and review.", flags: 64 });
+      return;
+    }
+    if (subcommand === "review") {
+      await interaction.reply(discoveredCandidatePickerPayload(interaction.guildId));
+      return;
+    }
+    if (subcommand === "reconcile") {
+      await interaction.reply(await nativeReconciliationPickerPayload(interaction.guild));
       return;
     }
     await interaction.deferReply({ flags: 64 });

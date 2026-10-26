@@ -9,6 +9,7 @@ const {
   handleGuildScheduledEventUpdate,
   syncRecurringNativeEventWindow,
 } = require("../src/services/eventSchedulerService");
+const scheduleCommand = require("../src/commands/eventSchedule");
 
 let nextDateOffset = 20;
 
@@ -67,6 +68,24 @@ function eventInteraction(customId, guildId, guild = null) {
 function rawEvent(guildId, eventId) {
   return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id = ? AND id = ?").get(guildId, eventId);
 }
+
+test("slash recurring cancellation confirms scope and cancels only the selected occurrence", async () => {
+  const guildId = `phase3a-slash-cancel-${Date.now()}`;
+  const seriesId = `${guildId}-series`;
+  const rows = [makeOccurrence(guildId, seriesId, 0), makeOccurrence(guildId, seriesId, 1), makeOccurrence(guildId, seriesId, 2)];
+  const responses = [];
+  await scheduleCommand.execute({
+    guildId, user: { id: "admin" }, memberPermissions: { has: () => true },
+    options: { getSubcommand: () => "cancel", getInteger: () => rows[1].id },
+    deferReply: async () => {}, editReply: async (payload) => responses.push(payload),
+  });
+  const scopeLabels = responses[0].components[0].components.map((component) => component.data.label);
+  assert.deepEqual(scopeLabels, ["This occurrence", "This and future", "Entire series"]);
+  await handleEventSchedulerInteraction(eventInteraction(`harmony-schedule:cancelscope:${rows[1].id}:this`, guildId));
+  assert.ok(rawEvent(guildId, rows[1].id).cancelled_at);
+  assert.equal(rawEvent(guildId, rows[0].id).cancelled_at, null);
+  assert.equal(rawEvent(guildId, rows[2].id).cancelled_at, null);
+});
 
 function scheduledEvent(guildId, discordEventId, eventAt, status = GuildScheduledEventStatus.Scheduled) {
   return {

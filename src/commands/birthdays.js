@@ -4,10 +4,8 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 const store = require("../stores/birthdayStore");
-const {
-  linkWelcomePassCode,
-} = require("../stores/welcomePassStore");
 const { BIASES, normalizeBias } = require("../services/birthdayPresets");
+const { matchAllImportedBirthdays, matchOneImportedBirthday } = require("../services/birthdayMatchingService");
 const {
   validTimezone,
   validMmdd,
@@ -28,14 +26,14 @@ const adminActions = new Set([
 
 const data = new SlashCommandBuilder()
   .setName("harmony-birthdays")
-  .setDescription("Celebrate opted-in member birthdays")
+  .setDescription("Manage member and non-member birthday celebrations")
   .addSubcommand((sub) => sub
     .setName("setup")
     .setDescription("Turn birthday celebrations on")
     .addChannelOption((o) => o.setName("channel").setDescription("Announcement channel").setRequired(true))
     .addRoleOption((o) => o.setName("role").setDescription("Temporary 24-hour birthday role").setRequired(true))
     .addStringOption((o) => o.setName("timezone").setDescription("IANA timezone, such as America/New_York").setRequired(true))
-    .addIntegerOption((o) => o.setName("hour").setDescription("Announcement hour, 0–23").setMinValue(0).setMaxValue(23))
+    .addIntegerOption((o) => o.setName("hour").setDescription("Discord-member birthday announcement hour, 0–23").setMinValue(0).setMaxValue(23))
     .addIntegerOption((o) => o.setName("weekly-day").setDescription("Day for the upcoming-birthday reminder").addChoices(...weekdayChoices))
     .addBooleanOption((o) => o.setName("weekly").setDescription("Post weekly upcoming reminders"))
     .addBooleanOption((o) => o.setName("monthly-recap").setDescription("Post a recap on the first of each month")))
@@ -86,7 +84,7 @@ const data = new SlashCommandBuilder()
   .addSubcommand((sub) => sub.setName("off").setDescription("Turn scheduled birthday posts off"));
 
 function isAdmin(interaction) {
-  return interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+  return Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
 }
 
 function listEmbed(title, profiles) {
@@ -98,25 +96,6 @@ function listEmbed(title, profiles) {
     .setTitle(title)
     .setDescription(description)
     .setFooter({ text: "Harmony stores no birth year or age." });
-}
-
-function normalizeMemberName(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^@/, "")
-    .toLocaleLowerCase();
-}
-
-function memberNames(member) {
-  const names = [
-    member.user.username,
-    member.user.globalName,
-    member.displayName,
-  ];
-  if (member.user.discriminator && member.user.discriminator !== "0") {
-    names.push(`${member.user.username}#${member.user.discriminator}`);
-  }
-  return new Set(names.map(normalizeMemberName).filter(Boolean));
 }
 
 function formatMatchReport(result) {
@@ -144,7 +123,7 @@ async function execute(interaction) {
   await interaction.deferReply(privateReply ? { flags: 64 } : {});
 
   if (privateReply && !isAdmin(interaction)) {
-    await interaction.editReply("Only server administrators can use that birthday setting.");
+    await interaction.editReply("Only server admins with Manage Server or Administrator permission can use that birthday setting.");
     return;
   }
 
@@ -184,6 +163,7 @@ async function execute(interaction) {
       `Announcements: <#${channel.id}>`,
       `24-hour role: <@&${role.id}>`,
       `Timezone: ${timezone}`,
+      "Discord-member birthdays use the configured hour. Non-member birthdays use 12:00 AM in each profile's configured IANA time zone.",
       "Welcome Pass opt-ins will connect automatically after approval.",
     ].join("\n"));
     return;
@@ -199,7 +179,8 @@ async function execute(interaction) {
       `Status: **${settings.enabled ? "On" : "Off"}**`,
       `Channel: <#${settings.channel_id}>`,
       `Role: ${settings.role_id ? `<@&${settings.role_id}>` : "None"}`,
-      `Time: ${settings.announcement_hour}:00 in ${settings.timezone}`,
+      `Discord-member birthday announcement time: ${settings.announcement_hour}:00 in ${settings.timezone}`,
+      "Non-member birthdays announce at 12:00 AM in each profile's configured IANA time zone.",
       `Weekly reminder: ${settings.weekly_enabled ? "On" : "Off"}`,
       `Monthly recap: ${settings.monthly_recap_enabled ? "On" : "Off"}`,
     ].join("\n"));
@@ -275,63 +256,13 @@ async function execute(interaction) {
   }
 
   if (action === "match-all") {
-    const pending = store.listUnlinkedWelcomePassBirthdayProfiles();
-    if (!pending.length) {
+    if (!store.listUnlinkedWelcomePassBirthdayProfiles().length) {
       await interaction.editReply("Every imported birthday is already connected, or no imported birthdays are waiting.");
       return;
     }
-
-    const fetched = await interaction.guild.members.fetch().catch(() => null);
-    if (!fetched) {
-      await interaction.editReply("Harmony could not read the server member list. Confirm that **Server Members Intent** is enabled, then try again.");
-      return;
-    }
-
-    const members = [...fetched.values()].filter((member) => !member.user.bot);
-    const result = { connected: 0, unresolved: [] };
-
-    for (const profile of pending) {
-      const target = normalizeMemberName(profile.discord_username);
-      const label = profile.birthday_name || profile.discord_username || profile.welcome_pass_code;
-      if (!target) {
-        result.unresolved.push({ name: label, reason: "sync once more to import the Discord username" });
-        continue;
-      }
-
-      const usernameMatches = members.filter(
-        (member) => normalizeMemberName(member.user.username) === target ||
-          (member.user.discriminator !== "0" &&
-            normalizeMemberName(`${member.user.username}#${member.user.discriminator}`) === target)
-      );
-      const matches = usernameMatches.length
-        ? usernameMatches
-        : members.filter((member) => memberNames(member).has(target));
-
-      if (matches.length !== 1) {
-        result.unresolved.push({
-          name: label,
-          reason: matches.length ? "more than one member has that name" : "no matching server member",
-        });
-        continue;
-      }
-
-      const linked = linkWelcomePassCode({
-        code: profile.welcome_pass_code,
-        guildId: interaction.guildId,
-        userId: matches[0].id,
-      });
-      if (!linked.ok) {
-        result.unresolved.push({ name: label, reason: "Welcome Pass link conflict" });
-        continue;
-      }
-
-      if (store.attachWelcomePassBirthdayProfile(profile.welcome_pass_code)) {
-        result.connected += 1;
-      } else {
-        result.unresolved.push({ name: label, reason: "birthday profile could not be attached" });
-      }
-    }
-
+    let result;
+    try { result = await matchAllImportedBirthdays({ guild: interaction.guild, guildId: interaction.guildId }); }
+    catch (error) { await interaction.editReply(error.message); return; }
     await interaction.editReply(formatMatchReport(result));
     return;
   }
@@ -339,34 +270,20 @@ async function execute(interaction) {
   if (action === "match-member") {
     const importedName = interaction.options.getString("imported-name", true).trim();
     const member = interaction.options.getUser("member", true);
-    const target = normalizeMemberName(importedName);
-    const pending = store.listUnlinkedWelcomePassBirthdayProfiles();
-    const matches = pending.filter((profile) => [
-      profile.birthday_name,
-      profile.discord_username,
-      profile.welcome_pass_code,
-    ].some((value) => normalizeMemberName(value) === target));
-
-    if (!matches.length) {
+    const result = matchOneImportedBirthday({ guildId: interaction.guildId, importedName, memberId: member.id });
+    if (result.status === "not-found") {
       await interaction.editReply(`No unmatched imported birthday was found for **${importedName}**. Run \`/harmony-birthdays match-all\` to see the current list.`);
       return;
     }
-    if (matches.length > 1) {
+    if (result.status === "ambiguous") {
       await interaction.editReply(`More than one unmatched birthday uses **${importedName}**. Use the member's \`YS-XXXXXXXX\` confirmation code in the imported-name box instead.`);
       return;
     }
-
-    const profile = matches[0];
-    const linked = linkWelcomePassCode({
-      code: profile.welcome_pass_code,
-      guildId: interaction.guildId,
-      userId: member.id,
-    });
-    if (!linked.ok) {
+    if (result.status === "conflict") {
       await interaction.editReply("Harmony could not connect that record because the Welcome Pass or Discord member is already linked to a different account.");
       return;
     }
-    if (!store.attachWelcomePassBirthdayProfile(profile.welcome_pass_code)) {
+    if (result.status === "attach-failed") {
       await interaction.editReply("The Welcome Pass was linked, but Harmony could not attach its birthday profile. Please check the Railway logs before trying again.");
       return;
     }
@@ -400,4 +317,4 @@ async function execute(interaction) {
   }
 }
 
-module.exports = { data, execute };
+module.exports = { data, execute, isAdmin };

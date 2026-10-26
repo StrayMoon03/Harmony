@@ -14,7 +14,8 @@ const {
   CALENDAR_CATEGORY_LABELS,
   installScheduleManagers,
   cancelHarmonyOneOffEvent,
-  updateLinkedOneOffCalendarSchedule,
+  updateOneOffCalendarSchedule,
+  cancellationConfirmationComponents,
 } = require("../services/eventSchedulerService");
 
 const data = new SlashCommandBuilder()
@@ -50,7 +51,7 @@ const data = new SlashCommandBuilder()
     .addIntegerOption((o) => o.setName("event").setDescription("Event number shown by Harmony").setRequired(true).setMinValue(1))
     .addStringOption((o) => o.setName("title").setDescription("Event name").setMaxLength(120))
     .addStringOption((o) => o.setName("calendar").setDescription("Calendar classification").addChoices({ name: "Stray Kids", value: "stray_kids" }, { name: "Youtiful Stays", value: "community" }))
-    .addStringOption((o) => o.setName("event-date").setDescription("Actual event date: YYYY-MM").setMaxLength(10))
+    .addStringOption((o) => o.setName("event-date").setDescription("Actual event date: YYYY-MM-DD").setMaxLength(10))
     .addStringOption((o) => o.setName("event-time").setDescription("Actual event time: HH:MM; omit for all-day").setMaxLength(5))
     .addStringOption((o) => o.setName("event-timezone").setDescription("Timezone for the actual event").setMaxLength(80))
     .addStringOption((o) => o.setName("category").setDescription("Calendar category").addChoices(...CALENDAR_CATEGORIES.map((value) => ({ name: CALENDAR_CATEGORY_LABELS[value], value }))))
@@ -73,8 +74,8 @@ data.addSubcommand((sub) => sub
 
 data.addSubcommand((sub) => sub
   .setName("setup-manager")
-  .setDescription("Install or refresh the private calendar Schedule Managers")
-  .addChannelOption((o) => o.setName("control-channel").setDescription("Admin-only Harmony control channel").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))
+  .setDescription("Install or refresh the calendar Schedule Managers")
+  .addChannelOption((o) => o.setName("control-channel").setDescription("Channel where admins can use the Schedule Manager").setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))
   .addChannelOption((o) => o.setName("reconciliation-channel").setDescription("Where Discord-first event reconciliation prompts are posted").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)));
 
 data.addSubcommand((sub) => sub
@@ -151,10 +152,13 @@ async function execute(interaction) {
   if (action === "cancel") {
     const eventId = interaction.options.getInteger("event", true);
     const existing = store.getEvent(interaction.guildId, eventId);
-    const oneOff = await cancelHarmonyOneOffEvent({ guildId: interaction.guildId, eventId, cancelledBy: interaction.user.id, client: interaction.client, guild: interaction.guild });
-    const removed = oneOff.handled ? oneOff.changed : store.cancelEvent(interaction.guildId, eventId, interaction.user.id);
-    if (!oneOff.handled && removed && existing?.event_date) await refreshPublishedCalendar(interaction.client, interaction.guildId, existing.calendar_type, existing.event_date).catch(() => {});
-    await interaction.editReply(removed ? `Cancelled event #${eventId}.` : "I could not find that active event.");
+    if (!existing) { await interaction.editReply("I could not find that active event."); return; }
+    await interaction.editReply({
+      content: existing.recurrence_series_id
+        ? `Confirm the cancellation scope for **${existing.title}**. No event has been cancelled yet.`
+        : `Cancel **${existing.title}** (event #${eventId}) and its remaining announcements? No changes have been made yet.`,
+      components: cancellationConfirmationComponents(eventId, Boolean(existing.recurrence_series_id)),
+    });
     return;
   }
   if (action === "update") {
@@ -184,7 +188,7 @@ async function execute(interaction) {
       description: interaction.options.getString("description") ?? existing.description,
       all_day: allDay ? 1 : 0,
     });
-    await updateLinkedOneOffCalendarSchedule(interaction.client, existing, updated, { syncDiscord: true });
+    await updateOneOffCalendarSchedule(interaction.client, existing, updated, { syncDiscord: true, refreshCalendar: false });
     await refreshPublishedCalendar(interaction.client, interaction.guildId, existing.calendar_type, existing.event_date).catch(() => {});
     await refreshPublishedCalendar(interaction.client, interaction.guildId, updated.calendar_type, updated.event_date).catch(() => {});
     await interaction.editReply(`Updated event #${eventId}.`);

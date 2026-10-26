@@ -167,7 +167,7 @@ test("manual discover is admin-only and the command is ephemeral", async () => {
     reply: async (payload) => { reply = payload; },
   });
   assert.equal(reply.flags, 64);
-  assert.match(reply.content, /Only Harmony calendar administrators/);
+  assert.match(reply.content, /Only server admins with Manage Server or Administrator permission/);
 });
 
 test("automatic discovery defaults off, persists when enabled, and manual checks still run", async () => {
