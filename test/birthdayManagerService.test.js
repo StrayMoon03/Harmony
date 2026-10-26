@@ -1,7 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { PermissionFlagsBits } = require("discord.js");
 const { birthdayManagerContent, birthdayManagerComponents, handleBirthdayManagerInteraction } = require("../src/services/birthdayManagerService");
-const { managerPanelComponents } = require("../src/services/eventSchedulerService");
+const { managerPanelComponents, handleEventSchedulerInteraction } = require("../src/services/eventSchedulerService");
 const birthdayStore = require("../src/stores/birthdayStore");
 
 function fakeInteraction(action, guildId, admin = true, fields = {}, options = {}) {
@@ -12,7 +13,7 @@ function fakeInteraction(action, guildId, admin = true, fields = {}, options = {
     user: { id: options.userId || "birthday-admin" },
     customId: options.customId || `harmony-manager:community:${action}`,
     values: options.values || [],
-    memberPermissions: { has: (permission) => admin && ["ManageGuild", "Administrator"].includes(permission) },
+    memberPermissions: { has: (permission) => admin && [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.Administrator, "ManageGuild", "Administrator"].includes(permission) },
     responses,
     fields: { getTextInputValue: (id) => fields[id] || "" },
     isButton: () => kind === "button",
@@ -30,6 +31,11 @@ function fakeInteraction(action, guildId, admin = true, fields = {}, options = {
   return interaction;
 }
 
+function assertComponentLimits(rows) {
+  assert.ok(rows.length <= 5, `expected at most five component rows, got ${rows.length}`);
+  for (const row of rows) assert.ok(row.components.length <= 5, `expected at most five components in a row, got ${row.components.length}`);
+}
+
 test("community manager exposes one private Birthdays control", () => {
   const rows = managerPanelComponents("community");
   const customIds = rows.flatMap((row) => row.components.map((component) => component.data.custom_id));
@@ -44,9 +50,11 @@ test("Birthday Manager opens ephemerally and renders current settings", async ()
   const interaction = fakeInteraction("birthdays", guildId);
   await handleBirthdayManagerInteraction(interaction, "birthdays");
   assert.equal(interaction.responses[0].payload.flags, 64);
-  assert.match(interaction.responses[0].payload.content, /Status: \*\*On\*\*/);
-  assert.match(interaction.responses[0].payload.content, /Opted-in member birthdays: \*\*1\*\*/);
-  assert.ok(interaction.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.label === "Manage Birthday"));
+  assert.match(interaction.responses[0].payload.content, /BIRTHDAY MANAGER/);
+  assert.deepEqual(interaction.responses[0].payload.components.flatMap((row) => row.components).map((button) => button.data.label), [
+    "Upcoming Birthdays", "Member Birthdays", "Stray Kids / Non-Member Birthdays", "Birthday Settings",
+  ]);
+  assertComponentLimits(interaction.responses[0].payload.components);
 });
 
 test("unauthorized Birthday Manager access is rejected privately", async () => {
@@ -134,11 +142,17 @@ test("Birthday Manager settings use human-friendly channel, role, timezone, time
   assert.equal(saved.weekly_day, 2);
 });
 
-test("Resolve One Welcome Pass routes the selected member to its modal", async () => {
+test("Connect One Welcome Pass Birthday remains reachable from matching maintenance", async () => {
   const guildId = `birthday-match-one-${Date.now()}`;
+  const settings = fakeInteraction("birthdaysettingsmenu", guildId);
+  await handleBirthdayManagerInteraction(settings, "birthdaysettingsmenu");
+  const maintenance = fakeInteraction("birthdaymaintenance", guildId);
+  await handleBirthdayManagerInteraction(maintenance, "birthdaymaintenance");
+  assert.ok(maintenance.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdaymatchmember"));
   const open = fakeInteraction("birthdaymatchmember", guildId);
   await handleBirthdayManagerInteraction(open, "birthdaymatchmember");
   assert.match(open.responses[0].payload.content, /Choose the Discord member/);
+  assert.ok(open.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdaymaintenance"));
   const selected = fakeInteraction("birthdaymember", guildId, true, {}, {
     kind: "user",
     values: ["100005"],
@@ -150,17 +164,30 @@ test("Resolve One Welcome Pass routes the selected member to its modal", async (
   assert.equal(selected.modal.data.title, "Connect Welcome Pass birthday");
 });
 
-test("Welcome Pass matching, reminder controls, and confirmed disable remain available", async () => {
+test("Welcome Pass matching and settings controls are nested and remain available", async () => {
   const guildId = `birthday-controls-${Date.now()}`;
   birthdayStore.saveBirthdaySettings({ guildId, channelId: "c", roleId: "r", timezone: "America/New_York", announcementHour: 9, weeklyDay: 0, weeklyEnabled: true, monthlyRecapEnabled: true });
   const labels = birthdayManagerComponents().flatMap((row) => row.components).map((component) => component.data.label);
-  assert.ok(labels.includes("Connect Welcome Passes"));
-  assert.ok(labels.includes("Resolve One Welcome Pass"));
-  assert.ok(labels.includes("Turn Weekly Reminder Off/On"));
-  assert.ok(labels.includes("Turn Monthly Recap Off/On"));
+  assert.deepEqual(labels, ["Upcoming Birthdays", "Member Birthdays", "Stray Kids / Non-Member Birthdays", "Birthday Settings"]);
+  const settings = fakeInteraction("birthdaysettingsmenu", guildId);
+  await handleEventSchedulerInteraction(settings);
+  const settingLabels = settings.responses[0].payload.components.flatMap((row) => row.components).map((component) => component.data.label);
+  assert.ok(settingLabels.includes("Welcome Pass Matching / Maintenance"));
+  assert.ok(settingLabels.includes("Turn Weekly Reminder Off"));
+  assert.ok(settingLabels.includes("Turn Monthly Recap Off"));
+  assert.ok(settingLabels.includes("Turn Birthday System Off"));
+  const maintenance = fakeInteraction("birthdaymaintenance", guildId);
+  await handleEventSchedulerInteraction(maintenance);
+  const maintenanceButtons = maintenance.responses[0].payload.components.flatMap((row) => row.components);
+  assert.deepEqual(maintenanceButtons.slice(0, 2).map((button) => button.data.label), ["Connect Welcome Pass Birthdays", "Connect One Welcome Pass Birthday"]);
+  assert.ok(maintenanceButtons.some((button) => button.data.custom_id === "harmony-manager:community:birthdaysettingsmenu"));
+  assertComponentLimits(settings.responses[0].payload.components);
+  assertComponentLimits(maintenance.responses[0].payload.components);
+
   const weekly = fakeInteraction("birthdayweekly", guildId);
   await handleBirthdayManagerInteraction(weekly, "birthdayweekly");
   assert.equal(birthdayStore.getBirthdaySettings(guildId).weekly_enabled, 0);
+  assert.match(weekly.responses[0].payload.content, /BIRTHDAY SETTINGS/);
   const monthly = fakeInteraction("birthdaymonthly", guildId);
   await handleBirthdayManagerInteraction(monthly, "birthdaymonthly");
   assert.equal(birthdayStore.getBirthdaySettings(guildId).monthly_recap_enabled, 0);
@@ -182,14 +209,50 @@ test("Upcoming birthdays use member-friendly Welcome Pass wording", async () => 
 
 test("Birthday Manager content reports the existing system rather than a second data source", () => {
   const guildId = `birthday-content-${Date.now()}`;
-  assert.match(birthdayManagerContent(guildId), /existing birthday profiles/);
-  assert.equal(birthdayManagerComponents().length, 3);
+  assert.match(birthdayManagerContent(guildId), /BIRTHDAY MANAGER/);
+  assert.equal(birthdayManagerComponents().length, 2);
+  assert.equal(birthdayManagerComponents().flatMap((row) => row.components).length, 4);
+});
+
+test("Birthday Manager sections route to their existing operations and provide a clear way back", async () => {
+  const guildId = `birthday-nav-${Date.now()}`;
+  const upcoming = fakeInteraction("birthdayupcoming", guildId);
+  await handleBirthdayManagerInteraction(upcoming, "birthdayupcoming");
+  assert.ok(upcoming.responses[0].payload.embeds?.length);
+  assert.ok(upcoming.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdayhome"));
+
+  const members = fakeInteraction("birthdaymembers", guildId);
+  await handleEventSchedulerInteraction(members);
+  const memberButtons = members.responses[0].payload.components.flatMap((row) => row.components);
+  assert.deepEqual(memberButtons.slice(0, 4).map((button) => button.data.label), ["Manage Birthday", "Customize", "Clear Custom", "Preview"]);
+  assert.ok(memberButtons.some((button) => button.data.custom_id === "harmony-manager:community:birthdayhome"));
+  assert.ok(!memberButtons.some((button) => /Welcome Pass/.test(button.data.label)));
+  assertComponentLimits(members.responses[0].payload.components);
+  const manage = fakeInteraction("birthdayadd", guildId);
+  await handleBirthdayManagerInteraction(manage, "birthdayadd");
+  assert.ok(manage.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdaymembers"));
+  const memberBack = fakeInteraction("birthdaymembers", guildId);
+  await handleEventSchedulerInteraction(memberBack);
+  assert.ok(memberBack.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.label === "Manage Birthday"));
+
+  const nonmember = fakeInteraction("birthdaynonmember", guildId);
+  await handleEventSchedulerInteraction(nonmember);
+  assert.ok(nonmember.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdayhome"));
+  assertComponentLimits(nonmember.responses[0].payload.components);
+  const settings = fakeInteraction("birthdaysettingsmenu", guildId);
+  await handleEventSchedulerInteraction(settings);
+  assert.ok(settings.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdayhome"));
+  const home = fakeInteraction("birthdayhome", guildId);
+  await handleEventSchedulerInteraction(home);
+  assert.deepEqual(home.responses[0].payload.components.flatMap((row) => row.components).map((button) => button.data.label), [
+    "Upcoming Birthdays", "Member Birthdays", "Stray Kids / Non-Member Birthdays", "Birthday Settings",
+  ]);
 });
 
 test("non-member birthdays have a separate admin flow and do not replace the Discord member picker", async () => {
   const guildId = `birthday-nonmember-ui-${Date.now()}`;
   const components = birthdayManagerComponents().flatMap((row) => row.components);
-  assert.ok(components.some((button) => button.data.label === "Non-Member Birthdays"));
+  assert.ok(components.some((button) => button.data.label === "Stray Kids / Non-Member Birthdays"));
 
   const denied = fakeInteraction("birthdaynonmember", guildId, false);
   await handleBirthdayManagerInteraction(denied, "birthdaynonmember");

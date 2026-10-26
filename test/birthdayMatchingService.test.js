@@ -2,11 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { matchAllImportedBirthdays, matchOneImportedBirthday } = require("../src/services/birthdayMatchingService");
 const birthdaysCommand = require("../src/commands/birthdays");
-const { birthdayManagerContent, isBirthdayAdmin } = require("../src/services/birthdayManagerService");
+const { birthdayManagerContent, handleBirthdayManagerInteraction, isBirthdayAdmin } = require("../src/services/birthdayManagerService");
 const birthdayStore = require("../src/stores/birthdayStore");
 const { PermissionFlagsBits } = require("discord.js");
 
-test("birthday admin permission matches Schedule Manager policy without changing member-facing commands", () => {
+test("birthday admin permission matches Schedule Manager policy without changing member-facing commands", async () => {
   const manageGuild = { has: (permission) => permission === PermissionFlagsBits.ManageGuild || permission === "ManageGuild" };
   const administrator = { has: (permission) => permission === PermissionFlagsBits.Administrator || permission === "Administrator" };
   const member = { has: () => false };
@@ -23,7 +23,16 @@ test("birthday admin permission matches Schedule Manager policy without changing
   assert.match(setup.options.find((option) => option.name === "hour").description, /Discord-member/);
   const guildId = `birthday-wording-${Date.now()}`;
   birthdayStore.saveBirthdaySettings({ guildId, channelId: "birthday-channel", roleId: "birthday-role", timezone: "America/New_York", announcementHour: 9, weeklyEnabled: true, weeklyDay: 0, monthlyRecapEnabled: true });
-  const text = birthdayManagerContent(guildId);
+  const responses = [];
+  const settingsInteraction = {
+    guildId,
+    memberPermissions: { has: (permission) => permission === PermissionFlagsBits.ManageGuild || permission === "ManageGuild" },
+    isButton: () => true,
+    update: async (payload) => responses.push(payload),
+    reply: async (payload) => responses.push(payload),
+  };
+  await handleBirthdayManagerInteraction(settingsInteraction, "birthdaysettingsmenu");
+  const text = responses[0].content;
   assert.match(text, /Discord-member birthday announcement time/);
   assert.match(text, /non-member birthdays announce at 12:00 AM/i);
 });
