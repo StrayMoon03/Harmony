@@ -145,12 +145,12 @@ test("Birthday Manager settings use human-friendly channel, role, timezone, time
 test("Connect One Welcome Pass Birthday remains reachable from matching maintenance", async () => {
   const guildId = `birthday-match-one-${Date.now()}`;
   const settings = fakeInteraction("birthdaysettingsmenu", guildId);
-  await handleBirthdayManagerInteraction(settings, "birthdaysettingsmenu");
+  await handleEventSchedulerInteraction(settings);
   const maintenance = fakeInteraction("birthdaymaintenance", guildId);
-  await handleBirthdayManagerInteraction(maintenance, "birthdaymaintenance");
+  await handleEventSchedulerInteraction(maintenance);
   assert.ok(maintenance.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdaymatchmember"));
   const open = fakeInteraction("birthdaymatchmember", guildId);
-  await handleBirthdayManagerInteraction(open, "birthdaymatchmember");
+  await handleEventSchedulerInteraction(open);
   assert.match(open.responses[0].payload.content, /Choose the Discord member/);
   assert.ok(open.responses[0].payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-manager:community:birthdaymaintenance"));
   const selected = fakeInteraction("birthdaymember", guildId, true, {}, {
@@ -158,7 +158,7 @@ test("Connect One Welcome Pass Birthday remains reachable from matching maintena
     values: ["100005"],
     customId: "harmony-manager:community:birthdaymember:matchmember",
   });
-  await handleBirthdayManagerInteraction(selected, "birthdaymember");
+  await handleEventSchedulerInteraction(selected);
   assert.ok(selected.modal);
   assert.equal(selected.modal.data.custom_id, "harmony-manager:community:birthdaymatchmembermodal:100005");
   assert.equal(selected.modal.data.title, "Connect Welcome Pass birthday");
