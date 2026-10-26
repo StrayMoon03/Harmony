@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const command = require("../src/commands/eventSchedule");
+const { managerPanelContent } = require("../src/services/eventSchedulerService");
 
 test("registers the guided Harmony scheduler command", () => {
   const json = command.data.toJSON();
@@ -20,4 +21,10 @@ test("registers the guided Harmony scheduler command", () => {
   assert.deepEqual(create.options.find((option) => option.name === "channel").channel_types, [0, 5, 2]);
   const category = create.options.find((option) => option.name === "category");
   assert.ok(category.choices.some((choice) => choice.name === "Shopping / Pop-Up" && choice.value === "shopping"));
+  const update = json.options.find((option) => option.name === "update");
+  assert.match(update.options.find((option) => option.name === "event-date").description, /YYYY-MM-DD/);
+  assert.doesNotMatch(update.options.find((option) => option.name === "event-date").description, /YYYY-MM(?!-DD)/);
+  assert.doesNotMatch(setupManager.options[0].description, /Admin-only Harmony control channel/);
+  assert.match(managerPanelContent("stray_kids"), /admin controls below/);
+  assert.doesNotMatch(managerPanelContent("stray_kids"), /private controls below/);
 });
