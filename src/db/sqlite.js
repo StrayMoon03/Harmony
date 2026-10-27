@@ -229,6 +229,19 @@ function migrate(database) {
       updated_at  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS admin_operations_audit (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id    TEXT,
+      actor_id    TEXT NOT NULL,
+      service     TEXT NOT NULL,
+      action      TEXT NOT NULL,
+      outcome     TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_operations_audit_created
+      ON admin_operations_audit (created_at);
+
     CREATE TABLE IF NOT EXISTS member_count_settings (
       guild_id           TEXT PRIMARY KEY,
       role_id            TEXT NOT NULL,
