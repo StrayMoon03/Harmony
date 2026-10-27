@@ -120,7 +120,7 @@ function settingsChannelRoleComponents(settings = {}) {
       .setMinValues(1).setMaxValues(1)),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingsstep2").setLabel("Continue to time settings").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingsmenu").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -140,48 +140,82 @@ function settingsLines(settings) {
 }
 
 function birthdayManagerContent(guildId) {
-  const settings = birthdayStore.getBirthdaySettings(guildId);
-  const profiles = birthdayStore.listBirthdayProfiles(guildId);
-  const memberProfiles = profiles.filter((profile) => profile.user_id).length;
   return [
     "🎂 **BIRTHDAY MANAGER**",
     "",
-    ...settingsLines(settings),
-    `Opted-in member birthdays: **${memberProfiles}**`,
-    "",
-    "This panel uses Harmony's existing birthday profiles, scheduler, presets, and role behavior.",
+    "Choose what you want to manage.",
   ].join("\n");
 }
 
 function birthdayManagerComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaystatus").setLabel("Status").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayupcoming").setLabel("Upcoming").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayadd").setLabel("Manage Birthday").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaycustomize").setLabel("Customize").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayupcoming").setLabel("Upcoming Birthdays").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymembers").setLabel("Member Birthdays").setStyle(ButtonStyle.Success),
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayclear").setLabel("Clear Custom").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaypreview").setLabel("Preview").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchall").setLabel("Connect Welcome Passes").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchmember").setLabel("Resolve One Welcome Pass").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmember").setLabel("Non-Member Birthdays").setStyle(ButtonStyle.Primary),
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettings").setLabel("Settings").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayweekly").setLabel("Turn Weekly Reminder Off/On").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymonthly").setLabel("Turn Monthly Recap Off/On").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayoff").setLabel("Turn Off").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Refresh").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmember").setLabel("Stray Kids / Non-Member Birthdays").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingsmenu").setLabel("Birthday Settings").setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
 
-function birthdayBackRow() {
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Back to Birthday Manager").setStyle(ButtonStyle.Secondary),
-  )];
+function birthdayBackRow(backAction = "birthdayhome", backLabel = "Birthday Manager Home") {
+  const buttons = [new ButtonBuilder()
+    .setCustomId(`harmony-manager:community:${backAction}`)
+    .setLabel(backLabel)
+    .setStyle(ButtonStyle.Secondary)];
+  if (backAction !== "birthdayhome") buttons.push(new ButtonBuilder()
+    .setCustomId("harmony-manager:community:birthdayhome")
+    .setLabel("Birthday Manager Home")
+    .setStyle(ButtonStyle.Secondary));
+  return [new ActionRowBuilder().addComponents(...buttons)];
+}
+
+function birthdaySettingsContent(guildId) {
+  return ["🎂 **BIRTHDAY SETTINGS**", "", ...settingsLines(birthdayStore.getBirthdaySettings(guildId))].join("\n");
+}
+
+function birthdaySettingsComponents(settings = {}) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaystatus").setLabel("View Status").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettings").setLabel("Setup / Change Settings").setStyle(ButtonStyle.Primary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayweekly").setLabel(settings.weekly_enabled ? "Turn Weekly Reminder Off" : "Turn Weekly Reminder On").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymonthly").setLabel(settings.monthly_recap_enabled ? "Turn Monthly Recap Off" : "Turn Monthly Recap On").setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymaintenance").setLabel("Welcome Pass Matching / Maintenance").setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayoff").setLabel("Turn Birthday System Off").setStyle(ButtonStyle.Danger),
+    ),
+    ...birthdayBackRow(),
+  ];
+}
+
+function birthdayMemberComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayadd").setLabel("Manage Birthday").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaycustomize").setLabel("Customize").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayclear").setLabel("Clear Custom").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaypreview").setLabel("Preview").setStyle(ButtonStyle.Secondary),
+    ),
+    ...birthdayBackRow(),
+  ];
+}
+
+function birthdayMaintenanceComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchall").setLabel("Connect Welcome Pass Birthdays").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaymatchmember").setLabel("Connect One Welcome Pass Birthday").setStyle(ButtonStyle.Secondary),
+    ),
+    ...birthdayBackRow("birthdaysettingsmenu", "Back to Birthday Settings"),
+  ];
 }
 
 function nonMemberBirthdayComponents(profiles = []) {
@@ -199,7 +233,7 @@ function nonMemberBirthdayComponents(profiles = []) {
   }
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-manager:community:birthdaynonmemberadd").setLabel("Add Birthday").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Back to Birthday Manager").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Birthday Manager Home").setStyle(ButtonStyle.Secondary),
   ));
   return rows;
 }
@@ -295,7 +329,7 @@ function settingsStep2Components(settings) {
     weekdaySelect("harmony-manager:community:birthdaysettingsday", settings.weeklyDay ?? settings.weekly_day ?? 0),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingssave").setLabel("Save Birthday Settings").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingsmenu").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
     ),
   ];
 }
@@ -308,10 +342,10 @@ function selectedMemberId(interaction) {
   return String(interaction.values?.[0] || "");
 }
 
-function memberPrompt(action, text) {
+function memberPrompt(action, text, backAction = "birthdaymembers", backLabel = "Back to Member Birthdays") {
   return {
     content: text,
-    components: memberSelect(`harmony-manager:community:birthdaymember:${action}`),
+    components: [...memberSelect(`harmony-manager:community:birthdaymember:${action}`), ...birthdayBackRow(backAction, backLabel)],
     embeds: [],
   };
 }
@@ -330,11 +364,24 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     return true;
   }
   if (action === "birthdaystatus" && interaction.isButton?.()) {
-    await interaction.update({ content: birthdayManagerContent(interaction.guildId), components: birthdayBackRow() });
+    await interaction.update({ content: birthdaySettingsContent(interaction.guildId), components: birthdaySettingsComponents(birthdayStore.getBirthdaySettings(interaction.guildId) || {}) });
+    return true;
+  }
+  if (action === "birthdaymembers" && interaction.isButton?.()) {
+    await interaction.update({ content: "🎂 **MEMBER BIRTHDAYS**\n\nManage Discord-member birthdays, messages, and previews.", components: birthdayMemberComponents(), embeds: [] });
+    return true;
+  }
+  if (action === "birthdaysettingsmenu" && interaction.isButton?.()) {
+    const settings = birthdayStore.getBirthdaySettings(interaction.guildId) || {};
+    await interaction.update({ content: birthdaySettingsContent(interaction.guildId), components: birthdaySettingsComponents(settings), embeds: [] });
+    return true;
+  }
+  if (action === "birthdaymaintenance" && interaction.isButton?.()) {
+    await interaction.update({ content: "🛠️ **WELCOME PASS MATCHING / MAINTENANCE**\n\nConnect birthday details from Welcome Pass to the right Discord members.", components: birthdayMaintenanceComponents(), embeds: [] });
     return true;
   }
   if (action === "birthdayupcoming" && interaction.isButton?.()) {
-    await interaction.update({ content: "Here are the next 30 days of opted-in birthdays:", embeds: [renderUpcoming(interaction.guildId)], components: birthdayBackRow() });
+    await interaction.update({ content: "Here are birthdays in the next 30 days:", embeds: [renderUpcoming(interaction.guildId)], components: birthdayBackRow() });
     return true;
   }
   if (action === "birthdayadd" && interaction.isButton?.()) {
@@ -363,13 +410,13 @@ async function handleBirthdayManagerInteraction(interaction, action) {
       return true;
     }
     birthdayStore.upsertNonDiscordBirthdayProfile({ guildId: interaction.guildId, birthdayName: name, birthdayMmdd: birthday, timezone, customMessage: message });
-    await interaction.reply({ content: `Saved **${name}** as an annual birthday on **${formatMmdd(birthday)}** in **${timezone}**.`, components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: `Saved **${name}** as an annual birthday on **${formatMmdd(birthday)}** in **${timezone}**.`, components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaynonmemberselect" && interaction.isStringSelectMenu?.()) {
     const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, interaction.values?.[0]);
     if (!profile) {
-      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), embeds: [] });
       return true;
     }
     await interaction.update({ content: renderNonMemberBirthday(profile), components: [
@@ -386,7 +433,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     const profileId = customParts(interaction)[3];
     const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
     if (!profile) {
-      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), embeds: [] });
       return true;
     }
     await interaction.showModal(nonMemberBirthdayModal("birthdaynonmembereditmodal", profile));
@@ -396,7 +443,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     const profileId = customParts(interaction)[3];
     const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
     if (!profile) {
-      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), embeds: [] });
       return true;
     }
     await interaction.showModal(nonMemberMessageModal(profile));
@@ -410,7 +457,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
       return true;
     }
     const updated = birthdayStore.updateNonDiscordBirthdayMessage(interaction.guildId, profileId, message);
-    await interaction.reply({ content: updated ? (message ? "Saved the custom birthday announcement message." : "Cleared the custom message. Harmony will use the neutral default.") : "That non-member birthday is no longer available.", components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: updated ? (message ? "Saved the custom birthday announcement message." : "Cleared the custom message. Harmony will use the neutral default.") : "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaynonmembereditmodal" && interaction.isModalSubmit?.()) {
@@ -423,14 +470,14 @@ async function handleBirthdayManagerInteraction(interaction, action) {
       return true;
     }
     const updated = birthdayStore.updateNonDiscordBirthdayProfile(interaction.guildId, profileId, { birthdayName: name, birthdayMmdd: birthday, timezone });
-    await interaction.reply({ content: updated ? `Updated **${name}** to **${formatMmdd(birthday)}** in **${timezone}**.` : "That non-member birthday is no longer available.", components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: updated ? `Updated **${name}** to **${formatMmdd(birthday)}** in **${timezone}**.` : "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaynonmemberdelete" && interaction.isButton?.()) {
     const profileId = customParts(interaction)[3];
     const profile = birthdayStore.getNonDiscordBirthdayProfile(interaction.guildId, profileId);
     if (!profile) {
-      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow(), embeds: [] });
+      await interaction.update({ content: "That non-member birthday is no longer available.", components: birthdayBackRow("birthdaynonmember", "Back to Non-Member Birthdays"), embeds: [] });
       return true;
     }
     await interaction.update({ content: `Remove the recurring birthday for **${profile.birthday_name}**? Past announcement history will remain.`, components: [new ActionRowBuilder().addComponents(
@@ -472,14 +519,14 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     if (mode === "clear" || mode === "preview") {
       const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
       if (!profile) {
-        await interaction.update({ content: "That member does not have a birthday profile yet.", components: birthdayBackRow(), embeds: [] });
+        await interaction.update({ content: "That member does not have a birthday profile yet.", components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), embeds: [] });
         return true;
       }
       if (mode === "clear") {
         birthdayStore.clearBirthdayCustomization(interaction.guildId, memberId);
-        await interaction.update({ content: "That member will use Harmony's rotating birthday messages again.", components: birthdayBackRow(), embeds: [] });
+        await interaction.update({ content: "That member will use Harmony's rotating birthday messages again.", components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), embeds: [] });
       } else {
-        await interaction.update({ content: `Preview for <@${memberId}>:`, embeds: [buildBirthdayEmbed(profile, new Date().getUTCFullYear(), true)], components: birthdayBackRow() });
+        await interaction.update({ content: `Preview for <@${memberId}>:`, embeds: [buildBirthdayEmbed(profile, new Date().getUTCFullYear(), true)], components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays") });
       }
       return true;
     }
@@ -488,7 +535,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     saveSession(interaction, { memberId, mode });
     await interaction.update({
       content: mode === "add" ? "Choose a bias, then enter the birthday details." : "Choose a bias, or keep the current bias, then enter the customization.",
-      components: [biasSelect(`harmony-manager:community:birthdaybias:${mode}:${memberId}`, currentBias, mode === "customize"), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Cancel").setStyle(ButtonStyle.Secondary))],
+      components: [biasSelect(`harmony-manager:community:birthdaybias:${mode}:${memberId}`, currentBias, mode === "customize"), ...birthdayBackRow("birthdaymembers", "Back to Member Birthdays")],
       embeds: [],
     });
     return true;
@@ -509,7 +556,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     const bias = normalizeBias(decodeURIComponent(biasValue || "Still deciding"));
     birthdayStore.upsertBirthdayProfile({ guildId: interaction.guildId, userId: memberIdValue, birthdayMmdd: birthday, birthdayName: interaction.fields.getTextInputValue("name").trim() || memberIdValue, bias });
     clearSession(interaction);
-    await interaction.reply({ content: `Saved <@${memberIdValue}>'s birthday as **${formatMmdd(birthday)}**.`, components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: `Saved <@${memberIdValue}>'s birthday as **${formatMmdd(birthday)}**.`, components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaycustomizemodal" && interaction.isModalSubmit?.()) {
@@ -521,7 +568,7 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     if (!memberIdValue || (!message && !imageUrl && bias === "__keep__") || (imageUrl && !/^https:\/\//i.test(imageUrl))) { await interaction.reply({ content: "Choose a member and enter a message, bias, or HTTPS image URL.", flags: 64 }); return true; }
     const updated = birthdayStore.setBirthdayCustomization(interaction.guildId, memberIdValue, { bias: bias === "__keep__" ? null : normalizeBias(bias), customMessage: message, customImageUrl: imageUrl });
     clearSession(interaction);
-    await interaction.reply({ content: updated ? `Saved <@${memberIdValue}>'s birthday customization.` : "That member has no birthday profile yet.", components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: updated ? `Saved <@${memberIdValue}>'s birthday customization.` : "That member has no birthday profile yet.", components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaysettings" && interaction.isButton?.()) {
@@ -576,52 +623,54 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     try {
       await saveSettings(interaction, current);
       clearSession(interaction);
-      await interaction.update({ content: "Birthday settings saved. Existing scheduler behavior is unchanged.", components: birthdayBackRow(), embeds: [] });
+      const settings = birthdayStore.getBirthdaySettings(interaction.guildId) || {};
+      await interaction.update({ content: birthdaySettingsContent(interaction.guildId), components: birthdaySettingsComponents(settings), embeds: [] });
     } catch (error) {
-      await interaction.update({ content: error.message, components: birthdayBackRow(), embeds: [] });
+      await interaction.update({ content: error.message, components: birthdaySettingsComponents(current), embeds: [] });
     }
     return true;
   }
   if (["birthdayweekly", "birthdaymonthly"].includes(action) && interaction.isButton?.()) {
     const settings = birthdayStore.getBirthdaySettings(interaction.guildId);
-    if (!settings) { await interaction.update({ content: "Set up birthdays before changing reminder settings.", components: birthdayBackRow() }); return true; }
+    if (!settings) { await interaction.update({ content: "Set up birthdays before changing reminder settings.", components: birthdaySettingsComponents() }); return true; }
     const weeklyEnabled = action === "birthdayweekly" ? !Boolean(settings.weekly_enabled) : Boolean(settings.weekly_enabled);
     const monthlyRecapEnabled = action === "birthdaymonthly" ? !Boolean(settings.monthly_recap_enabled) : Boolean(settings.monthly_recap_enabled);
     birthdayStore.saveBirthdaySettings({ guildId: interaction.guildId, channelId: settings.channel_id, roleId: settings.role_id, timezone: settings.timezone, announcementHour: settings.announcement_hour, weeklyDay: settings.weekly_day, weeklyEnabled, monthlyRecapEnabled });
-    await interaction.update({ content: birthdayManagerContent(interaction.guildId), components: birthdayManagerComponents() });
+    const updatedSettings = birthdayStore.getBirthdaySettings(interaction.guildId) || {};
+    await interaction.update({ content: birthdaySettingsContent(interaction.guildId), components: birthdaySettingsComponents(updatedSettings) });
     return true;
   }
   if (action === "birthdaymatchall" && interaction.isButton?.()) {
     try {
       const result = await matchAllImportedBirthdays({ guild: interaction.guild, guildId: interaction.guildId });
       const unresolved = result.unresolved.slice(0, 15).map((item) => `• ${item.name} — ${item.reason}`);
-      await interaction.reply({ content: [`🎂 **Birthday matching complete**`, `Connected: **${result.connected}**`, `Still needs attention: **${result.unresolved.length}**`, ...unresolved].join("\n"), components: birthdayBackRow(), flags: 64 });
-    } catch (error) { await interaction.reply({ content: error.message, components: birthdayBackRow(), flags: 64 }); }
+      await interaction.reply({ content: [`🎂 **Welcome Pass birthday matching complete**`, `Connected: **${result.connected}**`, `Still needs attention: **${result.unresolved.length}**`, ...unresolved].join("\n"), components: birthdayBackRow("birthdaymaintenance", "Back to Welcome Pass Matching"), flags: 64 });
+    } catch (error) { await interaction.reply({ content: error.message, components: birthdayBackRow("birthdaymaintenance", "Back to Welcome Pass Matching"), flags: 64 }); }
     return true;
   }
   if (action === "birthdaymatchmember" && interaction.isButton?.()) {
-    await interaction.update(memberPrompt("matchmember", "Choose the Discord member to connect to a Welcome Pass birthday."));
+    await interaction.update(memberPrompt("matchmember", "Choose the Discord member to connect to a Welcome Pass birthday.", "birthdaymaintenance", "Back to Welcome Pass Matching"));
     return true;
   }
   if (action === "birthdaymatchmembermodal" && interaction.isModalSubmit?.()) {
     const importedName = interaction.fields.getTextInputValue("imported-name");
     const [, , , memberId] = customParts(interaction);
     const result = memberId && matchOneImportedBirthday({ guildId: interaction.guildId, importedName, memberId });
-    if (!result || result.status !== "connected") { await interaction.reply({ content: result?.status === "ambiguous" ? "More than one Welcome Pass birthday matches. Use the exact Welcome Pass code." : result?.status === "not-found" ? "No unique Welcome Pass birthday matched that name." : "Harmony could not connect that Welcome Pass record.", flags: 64 }); return true; }
+    if (!result || result.status !== "connected") { await interaction.reply({ content: result?.status === "ambiguous" ? "More than one Welcome Pass birthday matches. Use the exact Welcome Pass code." : result?.status === "not-found" ? "No unique Welcome Pass birthday matched that name." : "Harmony could not connect that Welcome Pass record.", components: birthdayBackRow("birthdaymaintenance", "Back to Welcome Pass Matching"), flags: 64 }); return true; }
     clearSession(interaction);
-    await interaction.reply({ content: `Connected **${result.profile.birthday_name || importedName}** to <@${memberId}>.`, components: birthdayBackRow(), flags: 64 });
+    await interaction.reply({ content: `Connected **${result.profile.birthday_name || importedName}** to <@${memberId}>.`, components: birthdayBackRow("birthdaymaintenance", "Back to Welcome Pass Matching"), flags: 64 });
     return true;
   }
   if (action === "birthdayoff" && interaction.isButton?.()) {
     await interaction.update({ content: "Turn birthday scheduling off? Member profiles will remain stored.", components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdayoffconfirm").setLabel("Confirm Turn Off").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId("harmony-manager:community:birthdayhome").setLabel("Keep On").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysettingsmenu").setLabel("Keep On").setStyle(ButtonStyle.Secondary),
     )] });
     return true;
   }
   if (action === "birthdayoffconfirm" && interaction.isButton?.()) {
     const changed = birthdayStore.disableBirthdaySettings(interaction.guildId);
-    await interaction.update({ content: changed ? "Birthday scheduling is off. Member profiles remain safely stored." : "Birthdays were not configured.", components: birthdayBackRow() });
+    await interaction.update({ content: changed ? "Birthday scheduling is off. Member profiles remain safely stored." : "Birthdays were not configured.", components: birthdayBackRow("birthdaysettingsmenu", "Back to Birthday Settings") });
     return true;
   }
   return false;
