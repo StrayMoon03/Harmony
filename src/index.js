@@ -9,6 +9,7 @@ const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
 const statusCommand = require("./commands/status");
+const sessionRefreshService = require("./services/sessionRefreshService");
 const greetingsCommand = require("./commands/greetings");
 const linkWelcomePassCommand = require("./commands/linkWelcomePass");
 const welcomePassSetupCommand = require("./commands/welcomePassSetup");
@@ -397,6 +398,7 @@ client.on("messageDelete", async (message) => {
 
 client.on("interactionCreate", async (interaction) => {
   try {
+    if (await sessionRefreshService.handleRefreshInteraction(interaction)) return;
     if (await statusCommand.handleStatusInteraction(interaction)) return;
   } catch (error) {
     console.error("Harmony status interaction failed:", error instanceof Error ? error.message : "unknown error");

@@ -242,6 +242,24 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_admin_operations_audit_created
       ON admin_operations_audit (created_at);
 
+    CREATE TABLE IF NOT EXISTS credential_refresh_requests (
+      request_id   TEXT PRIMARY KEY,
+      token_hash   TEXT NOT NULL UNIQUE,
+      guild_id     TEXT NOT NULL,
+      actor_id     TEXT NOT NULL,
+      service      TEXT NOT NULL CHECK (service IN ('instagram', 'threads', 'facebook', 'youtube')),
+      status       TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'completed', 'expired')),
+      created_at   TEXT NOT NULL,
+      expires_at   TEXT NOT NULL,
+      redeemed_at  TEXT,
+      completed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_credential_refresh_actor_created
+      ON credential_refresh_requests (guild_id, actor_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_credential_refresh_expiry
+      ON credential_refresh_requests (status, expires_at);
+
     CREATE TABLE IF NOT EXISTS member_count_settings (
       guild_id           TEXT PRIMARY KEY,
       role_id            TEXT NOT NULL,
