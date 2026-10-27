@@ -374,6 +374,13 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("messageUpdate", async (oldMessage, newMessage) => {
+  try {
+    const heldOrRemoved = await handleGuardedMessage(newMessage, { edited: true });
+    if (heldOrRemoved) return;
+  } catch (error) {
+    console.error("Community Guard edited-message check failed:", error);
+  }
+
   await handleOriginalPreviewUpdate(newMessage);
   await handleLoggedMessageUpdate(oldMessage, newMessage);
 });
