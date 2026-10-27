@@ -2,8 +2,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
-const DATA_DIR = path.resolve(__dirname, "../../data");
-const DB_PATH = path.join(DATA_DIR, "harmony.sqlite");
+const DEFAULT_DATA_DIR = path.resolve(__dirname, "../../data");
+const DB_PATH = path.resolve(process.env.HARMONY_DB_PATH || path.join(DEFAULT_DATA_DIR, "harmony.sqlite"));
 
 /** @type {import("node:sqlite").DatabaseSync | null} */
 let db = null;
@@ -15,7 +15,7 @@ let db = null;
 function getDb() {
   if (db) return db;
 
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
   db = new DatabaseSync(DB_PATH);
   db.exec("PRAGMA journal_mode = WAL;");
@@ -174,6 +174,17 @@ function migrate(database) {
       category   TEXT NOT NULL,
       enabled    INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS community_guard_message_state (
+      guild_id          TEXT NOT NULL,
+      message_id        TEXT NOT NULL,
+      status            TEXT NOT NULL,
+      rule_id           INTEGER,
+      review_channel_id TEXT,
+      review_message_id TEXT,
+      updated_at        TEXT NOT NULL,
+      PRIMARY KEY (guild_id, message_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_community_guard_rules_guild
@@ -657,6 +668,23 @@ function migrate(database) {
     database.exec(
       "ALTER TABLE birthday_profiles ADD COLUMN discord_username TEXT"
     );
+  }
+
+  const guardRuleColumns = new Set(
+    database.prepare("PRAGMA table_info(community_guard_rules)").all()
+      .map((column) => column.name)
+  );
+  if (!guardRuleColumns.has("name")) {
+    database.exec("ALTER TABLE community_guard_rules ADD COLUMN name TEXT");
+  }
+  if (!guardRuleColumns.has("conditions_json")) {
+    database.exec("ALTER TABLE community_guard_rules ADD COLUMN conditions_json TEXT");
+  }
+  if (!guardRuleColumns.has("match_mode")) {
+    database.exec("ALTER TABLE community_guard_rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'all'");
+  }
+  if (!guardRuleColumns.has("updated_at")) {
+    database.exec("ALTER TABLE community_guard_rules ADD COLUMN updated_at TEXT");
   }
 }
 
