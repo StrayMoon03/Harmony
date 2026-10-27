@@ -396,6 +396,16 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
+  try {
+    if (await statusCommand.handleStatusInteraction(interaction)) return;
+  } catch (error) {
+    console.error("Harmony status interaction failed:", error instanceof Error ? error.message : "unknown error");
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: "Harmony could not finish the status check. Please try again.", flags: 64 }).catch(() => {});
+    }
+    return;
+  }
+
   if (isEventSchedulerInteraction(interaction)) {
     try {
       if (await handleEventSchedulerInteraction(interaction)) return;

@@ -1,9 +1,11 @@
 const { EmbedBuilder } = require("discord.js");
 const { getErrorInboxSettings } = require("../stores/errorInboxStore");
 const { reportMediaErrorToGitHub } = require("./githubErrorReporter");
+const { recordSocialAuthFailure, isExplicitAuthenticationFailure, authenticationFailureKind } = require("./operationsStatusService");
 
 const recentMediaErrors = new Map();
 const ERROR_DEDUPE_MS = 5 * 60 * 1000;
+const SOCIAL_PLATFORMS = new Set(["instagram", "threads", "facebook", "youtube"]);
 
 function firstLink(content) {
   return String(content || "").match(/https?:\/\/[^\s<>]+/i)?.[0] || null;
@@ -71,6 +73,10 @@ async function resolveDestination(client, settings) {
 }
 
 async function logMediaError(message, error) {
+  const platform = platformFromLink(firstLink(message?.content)).toLowerCase();
+  if (SOCIAL_PLATFORMS.has(platform) && isExplicitAuthenticationFailure(error)) {
+    recordSocialAuthFailure(platform, new Date().toISOString(), authenticationFailureKind(error));
+  }
   const githubReport = await reportMediaErrorToGitHub(message, error).catch((reportError) => {
     console.error(
       "Private GitHub error reporter failed:",

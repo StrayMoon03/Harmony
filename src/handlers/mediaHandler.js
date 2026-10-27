@@ -72,6 +72,7 @@ const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 const { formatDiscordTimestamp } = require("../utils/discordTimestamp");
 const { logMediaError } = require("../services/errorInboxService");
+const { recordSocialSuccess } = require("../services/operationsStatusService");
 
 function buildSuccessfulCard(message, processedUrl, options) {
   const preservation = extractMemberComment(message.content, processedUrl);
@@ -463,6 +464,7 @@ async function processMediaMessage(message, lifecycle) {
 
       const downloadResult =
         await downloadMedia(originalUrl);
+      recordSocialSuccess(platform);
 
       const classification = classify(
         downloadResult.files,
@@ -584,6 +586,7 @@ async function processMediaMessage(message, lifecycle) {
           normalizedUrl,
           originalUrl
         );
+      recordSocialSuccess("facebook");
 
       if (downloadResult.linkOnly) {
         throw new Error(downloadResult.failureReason || "FACEBOOK_UNVERIFIED_MEDIA");
@@ -993,6 +996,7 @@ async function processMediaMessage(message, lifecycle) {
         downloadYouTubeMedia(originalUrl),
         getMediaInfo(originalUrl).catch(() => null),
       ]);
+      recordSocialSuccess("youtube");
 
       if (downloadResult.linkOnly) {
         if (shouldKeepOriginalYouTubePreview(downloadResult)) {
@@ -1123,6 +1127,7 @@ async function processMediaMessage(message, lifecycle) {
         }),
         getMediaInfo(originalUrl).catch(() => null),
       ]);
+      recordSocialSuccess("threads");
 
       const classification = classify(
         downloadResult.files,

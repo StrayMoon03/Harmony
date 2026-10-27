@@ -108,6 +108,8 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
+    ), new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-status:open").setLabel("🩺 Status / Health").setStyle(ButtonStyle.Secondary),
     )];
   }
   if (calendarType === "stray_kids") {
@@ -116,6 +118,8 @@ function managerPanelComponents(calendarType, guildId = null) {
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel("📋 Review Discovered Events").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
+    ), new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-status:open").setLabel("🩺 Status / Health").setStyle(ButtonStyle.Secondary),
     )];
   }
   return [row];
