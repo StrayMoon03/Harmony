@@ -25,13 +25,40 @@ function disableSettings(guildId) {
   `).run(new Date().toISOString(), guildId);
 }
 
-function addRule({ guildId, type, pattern, action, category }) {
+function addRule({ guildId, type, pattern, action, category, name = null, conditions = null, matchMode = "all" }) {
   const result = getDb().prepare(`
     INSERT INTO community_guard_rules (
-      guild_id, rule_type, pattern, action, category, enabled, created_at
-    ) VALUES (?, ?, ?, ?, ?, 1, ?)
-  `).run(guildId, type, pattern, action, category, new Date().toISOString());
+      guild_id, rule_type, pattern, action, category, enabled, created_at,
+      name, conditions_json, match_mode
+    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+  `).run(
+    guildId, type, pattern, action, category, new Date().toISOString(),
+    name, conditions ? JSON.stringify(conditions) : null, matchMode
+  );
   return Number(result.lastInsertRowid);
+}
+
+function updateRule(guildId, ruleId, changes) {
+  const existing = getRule(guildId, ruleId);
+  if (!existing) return false;
+  const assignments = [];
+  const values = [];
+  for (const [key, value] of Object.entries(changes)) {
+    if (key === "conditions") {
+      assignments.push("conditions_json = ?");
+      values.push(JSON.stringify(value));
+    } else if (["name", "rule_type", "pattern", "action", "category", "match_mode"].includes(key)) {
+      assignments.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+  if (!assignments.length) return true;
+  assignments.push("updated_at = ?");
+  values.push(new Date().toISOString(), guildId, ruleId);
+  return Number(getDb().prepare(`
+    UPDATE community_guard_rules SET ${assignments.join(", ")}
+    WHERE guild_id = ? AND id = ? AND enabled = 1
+  `).run(...values).changes) > 0;
 }
 
 function removeRule(guildId, ruleId) {
@@ -72,6 +99,47 @@ function markSafe(guildId, messageId, adminId) {
       marked_by = excluded.marked_by,
       marked_at = excluded.marked_at
   `).run(guildId, messageId, adminId, new Date().toISOString());
+}
+
+function clearSafe(guildId, messageId) {
+  getDb().prepare("DELETE FROM community_guard_safe_messages WHERE guild_id = ? AND message_id = ?")
+    .run(guildId, messageId);
+}
+
+function getMessageState(guildId, messageId) {
+  return getDb().prepare(`
+    SELECT * FROM community_guard_message_state WHERE guild_id = ? AND message_id = ?
+  `).get(guildId, messageId) ?? null;
+}
+
+function beginReview(guildId, messageId, ruleId) {
+  return Number(getDb().prepare(`
+    INSERT INTO community_guard_message_state (
+      guild_id, message_id, status, rule_id, review_channel_id, review_message_id, updated_at
+    ) VALUES (?, ?, 'pending', ?, NULL, NULL, ?)
+    ON CONFLICT(guild_id, message_id) DO UPDATE SET
+      status = 'pending', rule_id = excluded.rule_id,
+      review_channel_id = NULL, review_message_id = NULL, updated_at = excluded.updated_at
+    WHERE community_guard_message_state.status IN ('safe', 'resolved')
+  `).run(guildId, messageId, ruleId, new Date().toISOString()).changes) > 0;
+}
+
+function setReviewMessage(guildId, messageId, ruleId, channelId, reviewMessageId) {
+  getDb().prepare(`
+    UPDATE community_guard_message_state SET rule_id = ?, review_channel_id = ?,
+      review_message_id = ?, updated_at = ?
+    WHERE guild_id = ? AND message_id = ? AND status = 'pending'
+  `).run(ruleId, channelId, reviewMessageId, new Date().toISOString(), guildId, messageId);
+}
+
+function setMessageState(guildId, messageId, status, ruleId = null) {
+  getDb().prepare(`
+    INSERT INTO community_guard_message_state (
+      guild_id, message_id, status, rule_id, updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, message_id) DO UPDATE SET
+      status = excluded.status, rule_id = excluded.rule_id, updated_at = excluded.updated_at
+  `).run(guildId, messageId, status, ruleId, new Date().toISOString());
 }
 
 function addAction({
@@ -118,11 +186,17 @@ module.exports = {
   saveSettings,
   disableSettings,
   addRule,
+  updateRule,
   removeRule,
   listRules,
   getRule,
   isSafeMessage,
   markSafe,
+  clearSafe,
+  getMessageState,
+  beginReview,
+  setReviewMessage,
+  setMessageState,
   addAction,
   removeContributionForMessage,
 };
