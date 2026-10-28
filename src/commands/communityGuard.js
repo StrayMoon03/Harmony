@@ -40,7 +40,7 @@ const MATCH_CHOICES = [
 ];
 
 function addConditionOptions(sub, { edit = false } = {}) {
-  const start = edit ? 1 : 2;
+  const start = 2;
   const end = 5;
   if (edit) {
     sub.addStringOption((option) => option.setName("condition-1-type")
@@ -62,10 +62,12 @@ function addConditionOptions(sub, { edit = false } = {}) {
 }
 
 function addRuleOptions(sub) {
-  sub.addStringOption((option) => option.setName("name").setDescription("Short name shown to moderators")
-    .setRequired(false).setMaxLength(80));
   sub.addStringOption((option) => option.setName("type").setDescription("First condition to check")
     .setRequired(true).addChoices(...RULE_TYPE_CHOICES));
+  sub.addStringOption((option) => option.setName("reason").setDescription("Private explanation Harmony should use")
+    .setRequired(true).addChoices(...REASON_CHOICES));
+  sub.addStringOption((option) => option.setName("name").setDescription("Short name shown to moderators")
+    .setRequired(false).setMaxLength(80));
   sub.addStringOption((option) => option.setName("value").setDescription("Text, domain, or URL value; leave blank for attachment conditions")
     .setRequired(false).setMaxLength(300));
   for (let index = 2; index <= 5; index += 1) {
@@ -76,8 +78,6 @@ function addRuleOptions(sub) {
   }
   sub.addStringOption((option) => option.setName("match-mode").setDescription("How conditions combine; defaults to ALL")
     .setRequired(false).addChoices(...MATCH_CHOICES));
-  sub.addStringOption((option) => option.setName("reason").setDescription("Private explanation Harmony should use")
-    .setRequired(true).addChoices(...REASON_CHOICES));
   sub.addStringOption((option) => option.setName("action").setDescription("New rules default to Admin Review")
     .setRequired(false).addChoices(...ACTION_CHOICES));
   return sub;
