@@ -97,6 +97,65 @@ test("permission metadata separates diagnosis from credential management", () =>
   assert.equal(owner.canManageCredentials, true);
 });
 
+test("owner capability refreshes guild metadata when the interaction guild lacks ownerId", async () => {
+  const staleGuild = { id: "guild-owner-refresh", fetch: async () => ({ id: "guild-owner-refresh", ownerId: "owner-1" }) };
+  const owner = await statusService.resolveAdminCapabilities({
+    guild: staleGuild,
+    userId: "owner-1",
+    member: { permissions: { has: () => false } },
+    credentialManagerRoleIds: new Set(),
+  });
+  assert.equal(owner.canManageCredentials, true);
+  assert.equal(owner.resolvedGuildOwnerId, "owner-1");
+
+  const regularAdmin = await statusService.resolveAdminCapabilities({
+    guild: staleGuild,
+    userId: "admin-1",
+    member: { permissions: { has: (permission) => permission === PermissionFlagsBits.Administrator } },
+    credentialManagerRoleIds: new Set(),
+  });
+  assert.equal(regularAdmin.canDiagnose, true);
+  assert.equal(regularAdmin.canManageCredentials, false);
+});
+
+test("harmony-status resolves a guild owner before rendering session-refresh guidance", async () => {
+  const incompleteGuild = {
+    ...guild("status-owner-resolution"),
+    ownerId: undefined,
+    fetch: async () => ({ id: "status-owner-resolution", ownerId: "owner-1" }),
+  };
+  const interaction = {
+    guild: incompleteGuild,
+    member: { permissions: { has: () => false } },
+    user: { id: "owner-1" },
+    client: client(),
+    deferred: false,
+    deferReply: async () => { interaction.deferred = true; },
+    editReply: async (payload) => { interaction.response = payload; return payload; },
+  };
+  await statusCommand.execute(interaction);
+  assert.match(interaction.response.embeds[0].data.footer.text, /Refresh Session appears/);
+});
+
+test("Status / Health button uses the same refreshed guild-owner authorization", async () => {
+  const interaction = {
+    customId: "harmony-status:refresh",
+    isButton: () => true,
+    message: {},
+    guild: {
+      ...guild("status-button-owner-resolution"),
+      ownerId: undefined,
+      fetch: async () => ({ id: "status-button-owner-resolution", ownerId: "owner-1" }),
+    },
+    member: { permissions: { has: () => false } },
+    user: { id: "owner-1" },
+    client: client(),
+    update: async (payload) => { interaction.response = payload; },
+  };
+  assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
+  assert.match(interaction.response.embeds[0].data.footer.text, /Refresh Session appears/);
+});
+
 test("Guard status includes monitoring, active rules, and Review Room visibility", async () => {
   const id = "guard-status-test";
   const everyone = { id: id, permissions: { has: () => false } };

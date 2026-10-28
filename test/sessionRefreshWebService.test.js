@@ -16,11 +16,13 @@ Object.assign(process.env, {
   SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
   INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
   INSTAGRAM_COOKIES: cookiePath,
+  HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: "",
 });
 
 const { createSessionRefreshHttpHandler } = require("../src/services/sessionRefreshWebService");
+const { createRefreshWorkflow } = require("../src/services/sessionRefreshService");
 
-function createHarness({ actorId = "actor-1", identityId = actorId, authorized = true, expired = false } = {}) {
+function createHarness({ actorId = "actor-1", identityId = actorId, authorized = true, expired = false, client = {}, useDefaultAuthorization = false, useRealInteractionWorkflow = false } = {}) {
   const record = {
     request_id: "550e8400-e29b-41d4-a716-446655440000",
     guild_id: "guild-1",
@@ -50,11 +52,14 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
       return { ok: true, message: "Session refreshed. No credential is shown." };
     },
   };
-  const interactionWorkflow = {
+  const mockedInteractionWorkflow = {
     redeemRequestId(args) {
       return requests.redeemRequestById({ requestId: args.requestId, guildId: args.guild.id, actorId: args.userId, service: args.service });
     },
   };
+  const interactionWorkflow = useRealInteractionWorkflow
+    ? createRefreshWorkflow({ audit, store: requests })
+    : mockedInteractionWorkflow;
   const authorizeActor = async (_client, request, userId) => {
     if (!authorized || request.guild_id !== record.guild_id || request.actor_id !== userId) return null;
     return { guild: { id: record.guild_id }, member: { id: userId } };
@@ -64,9 +69,9 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
     if (String(url).includes("/users/@me")) return new Response(JSON.stringify({ id: identityId }), { status: 200 });
     return new Response("not found", { status: 404 });
   };
-  const handler = createSessionRefreshHttpHandler({
-    client: {}, fetchImpl, requests, audit, workflow, interactionWorkflow, authorizeActor,
-  });
+  const handlerOptions = { client, fetchImpl, requests, audit, workflow, interactionWorkflow };
+  if (!useDefaultAuthorization) handlerOptions.authorizeActor = authorizeActor;
+  const handler = createSessionRefreshHttpHandler(handlerOptions);
   return { handler, record, events, getCandidate: () => receivedCandidate };
 }
 
@@ -167,6 +172,51 @@ test("OAuth CSRF, actor mismatch, removed capability, expired request, and HTTP 
   await withServer(expired.handler, async (server) => {
     const response = await request(server, `/session-refresh/${expired.record.request_id}`);
     assert.equal(response.status, 410);
+  });
+});
+
+test("OAuth redemption recognizes the guild owner when the cached guild lacks ownerId", async () => {
+  const guild = {
+    id: "guild-1",
+    fetch: async () => ({ id: "guild-1", ownerId: "actor-1" }),
+    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: () => false }, roles: { cache: [] } }) },
+  };
+  const h = createHarness({
+    actorId: "actor-1",
+    client: { guilds: { cache: new Map([["guild-1", guild]]) } },
+    useDefaultAuthorization: true,
+    useRealInteractionWorkflow: true,
+  });
+  await withServer(h.handler, async (server) => {
+    const start = await request(server, `/session-refresh/${h.record.request_id}`);
+    assert.equal(start.status, 303);
+    const authorizeUrl = new URL(start.headers.location);
+    const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
+    const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
+    assert.equal(callback.status, 303);
+    assert.equal(h.record.status, "consumed");
+  });
+});
+
+test("OAuth redemption rejects a regular admin without a Credential Manager role", async () => {
+  const guild = {
+    id: "guild-1",
+    fetch: async () => ({ id: "guild-1", ownerId: "actual-owner" }),
+    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: () => true }, roles: { cache: [] } }) },
+  };
+  const h = createHarness({
+    actorId: "regular-admin",
+    client: { guilds: { cache: new Map([["guild-1", guild]]) } },
+    useDefaultAuthorization: true,
+    useRealInteractionWorkflow: true,
+  });
+  await withServer(h.handler, async (server) => {
+    const start = await request(server, `/session-refresh/${h.record.request_id}`);
+    const authorizeUrl = new URL(start.headers.location);
+    const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
+    const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
+    assert.equal(callback.status, 403);
+    assert.equal(h.record.status, "pending");
   });
 });
 
