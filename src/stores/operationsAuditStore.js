@@ -15,4 +15,17 @@ function recordAdminOperation({ guildId, actorId, service, action, outcome }) {
   );
 }
 
-module.exports = { recordAdminOperation };
+const REFRESH_STAGES = new Set(["validation", "rotation"]);
+
+function recordCredentialRefreshStage({ guildId, actorId, service, stage, success }) {
+  if (!new Set(["instagram", "threads", "facebook", "youtube"]).has(service) ||
+      !REFRESH_STAGES.has(stage) || typeof success !== "boolean") {
+    throw new Error("invalid_refresh_audit_event");
+  }
+  const result = success ? "success" : "failure";
+  const action = `${stage}_${result}`;
+  recordAdminOperation({ guildId, actorId, service, action, outcome: action });
+  return action;
+}
+
+module.exports = { recordAdminOperation, recordCredentialRefreshStage };

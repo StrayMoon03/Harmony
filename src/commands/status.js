@@ -32,7 +32,7 @@ function makeStatusPayload(report, capabilities) {
       const view = STATUS_PRESENTATION[row.status] || STATUS_PRESENTATION[STATUS.unknown];
       return {
         name: `${view.icon} ${row.name} — ${view.label}`,
-        value: `${row.explanation}\n**Next:** ${row.action}\n**Last signal/check:** ${row.lastChecked ? new Date(row.lastChecked).toISOString() : "Not recorded"}`.slice(0, 1024),
+        value: `${row.explanation}\n**Next:** ${statusAction(row, capabilities)}\n**Last signal/check:** ${row.lastChecked ? new Date(row.lastChecked).toISOString() : "Not recorded"}`.slice(0, 1024),
         inline: false,
       };
     }))
@@ -47,6 +47,15 @@ function makeStatusPayload(report, capabilities) {
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
   };
+}
+
+function statusAction(row, capabilities) {
+  if (/^social-(instagram|threads|facebook|youtube)$/.test(row.id || "") && row.status === STATUS.attention && /session refresh required/i.test(row.action || "")) {
+    return capabilities.canManageCredentials
+      ? "Secure session refresh is not available yet. No credentials were changed; ask the owner to provision the secure refresh service."
+      : "Session refresh required — ask the owner or a Credential Manager. Secure refresh is not available yet.";
+  }
+  return row.action;
 }
 
 function capabilitiesFor(interaction) {
@@ -83,5 +92,6 @@ module.exports = {
   data,
   execute,
   makeStatusPayload,
+  statusAction,
   handleStatusInteraction,
 };
