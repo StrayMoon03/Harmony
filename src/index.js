@@ -9,6 +9,7 @@ const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
 const statusCommand = require("./commands/status");
+const adminRoomCommand = require("./services/adminRoomService");
 const sessionRefreshService = require("./services/sessionRefreshService");
 const greetingsCommand = require("./commands/greetings");
 const linkWelcomePassCommand = require("./commands/linkWelcomePass");
@@ -76,6 +77,7 @@ const { startCalendarDiscovery } = require("./services/calendarDiscoveryService"
 const commands = [
   forgetShareCommand,
   statusCommand,
+  adminRoomCommand,
   greetingsCommand,
   linkWelcomePassCommand,
   welcomePassSetupCommand,
@@ -130,7 +132,7 @@ async function registerGuildCommands(guild) {
       "/harmony-forget, /harmony-status, /harmony-greetings, " +
       "/harmony-pass, /harmony-pass-setup, /harmony-pass-mode, " +
       "/harmony-stats, /harmony-leaderboard, /harmony-collection, /harmony-logs, " +
-      "/harmony-errors, /harmony-monitor, /harmony-guard, /harmony-birthdays, /harmony-member-counts, /harmony-schedule, /harmony-calendar, " +
+      "/harmony-errors, /harmony-monitor, /harmony-guard, /harmony-birthdays, /harmony-member-counts, /harmony-schedule, /harmony-calendar, /harmony-admin-room, " +
       "Harmony: Moderate Message"
   );
 }
@@ -157,6 +159,8 @@ client.once("clientReady", async () => {
       );
     }
   }
+
+  await adminRoomCommand.refreshConfiguredAdminRooms(client);
 
   // Refresh only manager panels that already have persisted references. This
   // keeps deployed component changes visible without creating new setup or
@@ -190,6 +194,7 @@ client.once("clientReady", async () => {
 client.on("guildCreate", async (guild) => {
   try {
     await registerGuildCommands(guild);
+    await adminRoomCommand.refreshConfiguredAdminRooms(client);
   } catch (error) {
     console.error(
       `Could not register Harmony commands in ${guild.name}:`,
@@ -398,6 +403,7 @@ client.on("messageDelete", async (message) => {
 
 client.on("interactionCreate", async (interaction) => {
   try {
+    if (await adminRoomCommand.handleAdminRoomInteraction(interaction)) return;
     if (await sessionRefreshService.handleRefreshInteraction(interaction)) return;
     if (await statusCommand.handleStatusInteraction(interaction)) return;
   } catch (error) {

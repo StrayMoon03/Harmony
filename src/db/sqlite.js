@@ -417,6 +417,14 @@ function migrate(database) {
       PRIMARY KEY (guild_id, calendar_type)
     );
 
+    CREATE TABLE IF NOT EXISTS admin_room_panels (
+      guild_id    TEXT PRIMARY KEY,
+      channel_id  TEXT NOT NULL,
+      message_id  TEXT NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      updated_at  TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS calendar_event_titles (
       guild_id       TEXT NOT NULL,
       calendar_type  TEXT NOT NULL CHECK (calendar_type IN ('stray_kids', 'community')),
