@@ -1,7 +1,7 @@
 const crypto = require("node:crypto");
 const requestStore = require("../stores/credentialRefreshStore");
 const auditStore = require("../stores/operationsAuditStore");
-const { getAdminCapabilities } = require("./operationsStatusService");
+const { resolveAdminCapabilities } = require("./operationsStatusService");
 const { refreshWorkflow: defaultRefreshWorkflow } = require("./sessionRefreshService");
 const { createSessionRefreshWorkflow } = require("./sessionRefreshWorkflow");
 const { isServiceRefreshAvailable, configSnapshot, publicBaseUrl } = require("./sessionRefreshConfig");
@@ -161,8 +161,9 @@ async function resolveAuthorizedActor(client, requestRecord, userId) {
   if (!guild || guild.id !== requestRecord.guild_id) return null;
   const member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
   if (!member) return null;
-  if (!getAdminCapabilities({ guild, member, userId }).canManageCredentials) return null;
-  return { guild, member };
+  const capabilities = await resolveAdminCapabilities({ guild, member, userId });
+  if (!capabilities.canManageCredentials) return null;
+  return { guild, member, resolvedGuildOwnerId: capabilities.resolvedGuildOwnerId };
 }
 
 function formPage(session) {
@@ -266,6 +267,7 @@ async function handleCallback(request, response, url, { client, fetchImpl, reque
       member: authorized.member,
       userId: identity.id,
       service: requestRecord.service,
+      resolvedGuildOwnerId: authorized.resolvedGuildOwnerId,
     });
     if (!redeemed.ok) {
       safeError(response, 410);
