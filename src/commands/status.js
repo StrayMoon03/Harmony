@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, getAdminCapabilities, STATUS } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -73,11 +73,11 @@ function statusAction(row, capabilities) {
 }
 
 function capabilitiesFor(interaction) {
-  return getAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
+  return resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
 }
 
 async function respondWithStatus(interaction, { update = false } = {}) {
-  const capabilities = capabilitiesFor(interaction);
+  const capabilities = await capabilitiesFor(interaction);
   if (!capabilities.canDiagnose) {
     const payload = { content: "Only authorized server admins can view Harmony Status.", flags: MessageFlags.Ephemeral };
     if (update) return interaction.update({ content: payload.content, embeds: [], components: [] });
