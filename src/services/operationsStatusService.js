@@ -46,8 +46,14 @@ function parseConfiguredRoleIds(value = process.env.HARMONY_CREDENTIAL_MANAGER_R
   return new Set(String(value).split(/[\s,]+/).filter((id) => /^\d{15,22}$/.test(id)));
 }
 
-function getAdminCapabilities({ guild, member, userId, credentialManagerRoleIds = parseConfiguredRoleIds() } = {}) {
-  const owner = Boolean(guild?.ownerId && userId && guild.ownerId === userId);
+function readGuildOwnerId(guild) {
+  const candidates = [guild?.ownerId, guild?.ownerID, guild?.owner_id, guild?.owner?.id];
+  return candidates.find((id) => typeof id === "string" && id.length > 0) || null;
+}
+
+function getAdminCapabilities({ guild, member, userId, resolvedGuildOwnerId, credentialManagerRoleIds = parseConfiguredRoleIds() } = {}) {
+  const guildOwnerId = resolvedGuildOwnerId || readGuildOwnerId(guild);
+  const owner = Boolean(guildOwnerId && userId && guildOwnerId === userId);
   const permissions = member?.permissions || member?.permissionsIn?.(member?.guild?.channels?.cache?.first?.());
   const hasAdminPermission = Boolean(
     permissions?.has?.(PermissionFlagsBits.Administrator) ||
@@ -62,6 +68,18 @@ function getAdminCapabilities({ guild, member, userId, credentialManagerRoleIds 
     canManageCredentials: owner || (diagnose && hasCredentialRole),
     credentialManagementAvailable: false,
     credentialManagerRoleConfigured: hasCredentialRole,
+  };
+}
+
+async function resolveAdminCapabilities(context = {}) {
+  let resolvedGuildOwnerId = readGuildOwnerId(context.guild);
+  if (!resolvedGuildOwnerId && typeof context.guild?.fetch === "function") {
+    const fetchedGuild = await context.guild.fetch().catch(() => null);
+    resolvedGuildOwnerId = readGuildOwnerId(fetchedGuild) || readGuildOwnerId(context.guild);
+  }
+  return {
+    ...getAdminCapabilities({ ...context, resolvedGuildOwnerId }),
+    resolvedGuildOwnerId,
   };
 }
 
@@ -234,6 +252,7 @@ module.exports = {
   STATUS,
   SOCIAL,
   getAdminCapabilities,
+  resolveAdminCapabilities,
   parseConfiguredRoleIds,
   recordSocialAuthFailure,
   recordSocialSuccess,
