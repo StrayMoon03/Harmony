@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { getAdminCapabilities, checkSocial, STATUS } = require("./operationsStatusService");
+const { getAdminCapabilities, resolveAdminCapabilities, checkSocial, STATUS } = require("./operationsStatusService");
 const auditStore = require("../stores/operationsAuditStore");
 const requestStore = require("../stores/credentialRefreshStore");
 const refreshConfig = require("./sessionRefreshConfig");
@@ -23,8 +23,8 @@ function secureRefreshInfrastructureAvailable(service) {
   return refreshConfig.isServiceRefreshAvailable(service);
 }
 
-function capabilityFor({ guild, member, userId }) {
-  return getAdminCapabilities({ guild, member, userId });
+function capabilityFor({ guild, member, userId, resolvedGuildOwnerId }) {
+  return getAdminCapabilities({ guild, member, userId, resolvedGuildOwnerId });
 }
 
 function tokenDigest(token) {
@@ -96,9 +96,9 @@ function createRefreshWorkflow({
     return { ok: true, requestId, service, expiresAt };
   }
 
-  function redeem({ token, guild, member, userId, service }) {
+  function redeem({ token, guild, member, userId, service, resolvedGuildOwnerId }) {
     if (!SERVICES.has(service)) return { ok: false, reason: "invalid_request" };
-    if (!authorized({ guild, member, userId })) return { ok: false, reason: "unauthorized" };
+    if (!authorized({ guild, member, userId, resolvedGuildOwnerId })) return { ok: false, reason: "unauthorized" };
     if (typeof token !== "string" || token.length < 40 || token.length > 100) return { ok: false, reason: "invalid_request" };
     const result = store.redeemRequest({
       tokenHash: tokenDigest(token),
@@ -115,9 +115,9 @@ function createRefreshWorkflow({
     return result;
   }
 
-  function redeemRequestId({ requestId, guild, member, userId, service }) {
+  function redeemRequestId({ requestId, guild, member, userId, service, resolvedGuildOwnerId }) {
     if (!SERVICES.has(service)) return { ok: false, reason: "invalid_request" };
-    if (!authorized({ guild, member, userId })) return { ok: false, reason: "unauthorized" };
+    if (!authorized({ guild, member, userId, resolvedGuildOwnerId })) return { ok: false, reason: "unauthorized" };
     const result = store.redeemRequestById({
       requestId,
       guildId: guild?.id,
@@ -149,18 +149,22 @@ async function handleRefreshInteraction(interaction) {
   if (!match) return false;
   const service = match[1];
   const context = { guild: interaction.guild, member: interaction.member, userId: interaction.user?.id };
-  const available = Boolean(interaction.guild && context.userId && secureRefreshInfrastructureAvailable(service));
+  const capabilities = interaction.guild && context.userId
+    ? await resolveAdminCapabilities(context)
+    : getAdminCapabilities(context);
+  const authorizedContext = { ...context, resolvedGuildOwnerId: capabilities.resolvedGuildOwnerId };
+  const available = Boolean(capabilities.canManageCredentials && secureRefreshInfrastructureAvailable(service));
   const sessionStatus = available ? await checkSocial(service) : null;
   const hasExpiry = sessionStatus?.status === STATUS.attention;
   const result = !context.guild || !context.userId
     ? { ok: false, reason: "unauthorized" }
-    : !capabilityFor(context).canManageCredentials
+    : !capabilities.canManageCredentials
       ? { ok: false, reason: "unauthorized" }
       : !available
         ? { ok: false, reason: "secure_refresh_unavailable" }
         : !hasExpiry
           ? { ok: false, reason: "invalid_request" }
-          : refreshWorkflow.issue(context, service);
+          : refreshWorkflow.issue(authorizedContext, service);
   const payload = {
     content: result.ok
       ? `A short-lived secure refresh request is ready for ${service}. Open the protected page, sign in to Discord, and submit the new cookie export there.`
