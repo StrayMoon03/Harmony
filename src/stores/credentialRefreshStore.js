@@ -19,6 +19,41 @@ function countRecentRequests({ guildId, actorId, since }) {
   `).get(guildId, actorId, since)?.total || 0);
 }
 
+function getRequest(requestId) {
+  const row = getDb().prepare(`
+    SELECT request_id, guild_id, actor_id, service, status, created_at, expires_at, redeemed_at, completed_at
+    FROM credential_refresh_requests WHERE request_id = ?
+  `).get(requestId);
+  return row || null;
+}
+
+function redeemRequestById({ requestId, guildId, actorId, service, now }) {
+  const row = getRequest(requestId);
+  if (!row) return { ok: false, reason: "invalid_request" };
+  if (row.guild_id !== guildId || row.actor_id !== actorId || row.service !== service) {
+    return { ok: false, reason: "scope_mismatch" };
+  }
+  if (row.status !== "pending") return { ok: false, reason: "already_used" };
+  if (new Date(row.expires_at).getTime() <= new Date(now).getTime()) {
+    getDb().prepare("UPDATE credential_refresh_requests SET status = 'expired' WHERE request_id = ? AND status = 'pending'").run(requestId);
+    return { ok: false, reason: "expired" };
+  }
+  const changes = getDb().prepare(`
+    UPDATE credential_refresh_requests SET status = 'consumed', redeemed_at = ?
+    WHERE request_id = ? AND guild_id = ? AND actor_id = ? AND service = ? AND status = 'pending' AND expires_at > ?
+  `).run(now, requestId, guildId, actorId, service, now).changes;
+  return changes ? {
+    ok: true,
+    requestId: row.request_id,
+    guildId: row.guild_id,
+    actorId: row.actor_id,
+    service: row.service,
+    status: "consumed",
+    redeemedAt: now,
+    expiresAt: row.expires_at,
+  } : { ok: false, reason: "already_used" };
+}
+
 function redeemRequest({ tokenHash, guildId, actorId, service, now }) {
   const db = getDb();
   const request = db.prepare("SELECT * FROM credential_refresh_requests WHERE token_hash = ?").get(tokenHash);
@@ -54,4 +89,13 @@ function expirePending(now) {
   `).run(now).changes);
 }
 
-module.exports = { SERVICES, createRequest, countRecentRequests, redeemRequest, completeRequest, expirePending };
+module.exports = {
+  SERVICES,
+  createRequest,
+  countRecentRequests,
+  getRequest,
+  redeemRequest,
+  redeemRequestById,
+  completeRequest,
+  expirePending,
+};

@@ -1,8 +1,9 @@
 const crypto = require("node:crypto");
-const { MessageFlags } = require("discord.js");
-const { getAdminCapabilities } = require("./operationsStatusService");
+const { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { getAdminCapabilities, checkSocial, STATUS } = require("./operationsStatusService");
 const auditStore = require("../stores/operationsAuditStore");
 const requestStore = require("../stores/credentialRefreshStore");
+const refreshConfig = require("./sessionRefreshConfig");
 
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -18,9 +19,8 @@ const SAFE_RESULT_MESSAGES = Object.freeze({
   expired: "This refresh request has expired. Start a new request.",
 });
 
-function secureRefreshInfrastructureAvailable() {
-  // No secret-entry backend or narrowly scoped secret rotation API exists yet.
-  return false;
+function secureRefreshInfrastructureAvailable(service) {
+  return refreshConfig.isServiceRefreshAvailable(service);
 }
 
 function capabilityFor({ guild, member, userId }) {
@@ -50,19 +50,21 @@ function createRefreshWorkflow({
   }
 
   function recordRequestOutcome(context, service, outcome) {
-    audit.recordAdminOperation({
+    const entry = {
       guildId: context.guild.id,
       actorId: context.userId,
       service,
       action: "refresh_requested",
       outcome,
-    });
+    };
+    if (audit.recordCredentialRefreshEvent) audit.recordCredentialRefreshEvent(entry);
+    else audit.recordAdminOperation(entry);
   }
 
   function issue(context, service) {
     if (!SERVICES.has(service)) return { ok: false, reason: "invalid_request" };
     if (!authorized(context)) return { ok: false, reason: "unauthorized" };
-    if (!infrastructureAvailable()) {
+    if (!infrastructureAvailable(service)) {
       recordRequestOutcome(context, service, "unavailable");
       return { ok: false, reason: "secure_refresh_unavailable" };
     }
@@ -89,9 +91,9 @@ function createRefreshWorkflow({
       expiresAt,
     });
     recordRequestOutcome(context, service, "pending");
-    // The bearer token is returned only to an internal caller. The Discord
-    // handler below never creates or returns a token to an interaction.
-    return { ok: true, requestId, token, service, expiresAt };
+    // Retain the one-way token digest required by the PR #236 request schema;
+    // the web flow authorizes by UUID + OAuth identity and never exposes it.
+    return { ok: true, requestId, service, expiresAt };
   }
 
   function redeem({ token, guild, member, userId, service }) {
@@ -106,7 +108,27 @@ function createRefreshWorkflow({
       now: clock().toISOString(),
     });
     if (result.ok) {
-      audit.recordAdminOperation({ guildId: guild.id, actorId: userId, service, action: "refresh_request_redeemed", outcome: "success" });
+      const entry = { guildId: guild.id, actorId: userId, service, action: "request_redeemed", outcome: "success" };
+      if (audit.recordCredentialRefreshEvent) audit.recordCredentialRefreshEvent(entry);
+      else audit.recordAdminOperation(entry);
+    }
+    return result;
+  }
+
+  function redeemRequestId({ requestId, guild, member, userId, service }) {
+    if (!SERVICES.has(service)) return { ok: false, reason: "invalid_request" };
+    if (!authorized({ guild, member, userId })) return { ok: false, reason: "unauthorized" };
+    const result = store.redeemRequestById({
+      requestId,
+      guildId: guild?.id,
+      actorId: userId,
+      service,
+      now: clock().toISOString(),
+    });
+    if (result.ok) {
+      const entry = { guildId: guild.id, actorId: userId, service, action: "request_redeemed", outcome: "success" };
+      if (audit.recordCredentialRefreshEvent) audit.recordCredentialRefreshEvent(entry);
+      else audit.recordAdminOperation(entry);
     }
     return result;
   }
@@ -116,25 +138,47 @@ function createRefreshWorkflow({
     return store.completeRequest({ requestId, now: clock().toISOString(), guildId, actorId, service });
   }
 
-  return { issue, redeem, complete };
+  return { issue, redeem, redeemRequestId, complete };
 }
 
 const refreshWorkflow = createRefreshWorkflow();
 
-function handleRefreshInteraction(interaction) {
+async function handleRefreshInteraction(interaction) {
   if (!interaction.isButton?.()) return false;
   const match = String(interaction.customId || "").match(/^harmony-session-refresh:(instagram|threads|facebook|youtube)$/);
   if (!match) return false;
   const service = match[1];
   const context = { guild: interaction.guild, member: interaction.member, userId: interaction.user?.id };
-  const result = interaction.guild && context.userId
-    ? refreshWorkflow.issue(context, service)
-    : { ok: false, reason: "unauthorized" };
-  return interaction.reply({
-    content: formatRefreshOutcome(result),
+  const available = Boolean(interaction.guild && context.userId && secureRefreshInfrastructureAvailable(service));
+  const sessionStatus = available ? await checkSocial(service) : null;
+  const hasExpiry = sessionStatus?.status === STATUS.attention;
+  const result = !context.guild || !context.userId
+    ? { ok: false, reason: "unauthorized" }
+    : !capabilityFor(context).canManageCredentials
+      ? { ok: false, reason: "unauthorized" }
+      : !available
+        ? { ok: false, reason: "secure_refresh_unavailable" }
+        : !hasExpiry
+          ? { ok: false, reason: "invalid_request" }
+          : refreshWorkflow.issue(context, service);
+  const payload = {
+    content: result.ok
+      ? `A short-lived secure refresh request is ready for ${service}. Open the protected page, sign in to Discord, and submit the new cookie export there.`
+      : formatRefreshOutcome(result),
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
-  }).then(() => true);
+  };
+  if (result.ok) {
+    const base = refreshConfig.publicBaseUrl();
+    if (!base) payload.content = SAFE_RESULT_MESSAGES.secure_refresh_unavailable;
+    else payload.components = [new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("Open Secure Refresh Page")
+        .setStyle(ButtonStyle.Link)
+        .setURL(new URL(`/session-refresh/${encodeURIComponent(result.requestId)}`, base).toString())
+    )];
+  }
+  return interaction.reply(payload).then(() => true);
 }
 
 function recordRefreshStage({ guildId, actorId, service, stage, success }) {
@@ -148,6 +192,7 @@ module.exports = {
   MAX_REQUESTS_PER_HOUR,
   SERVICES,
   createRefreshWorkflow,
+  refreshWorkflow,
   secureRefreshInfrastructureAvailable,
   formatRefreshOutcome,
   handleRefreshInteraction,

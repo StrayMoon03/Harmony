@@ -8,6 +8,7 @@ const {
   ButtonStyle,
 } = require("discord.js");
 const { runStatusCheck, getAdminCapabilities, STATUS } = require("../services/operationsStatusService");
+const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-status")
@@ -37,13 +38,24 @@ function makeStatusPayload(report, capabilities) {
       };
     }))
     .setFooter({ text: capabilities.canManageCredentials
-      ? "Credential manager capability recognized; session refresh is not available yet."
+      ? "Refresh Session appears when a service has an explicit login problem and secure refresh is configured."
       : "Session refresh is not available. Ask the owner or trusted Credential Manager if a session needs attention." });
+  const refreshButtons = capabilities.canManageCredentials
+    ? rows.filter((row) => /^social-(instagram|threads|facebook|youtube)$/.test(row.id || "") &&
+      row.status === STATUS.attention && /session refresh required/i.test(row.action || "") &&
+      isServiceRefreshAvailable(row.id.slice("social-".length))
+    ).slice(0, 4).map((row) => new ButtonBuilder()
+      .setCustomId(`harmony-session-refresh:${row.id.slice("social-".length)}`)
+      .setLabel(`Refresh ${row.name}`)
+      .setStyle(ButtonStyle.Success))
+    : [];
+  const buttons = [...refreshButtons, new ButtonBuilder()
+    .setCustomId("harmony-status:refresh")
+    .setLabel("Refresh Status")
+    .setStyle(ButtonStyle.Primary)];
   return {
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-status:refresh").setLabel("Refresh Status").setStyle(ButtonStyle.Primary)
-    )],
+    components: [new ActionRowBuilder().addComponents(buttons)],
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
   };
@@ -51,9 +63,11 @@ function makeStatusPayload(report, capabilities) {
 
 function statusAction(row, capabilities) {
   if (/^social-(instagram|threads|facebook|youtube)$/.test(row.id || "") && row.status === STATUS.attention && /session refresh required/i.test(row.action || "")) {
-    return capabilities.canManageCredentials
-      ? "Secure session refresh is not available yet. No credentials were changed; ask the owner to provision the secure refresh service."
-      : "Session refresh required — ask the owner or a Credential Manager. Secure refresh is not available yet.";
+    const service = row.id.slice("social-".length);
+    if (!capabilities.canManageCredentials) return "Session refresh required — ask the owner or a Credential Manager.";
+    return isServiceRefreshAvailable(service)
+      ? "Session refresh is available to an authorized Credential Manager."
+      : "Secure session refresh is not yet configured for this service. No credentials were changed; ask the owner to complete setup.";
   }
   return row.action;
 }
@@ -71,7 +85,7 @@ async function respondWithStatus(interaction, { update = false } = {}) {
     return interaction.reply(payload);
   }
   const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
-  const payload = makeStatusPayload(report, capabilities);
+  const payload = makeStatusPayload(report, capabilities, interaction.guild?.id);
   if (update && interaction.message) return interaction.update({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
   if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
   return interaction.reply(payload);

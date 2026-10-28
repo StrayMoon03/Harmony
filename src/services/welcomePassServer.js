@@ -12,6 +12,7 @@ const {
   autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
 } = require("./welcomePassService");
+const { startSessionRefreshWebService } = require("./sessionRefreshWebService");
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -54,8 +55,10 @@ function readJsonBody(request) {
 
 function startWelcomePassServer(client) {
   const port = Number(process.env.PORT || 3000);
+  const handleSessionRefresh = startSessionRefreshWebService(client);
 
   const server = http.createServer(async (request, response) => {
+    if (await handleSessionRefresh(request, response)) return;
     const url = new URL(request.url, "http://localhost");
 
     if (request.method === "GET" && url.pathname === "/health") {
