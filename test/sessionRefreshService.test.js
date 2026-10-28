@@ -138,9 +138,9 @@ test("refresh requests are rate limited and audit records contain only safe meta
 });
 
 test("forged refresh components are rejected server-side and never include a credential form", async () => {
-  const makeInteraction = (userId, member) => ({
+  const makeInteraction = (userId, member, guildContext = guild()) => ({
     customId: "harmony-session-refresh:instagram",
-    guild: guild(), user: { id: userId }, member,
+    guild: guildContext, user: { id: userId }, member,
     isButton: () => true,
     reply: async (payload) => { interactionPayload = payload; },
   });
@@ -151,6 +151,11 @@ test("forged refresh components are rejected server-side and never include a cre
   assert.equal(interactionPayload.flags, 64);
   assert.equal("components" in interactionPayload, false);
   assert.equal("files" in interactionPayload, false);
+
+  const ownerLookupGuild = { id: "guild-refresh", fetch: async () => ({ id: "guild-refresh", ownerId: "owner-1" }) };
+  const forgedAgainstOwnerLookup = makeInteraction("ordinary-admin", adminMember(), ownerLookupGuild);
+  assert.equal(await refreshService.handleRefreshInteraction(forgedAgainstOwnerLookup), true);
+  assert.match(interactionPayload.content, /Only the owner or a configured Credential Manager/);
 
   const ownerAttempt = makeInteraction("owner-1", adminMember());
   assert.equal(await refreshService.handleRefreshInteraction(ownerAttempt), true);
@@ -170,6 +175,7 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     SESSION_REFRESH_RAILWAY_SERVICE_ID: process.env.SESSION_REFRESH_RAILWAY_SERVICE_ID,
     INSTAGRAM_COOKIES_BASE64: process.env.INSTAGRAM_COOKIES_BASE64,
     INSTAGRAM_COOKIES: process.env.INSTAGRAM_COOKIES,
+    HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: process.env.HARMONY_CREDENTIAL_MANAGER_ROLE_IDS,
   };
   Object.assign(process.env, {
     SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
@@ -179,12 +185,17 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
     INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
     INSTAGRAM_COOKIES: cookiePath,
+    HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: "",
   });
   try {
     recordSocialAuthFailure("instagram", new Date().toISOString(), "session");
     let payload;
+    const ownerGuildWithoutOwnerId = {
+      id: "guild-refresh",
+      fetch: async () => ({ id: "guild-refresh", ownerId: "owner-1" }),
+    };
     const interaction = {
-      customId: "harmony-session-refresh:instagram", guild: guild(), member: adminMember(), user: { id: "owner-1" },
+      customId: "harmony-session-refresh:instagram", guild: ownerGuildWithoutOwnerId, member: adminMember(), user: { id: "owner-1" },
       isButton: () => true, reply: async (message) => { payload = message; },
     };
     assert.equal(await refreshService.handleRefreshInteraction(interaction), true);
@@ -192,6 +203,12 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     assert.equal(payload.components[0].components[0].data.style, 5);
     assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\/[0-9a-f-]{36}$/);
     assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
+
+    const beforeCheckpoint = getDb().prepare("SELECT COUNT(*) AS n FROM credential_refresh_requests").get().n;
+    recordSocialAuthFailure("instagram", new Date().toISOString(), "owner");
+    await refreshService.handleRefreshInteraction(interaction);
+    assert.match(payload.content, /invalid or has expired/i);
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM credential_refresh_requests").get().n, beforeCheckpoint);
     recordSocialSuccess("instagram");
   } finally {
     for (const [name, value] of Object.entries(env)) {
