@@ -158,6 +158,41 @@ function addAction({
   );
 }
 
+function countHistory(guildId) {
+  return Number(getDb().prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM community_guard_actions WHERE guild_id = ?) +
+      (SELECT COUNT(*) FROM community_guard_safe_messages WHERE guild_id = ?) AS total
+  `).get(guildId, guildId)?.total || 0);
+}
+
+function listHistory(guildId, { limit = 10, offset = 0 } = {}) {
+  const safeLimit = Math.max(1, Math.min(25, Number(limit) || 10));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  return getDb().prepare(`
+    SELECT * FROM (
+      SELECT a.id AS history_id, a.message_id, a.channel_id, a.user_id,
+        a.category, a.source, a.rule_id, r.name AS rule_name, a.admin_id AS actor_id,
+        a.dm_delivered, a.created_at, 'removed' AS result
+      FROM community_guard_actions a
+      LEFT JOIN community_guard_rules r ON r.guild_id = a.guild_id AND r.id = a.rule_id
+      WHERE a.guild_id = ?
+      UNION ALL
+      SELECT -s.rowid AS history_id, s.message_id, NULL AS channel_id, NULL AS user_id,
+        r.category, 'Admin Review' AS source, st.rule_id, r.name AS rule_name,
+        s.marked_by AS actor_id, NULL AS dm_delivered, s.marked_at AS created_at,
+        'safe' AS result
+      FROM community_guard_safe_messages s
+      LEFT JOIN community_guard_message_state st
+        ON st.guild_id = s.guild_id AND st.message_id = s.message_id
+      LEFT JOIN community_guard_rules r ON r.guild_id = s.guild_id AND r.id = st.rule_id
+      WHERE s.guild_id = ?
+    )
+    ORDER BY created_at DESC, history_id DESC
+    LIMIT ? OFFSET ?
+  `).all(guildId, guildId, safeLimit, safeOffset);
+}
+
 function removeContributionForMessage(guildId, messageId) {
   const db = getDb();
   const share = db.prepare(`
@@ -198,5 +233,7 @@ module.exports = {
   setReviewMessage,
   setMessageState,
   addAction,
+  countHistory,
+  listHistory,
   removeContributionForMessage,
 };
