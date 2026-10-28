@@ -107,5 +107,6 @@ module.exports = {
   execute,
   makeStatusPayload,
   statusAction,
+  respondWithStatus,
   handleStatusInteraction,
 };

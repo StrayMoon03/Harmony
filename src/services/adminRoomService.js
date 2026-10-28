@@ -6,14 +6,10 @@ const {
   EmbedBuilder,
   MessageFlags,
   PermissionFlagsBits,
-  StringSelectMenuBuilder,
 } = require("discord.js");
 const roomStore = require("../stores/adminRoomStore");
 const guardStore = require("../stores/communityGuardStore");
 const guardService = require("./communityGuardService");
-const statusService = require("./operationsStatusService");
-const eventStore = require("../stores/eventSchedulerStore");
-const calendarService = require("./eventSchedulerService");
 const birthdayManager = require("./birthdayManagerService");
 const welcomePassStore = require("../stores/welcomePassStore");
 const greetingStore = require("../stores/greetingStore");
@@ -23,123 +19,52 @@ const messageLogStore = require("../stores/messageLogStore");
 const errorInboxStore = require("../stores/errorInboxStore");
 const errorMonitorStore = require("../stores/errorMonitorStore");
 const { isAdminRoomAuthorized } = require("./adminAuthorization");
+const statusCommand = require("../commands/status");
 
 const HISTORY_PAGE_SIZE = 8;
-const STATUS_ICONS = Object.freeze({
-  [statusService.STATUS.healthy]: "🟢",
-  [statusService.STATUS.attention]: "🟡",
-  [statusService.STATUS.owner]: "🔴",
-  [statusService.STATUS.unknown]: "⚪",
-});
-const HOME_CATEGORIES = [
-  { label: "Calendar & Events", value: "calendar", description: "Schedules, discovery, birthdays, and Discord events" },
-  { label: "Community", value: "community", description: "Guard, Welcome Pass, and community tools" },
-  { label: "Media & System", value: "media", description: "Health, social sessions, and error tools" },
-];
-const COMMUNITY_AREAS = [
-  { label: "Harmony Guard", value: "guard" },
-  { label: "Welcome Pass", value: "welcome" },
-  { label: "Greetings", value: "greetings" },
-  { label: "Member Counts", value: "members" },
-  { label: "Collections", value: "collections" },
-  { label: "Message Logs", value: "logs" },
+const ADMIN_CONTROLS = [
+  ["guard", "Harmony Guard", ButtonStyle.Primary],
+  ["guard-history-open", "Guard History", ButtonStyle.Secondary],
+  ["welcome", "Welcome Pass", ButtonStyle.Secondary],
+  ["greetings", "Greetings", ButtonStyle.Secondary],
+  ["members", "Member Counts", ButtonStyle.Secondary],
+  ["collections", "Collections", ButtonStyle.Secondary],
+  ["logs", "Message Logs", ButtonStyle.Secondary],
+  ["birthdays", "Birthdays", ButtonStyle.Success],
+  ["status", "Status / Health", ButtonStyle.Primary],
+  ["media", "Media & Errors", ButtonStyle.Secondary],
 ];
 
-function statusIcon(status) { return STATUS_ICONS[status] || STATUS_ICONS[statusService.STATUS.unknown]; }
-
-function summaryStatus(rows, ids) {
-  const selected = rows.filter((row) => ids.includes(row.id));
-  if (!selected.length) return statusService.STATUS.unknown;
-  if (selected.some((row) => row.status === statusService.STATUS.owner)) return statusService.STATUS.owner;
-  if (selected.some((row) => row.status === statusService.STATUS.attention)) return statusService.STATUS.attention;
-  if (selected.every((row) => row.status === statusService.STATUS.healthy)) return statusService.STATUS.healthy;
-  return statusService.STATUS.unknown;
-}
-
-function buildHomeComponents({ ephemeralNavigation = false } = {}) {
+function buildHomeComponents() {
+  const buttons = ADMIN_CONTROLS.map(([action, label, style]) => new ButtonBuilder()
+    .setCustomId(`harmony-admin-room:${action}`)
+    .setLabel(label)
+    .setStyle(style));
   return [
-    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-      .setCustomId(ephemeralNavigation ? "harmony-admin-room:category:ephemeral" : "harmony-admin-room:category")
-      .setPlaceholder("Choose an Admin Room section")
-      .addOptions(HOME_CATEGORIES.map((item) => ({ ...item })))),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-status:open").setLabel("Status / Health").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("harmony-admin-room:panel-refresh").setLabel("Refresh Home Summary").setStyle(ButtonStyle.Secondary)
-    ),
+    new ActionRowBuilder().addComponents(...buttons.slice(0, 5)),
+    new ActionRowBuilder().addComponents(...buttons.slice(5)),
   ];
 }
 
-async function buildHomePayload(guild, client, { statusRows, ephemeralNavigation = false } = {}) {
-  let rows = statusRows;
-  if (!rows) rows = await statusService.collectStatus({ guild, client });
-  const attention = rows.filter((row) => [statusService.STATUS.attention, statusService.STATUS.owner].includes(row.status));
-  const discord = rows.find((row) => row.id === "discord");
-  const database = rows.find((row) => row.id === "database");
-  const discovery = rows.find((row) => row.id === "discovery");
-  const guard = rows.find((row) => row.id === "guard");
-  const events = rows.find((row) => row.id === "event-sync");
-  const social = summaryStatus(rows, ["social-instagram", "social-threads", "social-facebook", "social-youtube"]);
+async function buildHomePayload() {
   const embed = new EmbedBuilder()
-    .setColor(attention.length ? 0xfee75c : 0x5865f2)
-    .setTitle("💜 HARMONY ADMIN ROOM")
-    .setDescription("Your central place to check Harmony and open its existing admin tools.")
+    .setColor(0x5865f2)
+    .setTitle("💜 HARMONY ADMIN CONTROLS")
+    .setDescription("Use these controls for Harmony’s community, system, and media tools. The Stray Kids and Youtiful Stays Schedule Manager panels in this channel remain your calendar controls.")
     .addFields(
-      { name: "SYSTEM", value: `Harmony ${statusIcon(discord?.status)}  ·  Discord ${statusIcon(discord?.status)}  ·  Database ${statusIcon(database?.status)}\n${attention.length ? `Needs attention: **${attention.length}**` : "No current local alerts."}`, inline: false },
-      { name: "CALENDAR & EVENTS", value: `Discovery ${statusIcon(discovery?.status)}  ·  Event sync ${statusIcon(events?.status)}  ·  Birthdays open from this section`, inline: false },
-      { name: "COMMUNITY & MEDIA", value: `Guard ${statusIcon(guard?.status)}  ·  Social sessions ${statusIcon(social)}\n⚪ means not configured or not currently verifiable. Social platforms are not probed from this panel.`, inline: false },
-    )
-    .setFooter({ text: `Updated ${new Date().toISOString()} · Use Status / Health for the full report.` });
-  return { embeds: [embed], components: buildHomeComponents({ ephemeralNavigation }), allowedMentions: { parse: [] } };
-}
-
-function homeEphemeralButton() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("harmony-admin-room:home").setLabel("Admin Room Home").setStyle(ButtonStyle.Secondary)
-  );
+      { name: "COMMUNITY", value: "Guard · Guard History · Welcome Pass · Greetings · Member Counts", inline: false },
+      { name: "OTHER ADMIN TOOLS", value: "Collections · Message Logs · Birthdays · Status / Health · Media & Errors", inline: false },
+    );
+  return { embeds: [embed], components: buildHomeComponents(), allowedMentions: { parse: [] } };
 }
 
 function pagePayload(title, description, components = []) {
   const embed = new EmbedBuilder().setColor(0x5865f2).setTitle(title).setDescription(description.slice(0, 4000));
-  return { embeds: [embed], components: [...components, homeEphemeralButton()], allowedMentions: { parse: [] } };
-}
-
-function jumpButton(label, guildId, panel) {
-  if (!panel?.channel_id || !panel?.message_id) return null;
-  return new ButtonBuilder()
-    .setLabel(label)
-    .setStyle(ButtonStyle.Link)
-    .setURL(`https://discord.com/channels/${guildId}/${panel.channel_id}/${panel.message_id}`);
+  return { embeds: [embed], components, allowedMentions: { parse: [] } };
 }
 
 function commandHelp(names) {
   return names.map(([command, purpose]) => `• \`/${command}\` — ${purpose}`).join("\n");
-}
-
-function calendarPage(guildId) {
-  const stray = jumpButton("Open Stray Kids Schedule Manager", guildId, eventStore.getManagerPanel(guildId, "stray_kids"));
-  const community = jumpButton("Open Youtiful Stays Schedule Manager", guildId, eventStore.getManagerPanel(guildId, "community"));
-  const rows = [];
-  const managerButtons = [stray, community].filter(Boolean);
-  if (managerButtons.length) rows.push(new ActionRowBuilder().addComponents(...managerButtons));
-  rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("harmony-admin-room:discovery").setLabel("Check Event Discovery").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:review").setLabel("Review Discovered Events").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:reconcile").setLabel("Reconcile Discord Events").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:birthdays").setLabel("Birthday Manager").setStyle(ButtonStyle.Success),
-  ));
-  let text = `Open either existing Schedule Manager, run the official schedule check, review submitted/discovered candidates, or reconcile Discord Scheduled Events.\n\nDirect command access: ${commandHelp([
-    ["harmony-schedule", "create, list, cancel, edit, and publish calendar events"],
-    ["harmony-calendar", "submit, discover, review, and reconcile events"],
-  ])}`;
-  if (!stray || !community) text += "\n\nA missing manager link means that panel has not been installed yet. Use `/harmony-schedule setup-manager` to install or refresh it.";
-  return pagePayload("📅 Calendar & Events", text, rows);
-}
-
-function communityPage() {
-  const select = new StringSelectMenuBuilder().setCustomId("harmony-admin-room:community-area")
-    .setPlaceholder("Choose a community tool")
-    .addOptions(COMMUNITY_AREAS.map((area) => ({ label: area.label, value: area.value })));
-  return pagePayload("👥 Community", "Choose an existing community system to view its current setup and open its established controls.", [new ActionRowBuilder().addComponents(select)]);
 }
 
 function mediaPage(guildId) {
@@ -246,11 +171,11 @@ function guardHistoryPayload(guildId, page = 0) {
   const pager = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`harmony-admin-room:guard-history:${currentPage - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 0),
     new ButtonBuilder().setCustomId(`harmony-admin-room:guard-history:${currentPage + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(currentPage >= lastPage),
-    new ButtonBuilder().setCustomId("harmony-admin-room:community-guard").setLabel("Back to Guard").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:guard:ephemeral").setLabel("Back to Guard").setStyle(ButtonStyle.Secondary),
   );
   const embed = new EmbedBuilder().setColor(0x5865f2).setTitle("🛡️ Guard Moderation History")
     .setDescription(body.slice(0, 4000)).setFooter({ text: `Page ${currentPage + 1} of ${lastPage + 1} · ${total} saved decisions/actions · Message content is not shown.` });
-  return { embeds: [embed], components: [pager, homeEphemeralButton()], allowedMentions: { parse: [] } };
+  return { embeds: [embed], components: [pager], allowedMentions: { parse: [] } };
 }
 
 async function fetchChannel(guild, channelId) {
@@ -342,19 +267,6 @@ async function refreshConfiguredAdminRooms(client) {
   }
 }
 
-async function discoveryResult(interaction) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const { runDiscovery } = require("./calendarDiscoveryService");
-  const result = await runDiscovery(interaction.client, { guildIds: [interaction.guildId] });
-  if (result.locked) return interaction.editReply("A discovery check is already running. Please try again shortly.");
-  const totals = result.results.reduce((sum, item) => ({
-    fetched: sum.fetched + (item.fetched || 0), newCount: sum.newCount + (item.newCount || 0),
-    updated: sum.updated + (item.updated || 0), duplicate: sum.duplicate + (item.duplicate || 0),
-    failed: sum.failed + (item.ok ? 0 : 1),
-  }), { fetched: 0, newCount: 0, updated: 0, duplicate: 0, failed: 0 });
-  return interaction.editReply(`Official schedule check complete. Fetched ${totals.fetched}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}${totals.failed ? `; failed ${totals.failed}` : ""}. No calendar event was created automatically.`);
-}
-
 async function handleAdminRoomInteraction(interaction) {
   if (!interaction.customId?.startsWith("harmony-admin-room:")) return false;
   if (!interaction.guild || !isAdminRoomAuthorized(interaction)) {
@@ -362,6 +274,14 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   const [, action, parameter] = interaction.customId.split(":");
+  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "birthdays", "status", "media"]);
+  if (panelActions.has(action) && !(action === "guard" && parameter === "ephemeral")) {
+    const active = roomStore.getPanel(interaction.guildId);
+    if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
+      await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+  }
   if (action === "panel-refresh") {
     const saved = roomStore.getPanel(interaction.guildId);
     if (!saved?.enabled || saved.message_id !== interaction.message?.id) {
@@ -372,54 +292,33 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.message.edit(await buildHomePayload(interaction.guild, interaction.client));
     return true;
   }
-  if (action === "category") {
-    // Persistent panels must still be the configured active panel before they
-    // can start navigation. Ephemeral category menus are emitted only by an
-    // already-authorized Admin Room workflow and can continue that workflow.
-    if (parameter !== "ephemeral") {
-      const active = roomStore.getPanel(interaction.guildId);
-      if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
-        await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
-        return true;
-      }
-    }
-  }
-  if (action === "home") {
-    await interaction.update(await buildHomePayload(interaction.guild, interaction.client, { ephemeralNavigation: true }));
+  if (action === "status") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await statusCommand.respondWithStatus(interaction);
     return true;
   }
-  if (action === "category" && interaction.isStringSelectMenu?.()) {
-    const selected = interaction.values[0];
-    const payload = selected === "calendar" ? calendarPage(interaction.guildId)
-      : selected === "community" ? communityPage()
-        : mediaPage(interaction.guildId);
-    await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+  if (action === "guard") {
+    const payload = await guardPage(interaction.guild);
+    if (parameter === "ephemeral") await interaction.update(payload);
+    else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (action === "discovery") { await discoveryResult(interaction); return true; }
-  if (action === "review") {
-    const payload = calendarService.discoveredCandidatePickerPayload(interaction.guildId);
-    await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
-    return true;
-  }
-  if (action === "reconcile") {
-    const payload = await calendarService.nativeReconciliationPickerPayload(interaction.guild);
-    await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+  if (action === "guard-history-open") {
+    await interaction.reply({ ...guardHistoryPayload(interaction.guildId), flags: MessageFlags.Ephemeral });
     return true;
   }
   if (action === "birthdays") {
     await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (action === "community-area" && interaction.isStringSelectMenu?.()) {
-    const selected = interaction.values[0];
-    const payload = selected === "guard" ? await guardPage(interaction.guild) : communityToolPage(interaction.guildId, selected);
-    if (!payload) return false;
-    await interaction.update(payload);
+  if (["welcome", "greetings", "members", "collections", "logs"].includes(action)) {
+    const area = action === "welcome" ? "welcome" : action;
+    const payload = communityToolPage(interaction.guildId, area);
+    if (payload) await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (action === "community-guard") {
-    await interaction.update(await guardPage(interaction.guild));
+  if (action === "media") {
+    await interaction.reply({ ...mediaPage(interaction.guildId), flags: MessageFlags.Ephemeral });
     return true;
   }
   if (action === "guard-history") {
@@ -445,8 +344,6 @@ module.exports = {
   execute: setupAdminRoom,
   buildHomePayload,
   buildHomeComponents,
-  calendarPage,
-  communityPage,
   mediaPage,
   guardPage,
   guardHistoryPayload,

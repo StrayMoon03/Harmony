@@ -92,11 +92,15 @@ test("Admin Room install, persistence, refresh, move, and off lifecycle", async 
   assert.equal(saved.channel_id, first.id);
   assert.equal(saved.enabled, 1);
   assert.equal(first.sent.length, 1);
-  assert.match(first.sent[0].payload.embeds[0].data.title, /ADMIN ROOM/);
+  assert.match(first.sent[0].payload.embeds[0].data.title, /ADMIN CONTROLS/);
 
   await room.execute(setupInteraction({ guild, action: "refresh" }));
   assert.equal(first.sent[0].editCalls.length, 1);
   assert.equal(roomStore.getEnabledPanels().filter((panel) => panel.guild_id === guild.id).length, 1);
+  assert.equal(first.sent.length, 1, "refresh edits the persisted panel instead of posting a duplicate");
+  const refreshedControls = first.sent[0].payload.components.flatMap((row) => row.components).map((item) => item.data.custom_id);
+  assert.equal(refreshedControls.length, 10);
+  assert.equal(new Set(refreshedControls).size, 10);
 
   await room.execute(setupInteraction({ guild, channel: second, action: "move" }));
   saved = roomStore.getPanel(guild.id);
@@ -140,81 +144,51 @@ test("unauthorized Admin Room component interactions are rejected server-side", 
   assert.equal(response.flags, 64);
 });
 
-test("authorized admin can navigate calendar and Birthday Manager routes", async () => {
-  const { guild } = createGuild("navigation-guild");
-  roomStore.savePanel({ guildId: guild.id, channelId: "active-room", messageId: "active-panel", enabled: true });
-  const permission = permissionSet(true);
-  const replies = [];
-  const interaction = {
-    customId: "harmony-admin-room:category",
-    guild,
-    guildId: guild.id,
-    channelId: "active-room",
-    message: { id: "active-panel" },
-    user: { id: "admin-id" },
-    memberPermissions: permission,
-    client: client(),
-    isStringSelectMenu: () => true,
-    values: ["calendar"],
-    reply: async (payload) => { replies.push(payload); },
-  };
-  await room.handleAdminRoomInteraction(interaction);
-  assert.equal(replies.length, 1);
-  assert.match(replies[0].embeds[0].data.title, /Calendar & Events/);
-  assert.ok(replies[0].components.flatMap((row) => row.components).some((item) => item.data.custom_id === "harmony-admin-room:birthdays"));
+test("the persistent panel exposes direct non-schedule admin controls only", async () => {
+  const { guild } = createGuild("direct-controls-guild");
+  const payload = await room.buildHomePayload(guild, client());
+  const embed = payload.embeds[0].data;
+  const controls = payload.components.flatMap((row) => row.components);
+  const ids = controls.map((item) => item.data.custom_id);
 
-  const birthdayReply = [];
-  await room.handleAdminRoomInteraction({
-    ...interaction,
-    customId: "harmony-admin-room:birthdays",
-    reply: async (payload) => birthdayReply.push(payload),
-  });
-  assert.match(birthdayReply[0].content, /BIRTHDAY MANAGER/);
-  assert.equal(birthdayReply[0].flags, 64);
+  assert.match(embed.title, /HARMONY ADMIN CONTROLS/);
+  assert.doesNotMatch(JSON.stringify(payload), /Calendar & Events|Open Stray Kids Schedule Manager|Open Youtiful Stays Schedule Manager|Choose an Admin Room section/);
+  assert.equal(payload.components.length, 2);
+  assert.deepEqual(payload.components.map((row) => row.components.length), [5, 5]);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const action of ["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "birthdays", "status", "media"]) {
+    assert.ok(ids.includes(`harmony-admin-room:${action}`), `missing direct control for ${action}`);
+  }
+  assert.ok(ids.every((id) => !/calendar|schedule|category|home/.test(id)));
 });
 
-test("ephemeral Admin Room Home continues navigation after a valid persistent-panel entry", async () => {
-  const { guild } = createGuild("ephemeral-navigation-guild");
+test("authorized controls open the existing Guard, history, Birthday, and community workflows", async () => {
+  const { guild } = createGuild("navigation-guild");
   roomStore.savePanel({ guildId: guild.id, channelId: "active-room", messageId: "active-panel", enabled: true });
   const base = {
-    guild,
-    guildId: guild.id,
-    channelId: "active-room",
-    user: { id: "admin-id" },
-    memberPermissions: permissionSet(true),
-    client: client(),
-    isStringSelectMenu: () => true,
+    guild, guildId: guild.id, channelId: "active-room", message: { id: "active-panel" },
+    user: { id: "admin-id" }, memberPermissions: permissionSet(true), client: client(),
+    reply: async (payload) => { base.response = payload; },
   };
-  let calendarPage;
-  await room.handleAdminRoomInteraction({
-    ...base,
-    customId: "harmony-admin-room:category",
-    message: { id: "active-panel" },
-    values: ["calendar"],
-    reply: async (payload) => { calendarPage = payload; },
-  });
-  assert.match(calendarPage.embeds[0].data.title, /Calendar & Events/);
+  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:guard" });
+  assert.match(base.response.embeds[0].data.title, /Harmony Guard/);
+  assert.equal(base.response.flags, 64);
 
-  let ephemeralHome;
-  await room.handleAdminRoomInteraction({
-    ...base,
-    customId: "harmony-admin-room:home",
-    message: { id: "ephemeral-calendar-page" },
-    update: async (payload) => { ephemeralHome = payload; },
-  });
-  const homeMenu = ephemeralHome.components.flatMap((row) => row.components).find((item) => item.data.custom_id === "harmony-admin-room:category:ephemeral");
-  assert.ok(homeMenu, "ephemeral Home marks its category menu as an authorized continuation");
+  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:guard-history-open" });
+  assert.match(base.response.embeds[0].data.title, /History/);
+  assert.equal(base.response.flags, 64);
 
-  let communityPage;
-  await room.handleAdminRoomInteraction({
-    ...base,
-    customId: homeMenu.data.custom_id,
-    message: { id: "ephemeral-home-message" },
-    values: ["community"],
-    reply: async (payload) => { communityPage = payload; },
-  });
-  assert.match(communityPage.embeds[0].data.title, /Community/);
-  assert.equal(communityPage.flags, 64);
+  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:birthdays" });
+  const birthdayReply = base.response;
+  assert.match(birthdayReply.content, /BIRTHDAY MANAGER/);
+  assert.equal(birthdayReply.flags, 64);
+
+  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:welcome" });
+  assert.match(base.response.embeds[0].data.title, /Welcome Pass/);
+  for (const [action, title] of [["greetings", "Greetings"], ["members", "Member Counts"], ["collections", "Collections"], ["logs", "Message Logs"], ["media", "Media & System"]]) {
+    await room.handleAdminRoomInteraction({ ...base, customId: `harmony-admin-room:${action}` });
+    assert.match(base.response.embeds[0].data.title, new RegExp(title));
+  }
 });
 
 test("a moved or disabled panel cannot launch Admin Room workflows", async () => {
@@ -222,7 +196,7 @@ test("a moved or disabled panel cannot launch Admin Room workflows", async () =>
   roomStore.savePanel({ guildId, channelId: "new-room", messageId: "new-panel", enabled: true });
   let response;
   await room.handleAdminRoomInteraction({
-    customId: "harmony-admin-room:category",
+    customId: "harmony-admin-room:guard",
     guild: { id: guildId, ownerId: "owner-id" },
     guildId,
     channelId: "old-room",
@@ -230,28 +204,42 @@ test("a moved or disabled panel cannot launch Admin Room workflows", async () =>
     user: { id: "admin-id" },
     memberPermissions: permissionSet(true),
     isStringSelectMenu: () => true,
-    values: ["calendar"],
     reply: async (payload) => { response = payload; },
   });
   assert.match(response.content, /no longer active/i);
+
+  roomStore.setEnabled(guildId, false);
+  let disabledResponse;
+  await room.handleAdminRoomInteraction({
+    customId: "harmony-admin-room:welcome",
+    guild: { id: guildId, ownerId: "owner-id" },
+    guildId,
+    channelId: "new-room",
+    message: { id: "new-panel" },
+    user: { id: "admin-id" },
+    memberPermissions: permissionSet(true),
+    reply: async (payload) => { disabledResponse = payload; },
+  });
+  assert.match(disabledResponse.content, /no longer active/i);
 });
 
-test("home summary uses existing status signals and keeps unverified social status unknown", async () => {
+test("Status / Health control reuses the existing fresh status report", async () => {
   const { guild } = createGuild("summary-guild");
-  const reportRows = [
-    { id: "discord", name: "Harmony / Discord connection", status: "healthy" },
-    { id: "database", name: "Database", status: "healthy" },
-    { id: "discovery", name: "Event discovery", status: "attention" },
-    { id: "event-sync", name: "Discord/event synchronization", status: "unknown" },
-    { id: "guard", name: "Community Guard", status: "unknown" },
-    ...["instagram", "threads", "facebook", "youtube"].map((name) => ({ id: `social-${name}`, name, status: "unknown" })),
-  ];
-  const payload = await room.buildHomePayload(guild, client(), { statusRows: reportRows });
-  const description = payload.embeds[0].data.fields.map((field) => field.value).join("\n");
-  assert.match(description, /Discovery 🟡/);
-  assert.match(description, /Social sessions ⚪/);
-  assert.doesNotMatch(description, /Social sessions 🟢/);
-  assert.match(description, /not currently verifiable/i);
+  roomStore.savePanel({ guildId: guild.id, channelId: "status-room", messageId: "status-panel", enabled: true });
+  const replies = [];
+  let deferred = false;
+  const interaction = {
+    customId: "harmony-admin-room:status", guild, guildId: guild.id,
+    channelId: "status-room", message: { id: "status-panel" }, user: { id: "admin-id" },
+    memberPermissions: permissionSet(true), member: { permissions: permissionSet(true) }, client: client(),
+    deferReply: async () => { deferred = true; },
+    editReply: async (payload) => { replies.push(payload); },
+  };
+  Object.defineProperty(interaction, "deferred", { get: () => deferred });
+  await room.handleAdminRoomInteraction(interaction);
+  assert.equal(deferred, true);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].embeds[0].data.title, /Status \/ Health/);
 });
 
 test("Guard history paginates removals and Admin Review safe decisions without message content", () => {
