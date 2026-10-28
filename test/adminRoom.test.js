@@ -173,6 +173,50 @@ test("authorized admin can navigate calendar and Birthday Manager routes", async
   assert.equal(birthdayReply[0].flags, 64);
 });
 
+test("ephemeral Admin Room Home continues navigation after a valid persistent-panel entry", async () => {
+  const { guild } = createGuild("ephemeral-navigation-guild");
+  roomStore.savePanel({ guildId: guild.id, channelId: "active-room", messageId: "active-panel", enabled: true });
+  const base = {
+    guild,
+    guildId: guild.id,
+    channelId: "active-room",
+    user: { id: "admin-id" },
+    memberPermissions: permissionSet(true),
+    client: client(),
+    isStringSelectMenu: () => true,
+  };
+  let calendarPage;
+  await room.handleAdminRoomInteraction({
+    ...base,
+    customId: "harmony-admin-room:category",
+    message: { id: "active-panel" },
+    values: ["calendar"],
+    reply: async (payload) => { calendarPage = payload; },
+  });
+  assert.match(calendarPage.embeds[0].data.title, /Calendar & Events/);
+
+  let ephemeralHome;
+  await room.handleAdminRoomInteraction({
+    ...base,
+    customId: "harmony-admin-room:home",
+    message: { id: "ephemeral-calendar-page" },
+    update: async (payload) => { ephemeralHome = payload; },
+  });
+  const homeMenu = ephemeralHome.components.flatMap((row) => row.components).find((item) => item.data.custom_id === "harmony-admin-room:category:ephemeral");
+  assert.ok(homeMenu, "ephemeral Home marks its category menu as an authorized continuation");
+
+  let communityPage;
+  await room.handleAdminRoomInteraction({
+    ...base,
+    customId: homeMenu.data.custom_id,
+    message: { id: "ephemeral-home-message" },
+    values: ["community"],
+    reply: async (payload) => { communityPage = payload; },
+  });
+  assert.match(communityPage.embeds[0].data.title, /Community/);
+  assert.equal(communityPage.flags, 64);
+});
+
 test("a moved or disabled panel cannot launch Admin Room workflows", async () => {
   const guildId = "stale-panel-guild";
   roomStore.savePanel({ guildId, channelId: "new-room", messageId: "new-panel", enabled: true });

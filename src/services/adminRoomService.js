@@ -56,10 +56,10 @@ function summaryStatus(rows, ids) {
   return statusService.STATUS.unknown;
 }
 
-function buildHomeComponents() {
+function buildHomeComponents({ ephemeralNavigation = false } = {}) {
   return [
     new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-      .setCustomId("harmony-admin-room:category")
+      .setCustomId(ephemeralNavigation ? "harmony-admin-room:category:ephemeral" : "harmony-admin-room:category")
       .setPlaceholder("Choose an Admin Room section")
       .addOptions(HOME_CATEGORIES.map((item) => ({ ...item })))),
     new ActionRowBuilder().addComponents(
@@ -69,7 +69,7 @@ function buildHomeComponents() {
   ];
 }
 
-async function buildHomePayload(guild, client, { statusRows } = {}) {
+async function buildHomePayload(guild, client, { statusRows, ephemeralNavigation = false } = {}) {
   let rows = statusRows;
   if (!rows) rows = await statusService.collectStatus({ guild, client });
   const attention = rows.filter((row) => [statusService.STATUS.attention, statusService.STATUS.owner].includes(row.status));
@@ -89,7 +89,7 @@ async function buildHomePayload(guild, client, { statusRows } = {}) {
       { name: "COMMUNITY & MEDIA", value: `Guard ${statusIcon(guard?.status)}  ·  Social sessions ${statusIcon(social)}\n⚪ means not configured or not currently verifiable. Social platforms are not probed from this panel.`, inline: false },
     )
     .setFooter({ text: `Updated ${new Date().toISOString()} · Use Status / Health for the full report.` });
-  return { embeds: [embed], components: buildHomeComponents(), allowedMentions: { parse: [] } };
+  return { embeds: [embed], components: buildHomeComponents({ ephemeralNavigation }), allowedMentions: { parse: [] } };
 }
 
 function homeEphemeralButton() {
@@ -373,14 +373,19 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   if (action === "category") {
-    const active = roomStore.getPanel(interaction.guildId);
-    if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
-      await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
-      return true;
+    // Persistent panels must still be the configured active panel before they
+    // can start navigation. Ephemeral category menus are emitted only by an
+    // already-authorized Admin Room workflow and can continue that workflow.
+    if (parameter !== "ephemeral") {
+      const active = roomStore.getPanel(interaction.guildId);
+      if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
+        await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
     }
   }
   if (action === "home") {
-    await interaction.update(await buildHomePayload(interaction.guild, interaction.client));
+    await interaction.update(await buildHomePayload(interaction.guild, interaction.client, { ephemeralNavigation: true }));
     return true;
   }
   if (action === "category" && interaction.isStringSelectMenu?.()) {
