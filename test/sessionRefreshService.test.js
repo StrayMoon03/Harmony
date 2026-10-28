@@ -10,6 +10,7 @@ process.env.HARMONY_DB_PATH = path.join(tempDir, "refresh.sqlite");
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getDb, closeDb } = require("../src/db/sqlite");
+const { recordSocialAuthFailure, recordSocialSuccess } = require("../src/services/operationsStatusService");
 const { getAdminCapabilities, STATUS } = require("../src/services/operationsStatusService");
 const refreshService = require("../src/services/sessionRefreshService");
 const statusCommand = require("../src/commands/status");
@@ -96,12 +97,12 @@ test("request is service/guild/actor scoped, expires, and can only be consumed o
   const issued = testFlow.service.issue(context(), "instagram");
   assert.equal(issued.ok, true);
   assert.equal(issued.service, "instagram");
-  assert.equal(testFlow.service.redeem({ ...context({ guildId: "other-guild" }), service: "instagram", token: issued.token }).reason, "scope_mismatch");
-  assert.equal(testFlow.service.redeem({ ...context(), service: "threads", token: issued.token }).reason, "scope_mismatch");
-  assert.equal(testFlow.service.redeem({ ...context({ userId: "someone-else" }), service: "instagram", token: issued.token }).reason, "scope_mismatch");
-  const redeemed = testFlow.service.redeem({ ...context(), service: "instagram", token: issued.token });
+  assert.equal(testFlow.service.redeemRequestId({ ...context({ guildId: "other-guild" }), service: "instagram", requestId: issued.requestId }).reason, "scope_mismatch");
+  assert.equal(testFlow.service.redeemRequestId({ ...context(), service: "threads", requestId: issued.requestId }).reason, "scope_mismatch");
+  assert.equal(testFlow.service.redeemRequestId({ ...context({ userId: "someone-else" }), service: "instagram", requestId: issued.requestId }).reason, "scope_mismatch");
+  const redeemed = testFlow.service.redeemRequestId({ ...context(), service: "instagram", requestId: issued.requestId });
   assert.equal(redeemed.ok, true);
-  assert.equal(testFlow.service.redeem({ ...context(), service: "instagram", token: issued.token }).reason, "already_used");
+  assert.equal(testFlow.service.redeemRequestId({ ...context(), service: "instagram", requestId: issued.requestId }).reason, "already_used");
   assert.equal(testFlow.service.complete({ requestId: redeemed.requestId, guildId: "other-guild", actorId: "owner-1", service: "instagram" }), false);
   assert.equal(testFlow.service.complete({ requestId: redeemed.requestId, guildId: "guild-refresh", actorId: "owner-1", service: "instagram" }), true);
 
@@ -112,7 +113,7 @@ test("request is service/guild/actor scoped, expires, and can only be consumed o
     infrastructureAvailable: () => true,
     capabilities: () => ({ canManageCredentials: true }),
   });
-  assert.equal(later.redeem({ ...context({ guildId: "guild-expired" }), service: "youtube", token: expiredRequest.token }).reason, "expired");
+  assert.equal(later.redeemRequestId({ ...context({ guildId: "guild-expired" }), service: "youtube", requestId: expiredRequest.requestId }).reason, "expired");
 });
 
 test("refresh requests are rate limited and audit records contain only safe metadata", () => {
@@ -157,6 +158,49 @@ test("forged refresh components are rejected server-side and never include a cre
   assert.equal(interactionPayload.content.includes("test-only-unusable-token"), false);
 });
 
+test("authorized refresh button issues an HTTPS-scoped page only for explicit expiry", async () => {
+  getDb();
+  const cookiePath = path.join(tempDir, "button-session.txt");
+  fs.writeFileSync(cookiePath, "existing-session");
+  const env = {
+    SESSION_REFRESH_PUBLIC_URL: process.env.SESSION_REFRESH_PUBLIC_URL,
+    DISCORD_OAUTH_CLIENT_ID: process.env.DISCORD_OAUTH_CLIENT_ID,
+    DISCORD_OAUTH_CLIENT_SECRET: process.env.DISCORD_OAUTH_CLIENT_SECRET,
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: process.env.SESSION_REFRESH_RAILWAY_PROJECT_TOKEN,
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: process.env.SESSION_REFRESH_RAILWAY_SERVICE_ID,
+    INSTAGRAM_COOKIES_BASE64: process.env.INSTAGRAM_COOKIES_BASE64,
+    INSTAGRAM_COOKIES: process.env.INSTAGRAM_COOKIES,
+  };
+  Object.assign(process.env, {
+    SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
+    DISCORD_OAUTH_CLIENT_ID: "mock-client-id",
+    DISCORD_OAUTH_CLIENT_SECRET: "mock-client-secret",
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "mock-project-token",
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
+    INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
+    INSTAGRAM_COOKIES: cookiePath,
+  });
+  try {
+    recordSocialAuthFailure("instagram", new Date().toISOString(), "session");
+    let payload;
+    const interaction = {
+      customId: "harmony-session-refresh:instagram", guild: guild(), member: adminMember(), user: { id: "owner-1" },
+      isButton: () => true, reply: async (message) => { payload = message; },
+    };
+    assert.equal(await refreshService.handleRefreshInteraction(interaction), true);
+    assert.match(payload.content, /short-lived secure refresh request/i);
+    assert.equal(payload.components[0].components[0].data.style, 5);
+    assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\/[0-9a-f-]{36}$/);
+    assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
+    recordSocialSuccess("instagram");
+  } finally {
+    for (const [name, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test("status distinguishes session expiry from security checkpoints and never offers credential entry", () => {
   const report = {
     checkedAt: "2026-10-27T12:00:00.000Z",
@@ -167,7 +211,7 @@ test("status distinguishes session expiry from security checkpoints and never of
   };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
   const text = JSON.stringify(payload);
-  assert.match(text, /Secure session refresh is not available yet/);
+  assert.match(text, /Secure session refresh is not yet configured/);
   assert.match(text, /Owner attention required/);
   assert.doesNotMatch(text, /harmony-session-refresh:/);
   assert.equal(payload.components[0].components[0].data.custom_id, "harmony-status:refresh");

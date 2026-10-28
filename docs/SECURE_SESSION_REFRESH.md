@@ -1,39 +1,63 @@
-# Secure social-session refresh: implementation boundary
+# Secure social-session refresh
 
-## Current state
+## Flow and trust boundaries
 
-The Discord Status screen can report a recent, explicit authentication failure. It does not validate a saved session just because a cookie file exists. Status exposes the existing diagnostic/credential-manager capability distinction, but secure session refresh is **not available**. No session-refresh button is shown. A manufactured `harmony-session-refresh:<service>` component is checked server-side and receives a safe unavailable/unauthorized response.
+The Status screen offers **Refresh Session** only for a service with a recent explicit login/session failure, only to the owner or an authorized Credential Manager, and only when that service's runtime file and all backend configuration are present. A security checkpoint remains Owner Required. The component handler repeats authorization and status checks server-side.
 
-Harmony does not currently have a protected credential-entry web page, a narrowly scoped secret-manager client, or a Railway API integration. The existing HTTP service in `welcomePassServer.js` accepts Welcome Pass callbacks using a shared application secret; it is not an admin-authenticated secret-entry or rotation service and is not suitable for this purpose. This change does not connect to Railway or inspect/change its configuration.
+The link opens a protected route on Harmony's existing HTTP server (`welcomePassServer.js`). Refresh routes are dispatched separately before Welcome Pass routing and never use `WELCOME_PASS_SHARED_SECRET`. They require the configured HTTPS public host and HTTPS proxy indication. Welcome Pass behavior/authentication is unchanged.
 
-An additive `credential_refresh_requests` table supports the future flow. It stores only a SHA-256 digest of a random one-use token plus request scope (guild, actor, service), status, and timestamps. Requests are designed to expire after ten minutes and are limited to three per actor per guild per hour. Current production configuration hard-disables issuance because the secure backend is absent. The request store and workflow are dependency-injected so expiry, scope binding, single-use consumption, and rate limits can be tested without enabling production refresh.
+The browser flow uses Discord OAuth `identify` only. The callback verifies OAuth state and its secure state cookie, exchanges the code server-side, checks that the returned Discord user is the request actor, fetches that user's current guild membership, and rechecks the owner/Credential Manager capability. The request's database row is then atomically consumed with its guild, actor, service, and expiry scope. Signed, short-lived HTTP-only cookies carry the web session and CSRF token; their HMAC key is derived from the Discord OAuth client secret. This makes OAuth/web state verifiable across Harmony processes without putting session state in Discord messages or another database table. The request UUID is an opaque path identifier, not authorization by itself; Discord identity and live permissions are required.
 
-Audit entries contain only guild, actor, service, fixed action/outcome labels, and timestamp. They do not accept cookie contents or arbitrary failure text. No candidate credential is accepted by Discord, stored in this database, or logged.
+The web form accepts a Netscape-format cookie export over an HTTPS POST body. It is never echoed. Harmony does not log request bodies, save candidates in SQLite, or add candidate/provider error values to audit records. Body size is capped at 1 MiB. The validator receives the candidate over a local subprocess stdin pipe. Errors returned to the page use fixed safe messages.
 
-## Existing session sources and validation limits
+## Per-service candidate validation
 
-| Integration | Current input | What current code can establish | Candidate-session validation available? |
-| --- | --- | --- | --- |
-| Instagram | `INSTAGRAM_COOKIES` path, materialized from `INSTAGRAM_COOKIES_BASE64` at startup; legacy local cookie-file fallback remains. Downloader tooling consumes Netscape-format cookies. Anonymous retrieval is attempted first; cookies are used only for explicit authentication-required fallback. | A specific media request can report an authentication requirement. Checkpoints/challenges are classified for owner attention. | No isolated candidate validator. Retrying a media download is content-dependent and cannot reliably distinguish invalid cookies from an unavailable/deleted post, extraction issue, or platform restriction. |
-| Threads | `THREADS_COOKIES` path, materialized from `THREADS_COOKIES_BASE64` at startup. Existing browser/downloader code parses Netscape cookies. | Existing diagnostics may observe authentication/account UI while processing a target. | No standalone candidate validator. A target failure is not sufficient evidence that the candidate session itself is invalid. |
-| Facebook | `FACEBOOK_COOKIES` path, materialized from `FACEBOOK_COOKIES_BASE64` at startup; legacy local cookie-file fallback remains. Browser/downloader code consumes Netscape cookies and can detect login/checkpoint pages for a target. | Cookie-file syntax/presence and a target request can be inspected. Neither proves the account session is accepted generally. | No isolated candidate validator. A target request may fail for content or access reasons unrelated to session validity. |
-| YouTube | `YOUTUBE_COOKIES` path, materialized from `YOUTUBE_COOKIES_BASE64` at startup. yt-dlp accepts the cookie file and may retry public retrieval without cookies. | A target request can fail or succeed; public fallback success does not prove cookie validity. | No isolated candidate validator. Existing media retrieval is not a reliable session-validation contract. |
+Validation is fail-closed: only an explicit platform-specific signed-in signal permits rotation. Login pages mean unauthenticated; challenge/checkpoint pages require owner attention; missing or ambiguous UI signals mean unable to validate and preserve the existing secret.
 
-`runtimeSecrets.js` decodes configured base64 values at process startup into permission-restricted files in an OS temporary directory and passes file paths to integrations. It does not implement remote secret rotation or live rematerialization. The cookie values and environment contents are never included in this document or status output.
+| Service | Required cookie format/signals | Browser validation target and success signal |
+| --- | --- | --- |
+| Instagram | Netscape jar containing `sessionid` and `csrftoken` for Instagram | Instagram account-edit page remains on its expected route and renders its username field. |
+| Threads | Netscape jar containing `sessionid` and `csrftoken` for Threads | Threads home renders a signed-in account-menu action (log out/switch accounts). |
+| Facebook | Netscape jar containing `c_user` and `xs` for Facebook | Facebook `/me` renders a recognized signed-in account/profile navigation element. |
+| YouTube | Netscape jar with `LOGIN_INFO` and a SAPISID-family cookie for Google/YouTube | YouTube `/feed/you` renders an account avatar and does not expose sign-in controls. |
 
-## Activation requirement
+Harmony launches its existing headless Chromium/Playwright runtime against fixed account/home pages, never a user-selected post. It does not follow arbitrary URLs or use media success as proof of authentication. If a platform changes its page or a signal is absent, the result is inconclusive and the existing session is retained. These checks have unit coverage for format and result classification, but have not been exercised against real social accounts in this change. A first deployment should keep refresh disabled until the owner has reviewed this implementation and configured the required backend values.
 
-All four sessions are materialized at startup. Replacing the upstream environment secret alone does not update the running process's temporary cookie file. A restart/redeployment is currently required before Harmony will use a replacement. This PR never initiates a restart or deployment. Until a separately approved activation mechanism exists, a successful future rotation would still need an explicitly authorized restart/redeployment followed by a fresh Status/media check.
+## Narrow rotation and live activation
 
-## Recommended next infrastructure
+The injected Railway provider uses only Railway's GraphQL Public API and `Project-Access-Token` header. A Railway Project token is scoped to one environment in one project. The code obtains that token's project/environment IDs and writes only to the configured Harmony service ID and a fixed allowlist:
 
-Before enabling the workflow, provide a dedicated HTTPS credential-refresh backend with:
+- `INSTAGRAM_COOKIES_BASE64`
+- `THREADS_COOKIES_BASE64`
+- `FACEBOOK_COOKIES_BASE64`
+- `YOUTUBE_COOKIES_BASE64`
 
-1. Discord OAuth authentication and server-side rechecks of guild, actor, owner/Credential Manager capability, selected service, expiration, and one-use request scope.
-2. A short-lived one-time bearer exchange that is not placed in query strings, logs, Discord messages, or analytics. Prefer a URL fragment or a user-entered one-time code exchanged over TLS, then immediately invalidate it.
-3. A narrowly scoped secret-manager identity that can update only the four named session secrets. Do not expose a general infrastructure/Railway token to Discord admins or Harmony.
-4. Candidate staging isolated from production retrieval. A platform-specific validator must have a documented, dependable success signal before it can replace the active secret. On any uncertain result, preserve the current secret.
-5. Atomic secret replacement and a separately authorized activation step. The backend should return only sanitized state; no credential material should pass back through Discord.
-6. Secret-free audit callbacks for requested, validation success/failure, rotation success/failure, and activation outcome.
+Updates set `skipDeploys: true`; this workflow never starts a deploy. Railway does not document a token scoped to a single variable, so the server-side token still has the scope of its project environment. Keep it in server-only configuration, restrict its project/environment, and do not expose it to Discord or the browser. Provider errors and response bodies are discarded.
 
-Until that infrastructure and dependable per-platform validators exist, Refresh Session remains disabled. Checkpoints, challenges, and account security warnings continue to require owner attention and must not be treated as ordinary session expiry.
+Harmony's integrations read their cookie file paths when invoking the downloader/browser. After a candidate validates, Harmony first updates the single Railway variable, then atomically replaces the corresponding current runtime cookie file, updates the in-memory base64 setting, and rechecks the new session. If activation/verification fails, it restores the old file and attempts to restore the old Railway value. If restoration cannot be confirmed, the response directs the operator to contact the owner. A successful refresh requires no Harmony restart or Railway deployment.
+
+## Required configuration
+
+All values are server-side; never put them in Discord, a browser form, repository content, or audit data.
+
+| Variable | Purpose |
+| --- | --- |
+| `SESSION_REFRESH_PUBLIC_URL` | Harmony's public HTTPS origin, such as `https://harmony.example`. No path/query/fragment is accepted. |
+| `DISCORD_OAUTH_CLIENT_ID` | Discord OAuth application client ID. |
+| `DISCORD_OAUTH_CLIENT_SECRET` | Server-side OAuth secret; also derives signed refresh-state cookies. |
+| `SESSION_REFRESH_RAILWAY_PROJECT_TOKEN` | Railway Project Access Token for the target project environment. |
+| `SESSION_REFRESH_RAILWAY_SERVICE_ID` | Exact Harmony Railway service ID in that project/environment. |
+| `HARMONY_CREDENTIAL_MANAGER_ROLE_IDS` | Existing comma/space separated Discord role IDs allowed to manage credentials. The guild owner is always authorized. |
+
+Register this exact Discord OAuth redirect URI for the application: `<SESSION_REFRESH_PUBLIC_URL>/session-refresh/oauth/callback`. Keep the existing four `*_COOKIES_BASE64` variables configured. A service is offered independently; one missing session file/secret does not disable the other configured services.
+
+## Audit and safety
+
+`admin_operations_audit` records fixed action/outcome stages (`refresh_requested`, `request_redeemed`, `validation_*`, `rotation_*`, `activation_*`, `verification_*`) with guild, actor, service, and timestamp only. Candidate text, OAuth codes/access tokens, cookies, Railway token, and raw exception text are not recorded. Requests expire after ten minutes, can be consumed once, and are rate-limited to three per actor/guild per hour.
+
+No real credential, Railway setting, or production secret was accessed or changed while implementing or testing this feature. Tests inject a fake rotation provider and fake Discord OAuth responses.
+
+## Railway API references
+
+- Public API authentication and Project token scope: <https://docs.railway.com/integrations/api>
+- Variable upsert and `skipDeploys`: <https://docs.railway.com/integrations/api/manage-variables>

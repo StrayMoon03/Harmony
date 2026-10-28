@@ -15,10 +15,11 @@ function recordAdminOperation({ guildId, actorId, service, action, outcome }) {
   );
 }
 
-const REFRESH_STAGES = new Set(["validation", "rotation"]);
+const REFRESH_STAGES = new Set(["validation", "rotation", "activation", "verification"]);
+const REFRESH_SERVICES = new Set(["instagram", "threads", "facebook", "youtube"]);
 
 function recordCredentialRefreshStage({ guildId, actorId, service, stage, success }) {
-  if (!new Set(["instagram", "threads", "facebook", "youtube"]).has(service) ||
+  if (!REFRESH_SERVICES.has(service) ||
       !REFRESH_STAGES.has(stage) || typeof success !== "boolean") {
     throw new Error("invalid_refresh_audit_event");
   }
@@ -28,4 +29,15 @@ function recordCredentialRefreshStage({ guildId, actorId, service, stage, succes
   return action;
 }
 
-module.exports = { recordAdminOperation, recordCredentialRefreshStage };
+function recordCredentialRefreshEvent({ guildId, actorId, service, action, outcome }) {
+  const allowed = new Map([
+    ["refresh_requested", new Set(["pending", "unavailable", "rate_limited"])],
+    ["request_redeemed", new Set(["success", "failure"])],
+    ["activation_required", new Set(["success", "failure"])],
+  ]);
+  if (!REFRESH_SERVICES.has(service) || !allowed.get(action)?.has(outcome)) throw new Error("invalid_refresh_audit_event");
+  recordAdminOperation({ guildId, actorId, service, action, outcome });
+  return action;
+}
+
+module.exports = { recordAdminOperation, recordCredentialRefreshStage, recordCredentialRefreshEvent };
