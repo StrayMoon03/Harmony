@@ -160,12 +160,8 @@ async function logMediaError(message, error) {
   return true;
 }
 
-async function sendErrorInboxTest(client, interaction) {
-  const settings = getErrorInboxSettings();
-  if (!settings?.enabled) return false;
-  const destination = await resolveDestination(client, settings);
-  if (!destination) return false;
-
+async function sendErrorInboxTestToChannel(destination, interaction) {
+  if (!destination?.isTextBased?.()) return false;
   await destination.send({
     embeds: [
       new EmbedBuilder()
@@ -185,7 +181,17 @@ async function sendErrorInboxTest(client, interaction) {
   return true;
 }
 
+async function sendErrorInboxTest(client, interaction) {
+  const settings = getErrorInboxSettings();
+  if (!settings?.enabled) return false;
+  const destination = await resolveDestination(client, settings);
+  if (!destination) return false;
+  return sendErrorInboxTestToChannel(destination, interaction);
+}
+
 module.exports = {
   logMediaError,
   sendErrorInboxTest,
+  sendErrorInboxTestToChannel,
+  resolveDestination,
 };
