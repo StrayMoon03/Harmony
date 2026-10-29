@@ -519,6 +519,36 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   assert.equal(saved.grant_mode, "automatic");
 });
 
+test("legacy Welcome Pass settings are retained but show Setup needed when the newer approved-member destination is absent", async () => {
+  const { guild, addChannel, addRole } = createGuild("welcome-legacy-settings");
+  const role = addRole("legacy-role", "STAY");
+  const alerts = addChannel("legacy-alerts");
+  const panel = addChannel("legacy-panel");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "legacy-message", enabled: true });
+  welcomePassStore.saveWelcomePassSettings({
+    guildId: guild.id,
+    roleId: role.id,
+    channelId: alerts.id,
+    releaseMessage: welcomePassStore.DEFAULT_RELEASE_MESSAGE,
+  });
+
+  const before = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(before.role_id, role.id);
+  assert.equal(before.channel_id, alerts.id);
+  assert.equal(before.release_channel_id, null);
+
+  const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panel.id, message: { id: "legacy-message" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.description, /Status:\*\* Setup needed/);
+  assert.ok(open.response.embeds[0].data.description.includes(`Approved Role:** @${role.name}`));
+  assert.ok(open.response.embeds[0].data.description.includes(`Staff Approval Alerts:** <#${alerts.id}>`));
+  assert.match(open.response.embeds[0].data.description, /Approved Member Welcome Channel:\*\* Not selected/);
+  const after = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(after.role_id, before.role_id);
+  assert.equal(after.channel_id, before.channel_id);
+  assert.equal(after.release_channel_id, null, "opening the manager does not reset or fabricate the missing new setting");
+});
+
 test("legacy Welcome Pass installations keep using the existing Greetings entry channel until overridden", async () => {
   const { guild, addChannel, addRole } = createGuild("welcome-manager-legacy-entry");
   const greetingEntry = addChannel("legacy-greeting-entry");

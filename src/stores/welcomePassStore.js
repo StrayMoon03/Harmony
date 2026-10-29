@@ -51,7 +51,7 @@ function saveWelcomePassSettings({
     guildId,
     roleId,
     channelId,
-    releaseChannelId,
+    releaseChannelId || null,
     entryChannelId || null,
     entryMessage || null,
     releaseMessage || DEFAULT_RELEASE_MESSAGE,
@@ -186,9 +186,21 @@ function listPendingWelcomePassApprovals() {
 }
 
 function markWelcomePassAssigned(code) {
-  getDb().prepare(
-    "UPDATE welcome_pass_links SET assigned_at = ? WHERE code = ?"
-  ).run(new Date().toISOString(), normalizeWelcomePassCode(code));
+  return Number(getDb().prepare(
+    "UPDATE welcome_pass_links SET assigned_at = ? WHERE code = ? AND assigned_at IS NULL"
+  ).run(new Date().toISOString(), normalizeWelcomePassCode(code)).changes) > 0;
+}
+
+function getPendingWelcomePassAssignmentForMember(guildId, userId) {
+  return getDb().prepare(`
+    SELECT a.code, a.approver_name, a.approved_at,
+      l.guild_id, l.user_id, l.linked_at, l.assigned_at
+    FROM welcome_pass_approvals a
+    JOIN welcome_pass_links l ON l.code = a.code
+    WHERE l.guild_id = ? AND l.user_id = ? AND l.assigned_at IS NULL
+    ORDER BY a.approved_at DESC
+    LIMIT 1
+  `).get(guildId, userId) || null;
 }
 
 module.exports = {
@@ -206,4 +218,5 @@ module.exports = {
   getWelcomePassAssignment,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
+  getPendingWelcomePassAssignmentForMember,
 };

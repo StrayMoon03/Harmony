@@ -5,6 +5,7 @@ const {
   linkWelcomePassCode,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
+  getPendingWelcomePassAssignmentForMember,
   renderWelcomePassReleaseMessage,
   saveWelcomePassSettings,
   updateWelcomePassSetting: updateStoredWelcomePassSetting,
@@ -187,7 +188,7 @@ async function autoLinkWelcomePassByDiscordUsername(
   };
 }
 
-async function assignApprovedWelcomePass(client, code) {
+async function assignApprovedWelcomePass(client, code, { sendMessages = true } = {}) {
   const assignment = getWelcomePassAssignment(code);
   if (!assignment) return { status: "approval_missing" };
   if (!assignment.guild_id || !assignment.user_id) {
@@ -226,6 +227,13 @@ async function assignApprovedWelcomePass(client, code) {
     );
   }
 
+  // Startup/configuration reconciliation may restore a missing role, but it
+  // must never replay member-facing or staff-facing admission messages.
+  if (!sendMessages) {
+    if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
+    return { status: "reconciled", guildId: guild.id, userId: member.id };
+  }
+
   const releaseChannel = await fetchTextChannel(
     guild,
     settings.release_channel_id
@@ -233,6 +241,11 @@ async function assignApprovedWelcomePass(client, code) {
   if (settings.release_channel_id && !releaseChannel) {
     throw new Error("Configured Welcome Pass member channel is unavailable.");
   }
+
+  // Persist the admission before external sends. Discord can accept a message
+  // and then the process can stop before recording it; claiming first keeps
+  // restart/retry paths from posting the same welcome again.
+  if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
 
   if (releaseChannel) {
     const memberName =
@@ -252,8 +265,6 @@ async function assignApprovedWelcomePass(client, code) {
       allowedMentions: { users: [member.id] },
     });
   }
-
-  markWelcomePassAssigned(assignment.code);
 
   const adminChannel = await fetchTextChannel(guild, settings.channel_id);
   if (adminChannel) {
@@ -292,6 +303,9 @@ async function handleManualWelcomePassRoleAdded(
     newMember.roles.cache.has(roleId);
   if (!roleWasAdded) return { status: "ignored" };
 
+  const assignment = getPendingWelcomePassAssignmentForMember(newMember.guild.id, newMember.id);
+  if (!assignment) return { status: "no_pending_approval" };
+
   const releaseChannel = await fetchTextChannel(
     newMember.guild,
     settings.release_channel_id
@@ -299,6 +313,8 @@ async function handleManualWelcomePassRoleAdded(
   if (settings.release_channel_id && !releaseChannel) {
     throw new Error("Configured Welcome Pass member channel is unavailable.");
   }
+
+  if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
 
   if (releaseChannel) {
     const memberName =
@@ -348,7 +364,7 @@ async function assignAllApprovedWelcomePasses(client) {
   const pending = listPendingWelcomePassApprovals();
   for (const item of pending) {
     try {
-      await assignApprovedWelcomePass(client, item.code);
+      await assignApprovedWelcomePass(client, item.code, { sendMessages: false });
     } catch (error) {
       console.error(
         "Could not retry Welcome Pass " + item.code + ":",
