@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -21,17 +21,19 @@ const STATUS_PRESENTATION = {
   [STATUS.owner]: { icon: "🔴", label: "Owner/Developer Required", color: 0xed4245 },
   [STATUS.unknown]: { icon: "⚪", label: "Not Configured / Unable to Verify", color: 0x99aab5 },
 };
+const PLATFORM_ORDER = ["instagram", "facebook", "youtube", "threads", "tiktok", "x"];
 
 function statusView(status) {
   return STATUS_PRESENTATION[status] || STATUS_PRESENTATION[STATUS.unknown];
 }
 
 function isSocialRow(row) {
-  return /^social-(instagram|threads|facebook|youtube)$/.test(row?.id || "");
+  return /^social-(instagram|threads|facebook|youtube|tiktok|x)$/.test(row?.id || "");
 }
 
 function hasCookieRefreshEvidence(row) {
   return isSocialRow(row) && row.status === STATUS.attention &&
+    COOKIE_SERVICES.has(row.id.slice("social-".length)) &&
     /(?:cookies need to be refreshed|session refresh required)/i.test(row.action || "");
 }
 
@@ -46,57 +48,80 @@ function statusAction(row, capabilities = {}) {
       ? `Click **Refresh ${platform} Cookies** below to open the secure refresh page.`
       : `${platform} cookies need to be refreshed, but secure cookie refresh is not fully set up. Ask the owner to complete setup.`;
   }
-  return row.action || "No action available.";
+  return "";
 }
 
 function adminPresentationRows(report) {
   const sourceRows = report.rows || [];
   const rows = [];
   const discord = sourceRows.find((row) => row.id === "discord");
-  if (discord) rows.push({ ...discord, name: "Harmony / Discord" });
-
-  const socialRows = sourceRows.filter(isSocialRow);
-  const socialIssues = socialRows.filter((row) => row.status === STATUS.attention || row.status === STATUS.owner);
-  const quietSocialRows = socialRows.filter((row) => row.status !== STATUS.attention && row.status !== STATUS.owner);
-  if (quietSocialRows.length) {
-    const healthy = quietSocialRows.filter((row) => row.status === STATUS.healthy);
-    const unverified = quietSocialRows.filter((row) => row.status !== STATUS.healthy);
-    const summaryStatus = unverified.length ? STATUS.unknown : STATUS.healthy;
-    const explanation = unverified.length
-      ? `No explicit login failure is currently recorded for ${unverified.map((row) => row.name).join(", ")}. Harmony does not actively test external logins during a Status check.`
-      : `Recent authenticated media retrieval succeeded for ${healthy.map((row) => row.name).join(", ")}.`;
-    rows.push({
-      id: "social-summary",
-      name: "Social Media Links",
-      status: summaryStatus,
-      explanation,
-      action: unverified.length ? "No cookie change is indicated unless a media request reports a login problem." : "No action needed.",
-    });
+  const database = sourceRows.find((row) => row.id === "database");
+  const rowFor = (id) => sourceRows.find((row) => row.id === id);
+  const present = (row, name, label, status = row?.status) => row && ({ id: row.id, name, status, label });
+  if (discord) {
+    const coreStatus = [discord.status, database?.status].includes(STATUS.owner) ? STATUS.owner
+      : [discord.status, database?.status].includes(STATUS.attention) ? STATUS.attention
+        : [discord.status, database?.status].includes(STATUS.unknown) ? STATUS.unknown
+          : STATUS.healthy;
+    rows.push(present(discord, "Harmony", simpleStatusLabel(coreStatus), coreStatus));
+    rows.push(present(discord, "Discord", discord.status === STATUS.healthy ? "Connected" : simpleStatusLabel(discord.status)));
   }
-  rows.push(...socialIssues);
 
-  for (const id of ["discovery", "guard"]) {
-    const row = sourceRows.find((candidate) => candidate.id === id);
-    if (row && row.status !== STATUS.healthy) rows.push(row);
+  for (const platform of PLATFORM_ORDER) {
+    const row = rowFor(`social-${platform}`);
+    if (!row) continue;
+    let label = simpleStatusLabel(row.status);
+    if (hasCookieRefreshEvidence(row)) label = "Cookies need to be refreshed";
+    rows.push(present(row, SOCIAL[platform], label));
+  }
+
+  const discovery = rowFor("discovery");
+  if (discovery) {
+    const label = /checks are off/i.test(discovery.explanation || "")
+      ? "Off"
+      : discovery.status === STATUS.healthy ? "Working" : simpleStatusLabel(discovery.status);
+    rows.push(present(discovery, "Event Discovery", label,
+      label === "Off" ? STATUS.unknown : discovery.status));
+  }
+
+  const guard = rowFor("guard");
+  if (guard) {
+    const explanation = guard.explanation || "";
+    const label = /has not been configured/i.test(explanation)
+      ? "Not Set Up"
+      : /monitoring is off/i.test(explanation)
+        ? "Off"
+        : guard.status === STATUS.healthy ? "Working" : simpleStatusLabel(guard.status);
+    rows.push(present(guard, "Community Guard", label,
+      label === "Off" || label === "Not Set Up" ? STATUS.unknown : guard.status));
   }
   return rows;
+}
+
+function simpleStatusLabel(status) {
+  if (status === STATUS.healthy) return "Working";
+  if (status === STATUS.attention) return "Needs Attention";
+  if (status === STATUS.owner) return "Owner/Developer Required";
+  return "Unable to Verify";
 }
 
 function makeStatusPayload(report, capabilities = {}) {
   const rows = adminPresentationRows(report);
   const hasAttention = rows.some((row) => row.status === STATUS.attention || row.status === STATUS.owner);
+  const summary = rows.map((row) => {
+    const view = statusView(row.status);
+    let label = row.label;
+    if (hasCookieRefreshEvidence((report.rows || []).find((source) => source.id === row.id))) {
+      const service = row.id.slice("social-".length);
+      if (!capabilities.canManageCredentials) label += ". Ask the owner or a Credential Manager.";
+      else if (!isServiceRefreshAvailable(service)) label += ". Ask the owner to finish secure setup.";
+    }
+    return `${view.icon} **${row.name}** — ${label}`;
+  }).join("\n");
   const embed = new EmbedBuilder()
     .setTitle("Harmony Status / Health")
     .setColor(hasAttention ? 0xfee75c : 0x5865f2)
-    .setDescription(`Admin overview · checked ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}. External platform login validity is not actively probed.`)
-    .addFields(rows.map((row) => {
-      const view = statusView(row.status);
-      return {
-        name: `${view.icon} ${row.name} — ${view.label}`,
-        value: `${row.explanation}\n**Next:** ${statusAction(row, capabilities)}`.slice(0, 1024),
-        inline: false,
-      };
-    }));
+    .setDescription(summary || "Status is unavailable.");
 
   const refreshButtons = capabilities.canManageCredentials
     ? (report.rows || []).filter((row) => hasCookieRefreshEvidence(row) &&
@@ -137,7 +162,7 @@ function makeOwnerDiagnosticsPayload(report) {
       inline: false,
     };
   });
-  const refreshReadiness = Object.entries(SOCIAL).map(([service, name]) =>
+  const refreshReadiness = Object.entries(SOCIAL).filter(([service]) => COOKIE_SERVICES.has(service)).map(([service, name]) =>
     `${name}: ${isServiceRefreshAvailable(service) ? "Secure cookie refresh available" : "Secure cookie refresh not fully configured"}`
   ).join("\n");
   const embed = new EmbedBuilder()
