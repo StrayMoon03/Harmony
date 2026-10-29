@@ -6,38 +6,16 @@ const {
 } = require("discord.js");
 const store = require("../stores/communityGuardStore");
 const {
-  CATEGORY_LABELS,
-  conditionLabel,
   createRule,
   editRule,
   removeRule,
-  normalizeConditions,
   reviewRoomVisibilityWarning,
+  RULE_TYPE_CHOICES,
+  REASON_CHOICES,
+  ACTION_CHOICES,
+  MATCH_CHOICES,
+  formatRule,
 } = require("../services/communityGuardService");
-
-const RULE_TYPE_CHOICES = [
-  { name: "Word or phrase", value: "phrase" },
-  { name: "Website/domain", value: "domain" },
-  { name: "URL pattern", value: "url" },
-  { name: "Has attachment", value: "has_attachment" },
-  { name: "Has image attachment", value: "has_image_attachment" },
-];
-const REASON_CHOICES = [
-  { name: "Paid content", value: "paid" },
-  { name: "Self-promotion", value: "promotion" },
-  { name: "Inappropriate content", value: "inappropriate" },
-  { name: "Harmful or ridiculing AI", value: "harmful_ai" },
-  { name: "Spam or scam", value: "spam" },
-  { name: "Other rule violation", value: "other" },
-];
-const ACTION_CHOICES = [
-  { name: "Flag for Admin Review (recommended)", value: "flag" },
-  { name: "Automatically remove and privately DM", value: "remove" },
-];
-const MATCH_CHOICES = [
-  { name: "ALL conditions", value: "all" },
-  { name: "ANY condition", value: "any" },
-];
 
 function addConditionOptions(sub, { edit = false } = {}) {
   const start = 2;
@@ -138,13 +116,6 @@ function collectConditions(interaction, { editing = false } = {}) {
     if (type) conditions.push({ type, value });
   }
   return conditions;
-}
-
-function formatRule(rule) {
-  const conditions = normalizeConditions(rule);
-  const mode = String(rule.match_mode || "all").toLowerCase();
-  const modeLabel = conditions.length > 1 ? ` · Match ${mode.toUpperCase()}` : "";
-  return `**#${rule.id} ${rule.name ? `· ${rule.name}` : ""}**${modeLabel}\n${conditions.map(conditionLabel).join(mode === "any" ? " OR " : " AND ")}\n${CATEGORY_LABELS[rule.category] || rule.category} · ${rule.action === "remove" ? "Automatic Removal + private DM" : "Admin Review"}`;
 }
 
 async function execute(interaction) {

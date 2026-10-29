@@ -17,6 +17,23 @@ function saveSettings(guildId, channelId) {
   `).run(guildId, channelId, new Date().toISOString());
 }
 
+function setReviewRoom(guildId, channelId) {
+  getDb().prepare(`
+    INSERT INTO community_guard_settings (guild_id, channel_id, enabled, updated_at)
+    VALUES (?, ?, 0, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET
+      channel_id = excluded.channel_id,
+      updated_at = excluded.updated_at
+  `).run(guildId, channelId, new Date().toISOString());
+}
+
+function setMonitoringEnabled(guildId, enabled) {
+  return Number(getDb().prepare(`
+    UPDATE community_guard_settings SET enabled = ?, updated_at = ?
+    WHERE guild_id = ? AND channel_id IS NOT NULL
+  `).run(enabled ? 1 : 0, new Date().toISOString(), guildId).changes) > 0;
+}
+
 function disableSettings(guildId) {
   getDb().prepare(`
     UPDATE community_guard_settings
@@ -219,6 +236,8 @@ function removeContributionForMessage(guildId, messageId) {
 module.exports = {
   getSettings,
   saveSettings,
+  setReviewRoom,
+  setMonitoringEnabled,
   disableSettings,
   addRule,
   updateRule,

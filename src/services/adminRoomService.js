@@ -2,10 +2,15 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require("discord.js");
 const roomStore = require("../stores/adminRoomStore");
 const guardStore = require("../stores/communityGuardStore");
@@ -22,6 +27,11 @@ const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const statusCommand = require("../commands/status");
 
 const HISTORY_PAGE_SIZE = 8;
+const GUARD_RULE_PAGE_SIZE = 5;
+const GUARD_RULE_PICKER_PAGE_SIZE = 25;
+const REQUESTED_GUARD_REVIEW_ROOM_ID = "1554747061252005938";
+const guardManagerSessions = new Map();
+const GUARD_SESSION_TTL_MS = 15 * 60 * 1000;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -84,7 +94,7 @@ function mediaPage(guildId) {
   )]);
 }
 
-async function guardPage(guild) {
+async function guardPage(guild, notice = null) {
   const settings = guardStore.getSettings(guild.id);
   const rules = guardStore.listRules(guild.id);
   const channel = settings?.channel_id ? `<#${settings.channel_id}>` : "Not configured";
@@ -94,25 +104,195 @@ async function guardPage(guild) {
   const warning = settings?.channel_id
     ? guardService.reviewRoomVisibilityWarning(room)
     : "Choose a Review Room before enabling automatic Guard rules.";
-  const text = [
-    `Automatic monitoring: **${settings?.enabled ? "On" : "Off"}**`,
-    `Review Room: ${channel}`,
-    `Active rules: **${rules.length}**`,
-    warning,
-    "",
-    commandHelp([
-      ["harmony-guard setup", "choose or change the Review Room"],
-      ["harmony-guard rules", "view configured rules"],
-      ["harmony-guard rule-add", "add a rule"],
-      ["harmony-guard rule-edit", "edit a rule"],
-      ["harmony-guard off", "turn automatic monitoring off"],
-    ]),
-  ].join("\n");
-  const rows = [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("harmony-admin-room:guard-history:0").setLabel("Moderation History").setStyle(ButtonStyle.Primary),
-    ...(settings?.channel_id ? [new ButtonBuilder().setLabel("Open Review Room").setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${guild.id}/${settings.channel_id}`)] : []),
+  const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle("🛡️ Harmony Guard Manager")
+    .setDescription([
+      notice,
+      `**Monitoring:** ${settings?.enabled ? "On" : "Off"}`,
+      `**Review Room:** ${channel}`,
+      `**Active rules:** ${rules.length}`,
+      warning,
+    ].filter(Boolean).join("\n\n"));
+  const monitoringLabel = settings?.enabled ? "Turn Monitoring Off" : "Turn Monitoring On";
+  const monitoringStyle = settings?.enabled ? ButtonStyle.Danger : ButtonStyle.Success;
+  return {
+    embeds: [embed],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-room").setLabel("Review Room").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-toggle").setLabel(monitoringLabel).setStyle(monitoringStyle),
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-rules:0").setLabel("Rules").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-add").setLabel("Add Rule").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-edit").setLabel("Edit Rule").setStyle(ButtonStyle.Secondary),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-remove").setLabel("Remove Rule").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("harmony-admin-room:guard-history:0").setLabel("Moderation History").setStyle(ButtonStyle.Secondary),
+      ),
+    ],
+    allowedMentions: { parse: [] },
+  };
+}
+
+function guardSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function getGuardSession(interaction, expectedKind = null) {
+  const key = guardSessionKey(interaction);
+  const session = guardManagerSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > GUARD_SESSION_TTL_MS || (expectedKind && session.kind !== expectedKind)) {
+    guardManagerSessions.delete(key);
+    return null;
+  }
+  session.updatedAt = Date.now();
+  return session;
+}
+
+function setGuardSession(interaction, session) {
+  session.updatedAt = Date.now();
+  guardManagerSessions.set(guardSessionKey(interaction), session);
+}
+
+function clearGuardSession(interaction) {
+  guardManagerSessions.delete(guardSessionKey(interaction));
+}
+
+function rulePickerPayload(guildId, mode, page = 0) {
+  const rules = guardStore.listRules(guildId);
+  const pageCount = Math.max(1, Math.ceil(rules.length / GUARD_RULE_PICKER_PAGE_SIZE));
+  const currentPage = Math.min(Math.max(0, Number(page) || 0), pageCount - 1);
+  const visible = rules.slice(currentPage * GUARD_RULE_PICKER_PAGE_SIZE, (currentPage + 1) * GUARD_RULE_PICKER_PAGE_SIZE);
+  const components = [];
+  if (visible.length) {
+    components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+      .setCustomId(`harmony-admin-room:guard-${mode}-select`)
+      .setPlaceholder(mode === "edit" ? "Choose a rule to edit" : "Choose a rule to remove")
+      .addOptions(visible.map((rule) => ({
+        label: `#${rule.id} ${String(rule.name || guardService.conditionLabel(guardService.normalizeConditions(rule)[0])).slice(0, 85)}`,
+        value: String(rule.id),
+        description: `${guardService.CATEGORY_LABELS[rule.category] || rule.category} · ${rule.action === "remove" ? "Automatic Removal" : "Admin Review"}`.slice(0, 100),
+      })))));
+  }
+  const pageButtons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`harmony-admin-room:guard-${mode}-page:${currentPage - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 0),
+    new ButtonBuilder().setCustomId(`harmony-admin-room:guard-${mode}-page:${currentPage + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(currentPage >= pageCount - 1),
+    new ButtonBuilder().setCustomId("harmony-admin-room:guard-cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+  );
+  components.push(pageButtons);
+  const body = rules.length ? `Choose one of ${rules.length} active rules. Page ${currentPage + 1} of ${pageCount}.` : "There are no active rules to choose.";
+  return pagePayload(mode === "edit" ? "Edit a Guard Rule" : "Remove a Guard Rule", body, components);
+}
+
+function ruleListPayload(guildId, page = 0) {
+  const rules = guardStore.listRules(guildId);
+  const lastPage = Math.max(0, Math.ceil(rules.length / GUARD_RULE_PAGE_SIZE) - 1);
+  const currentPage = Math.min(Math.max(0, Number(page) || 0), lastPage);
+  const visible = rules.slice(currentPage * GUARD_RULE_PAGE_SIZE, (currentPage + 1) * GUARD_RULE_PAGE_SIZE);
+  const description = visible.length
+    ? visible.map(guardService.formatRule).join("\n\n")
+    : "No Guard rules have been added yet.";
+  const controls = [];
+  if (rules.length > GUARD_RULE_PAGE_SIZE) {
+    controls.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-admin-room:guard-rules:${currentPage - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 0),
+      new ButtonBuilder().setCustomId(`harmony-admin-room:guard-rules:${currentPage + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(currentPage >= lastPage),
+    ));
+  }
+  controls.push(new ActionRowBuilder().addComponents(new ButtonBuilder()
+    .setCustomId("harmony-admin-room:guard:ephemeral").setLabel("Back to Guard").setStyle(ButtonStyle.Secondary)));
+  const payload = pagePayload("🛡️ Harmony Guard Rules", description, controls);
+  payload.embeds[0].setFooter({ text: `Page ${currentPage + 1} of ${lastPage + 1} · ${rules.length} active rules` });
+  return payload;
+}
+
+function reviewRoomPayload(guild) {
+  const settings = guardStore.getSettings(guild.id);
+  const components = [new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+    .setCustomId("harmony-admin-room:guard-room-select")
+    .setPlaceholder("Choose a text channel for Guard reviews and logs")
+    .setChannelTypes(ChannelType.GuildText)
+    .setMinValues(1)
+    .setMaxValues(1))];
+  components.push(new ActionRowBuilder().addComponents(new ButtonBuilder()
+    .setCustomId("harmony-admin-room:guard:ephemeral").setLabel("Back to Guard").setStyle(ButtonStyle.Secondary)));
+  const current = settings?.channel_id ? `<#${settings.channel_id}>` : "Not configured";
+  return pagePayload("Guard Review Room", `Current Review Room: **${current}**\nChoose a server text channel. Changing the room preserves Monitoring On/Off.`, components);
+}
+
+function guardConditionTypePayload(session) {
+  const descriptions = session.conditions.length
+    ? `Current conditions:\n${session.conditions.map((condition, i) => `${i + 1}. ${guardService.conditionLabel(condition)}`).join("\n")}\n\nChoose the next condition type.`
+    : "Choose the first condition type. Text, domain, and URL conditions will ask for a value; attachment conditions do not need one.";
+  return pagePayload("Add a Rule Condition", descriptions, [
+    new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:guard-condition-type")
+      .setPlaceholder("Choose a condition type")
+      .addOptions(guardService.RULE_TYPE_CHOICES.map(({ name, value }) => ({ label: name, value })))),
+    new ActionRowBuilder().addComponents(new ButtonBuilder()
+      .setCustomId("harmony-admin-room:guard-condition-cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary)),
+  ]);
+}
+
+function guardConditionsPayload(session) {
+  const description = session.conditions.length
+    ? `Conditions:\n${session.conditions.map((condition, index) => `${index + 1}. ${guardService.conditionLabel(condition)}`).join("\n")}\n\nYou can add up to ${5 - session.conditions.length} more.`
+    : "No conditions have been added yet.";
+  const components = [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-admin-room:guard-condition-add").setLabel("Add Condition").setStyle(ButtonStyle.Secondary).setDisabled(session.conditions.length >= 5),
+    new ButtonBuilder().setCustomId("harmony-admin-room:guard-condition-done").setLabel("Continue").setStyle(ButtonStyle.Primary).setDisabled(session.conditions.length === 0),
+    new ButtonBuilder().setCustomId("harmony-admin-room:guard-cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
   )];
-  return pagePayload("🛡️ Harmony Guard", text, rows);
+  return pagePayload("Guard Rule Conditions", description, components);
+}
+
+function choiceRow(customId, placeholder, choices, selected) {
+  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(customId)
+    .setPlaceholder(placeholder)
+    .addOptions(choices.map((choice) => ({ label: choice.name, value: choice.value, default: choice.value === selected }))));
+}
+
+function guardRuleDetailsPayload(session) {
+  const isEdit = session.kind === "edit";
+  const conditions = session.conditions.map((condition, index) => `${index + 1}. ${guardService.conditionLabel(condition)}`).join("\n") || "No conditions added.";
+  const components = [
+    choiceRow("harmony-admin-room:guard-detail-reason", "Choose a reason", guardService.REASON_CHOICES, session.category),
+    choiceRow("harmony-admin-room:guard-detail-mode", "Choose how conditions match", guardService.MATCH_CHOICES, session.matchMode),
+    choiceRow("harmony-admin-room:guard-detail-action", "Choose what Harmony does", guardService.ACTION_CHOICES, session.action),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-detail-name").setLabel(session.name ? "Change Rule Name" : "Set Rule Name").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-condition-replace").setLabel(isEdit ? "Replace Conditions" : "Add Conditions").setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-detail-save").setLabel(isEdit ? "Save Changes" : "Create Rule").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+  return pagePayload(isEdit ? `Edit Rule #${session.ruleId}` : "New Guard Rule", `**Conditions**\n${conditions}\n\n**Name:** ${session.name || "No name"}\n**Reason:** ${guardService.CATEGORY_LABELS[session.category] || "Choose a reason"}\n**Match:** ${String(session.matchMode || "all").toUpperCase()}\n**Action:** ${session.action === "remove" ? "Automatic Removal + private DM" : "Admin Review"}`, components);
+}
+
+function guardRemoveConfirmPayload(rule) {
+  return pagePayload(`Remove Guard Rule #${rule.id}?`, `${guardService.formatRule(rule)}\n\nThis removes the rule from active monitoring.`, [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-remove-confirm").setLabel("Confirm Remove").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("harmony-admin-room:guard-cancel").setLabel("Keep Rule").setStyle(ButtonStyle.Secondary),
+    ),
+  ]);
+}
+
+function conditionValueModal() {
+  const input = new TextInputBuilder().setCustomId("value").setLabel("Text, website/domain, or URL pattern")
+    .setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(300);
+  return new ModalBuilder().setCustomId("harmony-admin-room:guard-condition-value")
+    .setTitle("Guard Condition Value").addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+function ruleNameModal(name = null) {
+  const input = new TextInputBuilder().setCustomId("name").setLabel("Rule name (leave blank for no name)")
+    .setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(80);
+  if (name) input.setValue(name.slice(0, 80));
+  return new ModalBuilder().setCustomId("harmony-admin-room:guard-rule-name")
+    .setTitle("Guard Rule Name").addComponents(new ActionRowBuilder().addComponents(input));
 }
 
 function welcomePassPage(guildId) {
@@ -267,6 +447,76 @@ async function refreshConfiguredAdminRooms(client) {
   }
 }
 
+async function configureRequestedGuardReviewRoom(client) {
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      const channel = guild.channels.cache.get(REQUESTED_GUARD_REVIEW_ROOM_ID) ||
+        await guild.channels.fetch(REQUESTED_GUARD_REVIEW_ROOM_ID).catch(() => null);
+      if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText || !guild.members?.me) continue;
+      const permissions = channel.permissionsFor(guild.members.me);
+      if (!permissions?.has(PermissionFlagsBits.ViewChannel) ||
+        !permissions?.has(PermissionFlagsBits.SendMessages) ||
+        !permissions?.has(PermissionFlagsBits.EmbedLinks)) continue;
+      const settings = guardStore.getSettings(guild.id);
+      // Seed the owner-confirmed destination only when Guard has no Review Room.
+      // An administrator's later selection must survive future restarts.
+      if (!settings?.channel_id) guardStore.setReviewRoom(guild.id, channel.id);
+      return { guildId: guild.id, channelId: settings?.channel_id || channel.id, changed: !settings?.channel_id };
+    } catch (error) {
+      console.warn("Harmony Guard Review Room initialization skipped for a guild", { guildId: guild.id, error: error.message });
+    }
+  }
+  return null;
+}
+
+function newAddRuleSession() {
+  return { kind: "add", conditions: [], replaceConditions: true, name: null, category: null, matchMode: "all", action: "flag" };
+}
+
+function editRuleSession(rule) {
+  return {
+    kind: "edit", ruleId: rule.id, original: rule,
+    conditions: guardService.normalizeConditions(rule).map(({ type, value }) => value == null ? { type } : { type, value }),
+    replaceConditions: false, name: rule.name || null, category: rule.category,
+    matchMode: rule.match_mode || "all", action: rule.action || "flag",
+  };
+}
+
+function getLiveRule(interaction, session) {
+  return session?.ruleId ? guardStore.getRule(interaction.guildId, Number(session.ruleId)) : null;
+}
+
+async function saveGuardRule(interaction, session) {
+  try {
+    let notice;
+    if (session.kind === "add") {
+      const id = guardService.createRule({
+        guildId: interaction.guildId,
+        name: session.name,
+        conditions: session.conditions,
+        matchMode: session.matchMode,
+        category: session.category,
+        action: session.action,
+      });
+      notice = `Rule #${id} was added. ${session.action === "remove" ? "Automatic Removal + private DM" : "Admin Review"} is set.`;
+    } else {
+      const saved = guardService.editRule(interaction.guildId, session.ruleId, {
+        name: session.name,
+        category: session.category,
+        action: session.action,
+        matchMode: session.matchMode,
+        conditions: session.replaceConditions ? session.conditions : undefined,
+      });
+      if (!saved) throw new Error("That Guard rule is no longer active.");
+      notice = `Rule #${session.ruleId} was updated.`;
+    }
+    clearGuardSession(interaction);
+    await interaction.update(await guardPage(interaction.guild, notice));
+  } catch (error) {
+    await interaction.reply({ content: error.message || "Harmony couldn’t save that Guard rule.", flags: MessageFlags.Ephemeral });
+  }
+}
+
 async function handleAdminRoomInteraction(interaction) {
   if (!interaction.customId?.startsWith("harmony-admin-room:")) return false;
   if (!interaction.guild || !isAdminRoomAuthorized(interaction)) {
@@ -301,6 +551,217 @@ async function handleAdminRoomInteraction(interaction) {
     const payload = await guardPage(interaction.guild);
     if (parameter === "ephemeral") await interaction.update(payload);
     else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action === "guard-room") {
+    await interaction.update(reviewRoomPayload(interaction.guild));
+    return true;
+  }
+  if (action === "guard-room-select") {
+    const channelId = interaction.values?.[0];
+    const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
+      await interaction.reply({ content: "Choose a text channel in this server for the Guard Review Room.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const permissions = channel.permissionsFor(interaction.guild.members.me);
+    if (!permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions?.has(PermissionFlagsBits.SendMessages) || !permissions?.has(PermissionFlagsBits.EmbedLinks)) {
+      await interaction.reply({ content: `Harmony needs View Channel, Send Messages, and Embed Links in <#${channel.id}>.`, flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    guardStore.setReviewRoom(interaction.guildId, channel.id);
+    const warning = guardService.reviewRoomVisibilityWarning(channel);
+    await interaction.update(await guardPage(interaction.guild, `Review Room set to <#${channel.id}>. ${warning}`));
+    return true;
+  }
+  if (action === "guard-toggle") {
+    const settings = guardStore.getSettings(interaction.guildId);
+    if (!settings?.channel_id && !settings?.enabled) {
+      await interaction.reply({ content: "Choose a Guard Review Room before turning monitoring on.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const enabled = !settings?.enabled;
+    if (!guardStore.setMonitoringEnabled(interaction.guildId, enabled)) {
+      await interaction.reply({ content: "Choose a Guard Review Room before turning monitoring on.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await interaction.update(await guardPage(interaction.guild, `Automatic monitoring is now **${enabled ? "On" : "Off"}**.`));
+    return true;
+  }
+  if (action === "guard-rules") {
+    await interaction.update(ruleListPayload(interaction.guildId, Number(parameter) || 0));
+    return true;
+  }
+  if (action === "guard-add") {
+    setGuardSession(interaction, newAddRuleSession());
+    await interaction.update(guardConditionTypePayload(getGuardSession(interaction)));
+    return true;
+  }
+  if (action === "guard-edit") {
+    const rules = guardStore.listRules(interaction.guildId);
+    if (!rules.length) {
+      await interaction.update(await guardPage(interaction.guild, "There are no active rules to edit yet."));
+      return true;
+    }
+    setGuardSession(interaction, { kind: "edit-picker", ruleSelectPage: 0 });
+    await interaction.update(rulePickerPayload(interaction.guildId, "edit", 0));
+    return true;
+  }
+  if (action === "guard-remove") {
+    const rules = guardStore.listRules(interaction.guildId);
+    if (!rules.length) {
+      await interaction.update(await guardPage(interaction.guild, "There are no active rules to remove."));
+      return true;
+    }
+    setGuardSession(interaction, { kind: "remove-picker", ruleSelectPage: 0 });
+    await interaction.update(rulePickerPayload(interaction.guildId, "remove", 0));
+    return true;
+  }
+  if (action === "guard-edit-page" || action === "guard-remove-page") {
+    const mode = action === "guard-edit-page" ? "edit" : "remove";
+    const session = getGuardSession(interaction, `${mode}-picker`);
+    if (!session) {
+      await interaction.reply({ content: "That Guard rule selection expired. Open the Guard Manager and try again.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    session.ruleSelectPage = Math.max(0, Number(parameter) || 0);
+    await interaction.update(rulePickerPayload(interaction.guildId, mode, session.ruleSelectPage));
+    return true;
+  }
+  if (action === "guard-edit-select") {
+    const picker = getGuardSession(interaction, "edit-picker");
+    const rule = guardStore.getRule(interaction.guildId, Number(interaction.values?.[0]));
+    if (!picker || !rule) {
+      await interaction.reply({ content: "That rule is no longer active. Reopen Edit Rule and try again.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    setGuardSession(interaction, editRuleSession(rule));
+    await interaction.update(guardRuleDetailsPayload(getGuardSession(interaction)));
+    return true;
+  }
+  if (action === "guard-remove-select") {
+    const picker = getGuardSession(interaction, "remove-picker");
+    const rule = guardStore.getRule(interaction.guildId, Number(interaction.values?.[0]));
+    if (!picker || !rule) {
+      await interaction.reply({ content: "That rule is no longer active. Reopen Remove Rule and try again.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    setGuardSession(interaction, { kind: "remove", ruleId: rule.id });
+    await interaction.update(guardRemoveConfirmPayload(rule));
+    return true;
+  }
+  if (action === "guard-remove-confirm") {
+    const session = getGuardSession(interaction, "remove");
+    const rule = session && guardStore.getRule(interaction.guildId, Number(session.ruleId));
+    if (!rule) {
+      clearGuardSession(interaction);
+      await interaction.update(await guardPage(interaction.guild, "That rule is no longer active."));
+      return true;
+    }
+    const removed = guardService.removeRule(interaction.guildId, rule.id);
+    clearGuardSession(interaction);
+    await interaction.update(await guardPage(interaction.guild, removed ? `Rule #${rule.id} was removed.` : "That rule is no longer active."));
+    return true;
+  }
+  if (action === "guard-condition-add" || action === "guard-condition-replace") {
+    const session = getGuardSession(interaction);
+    if (!session || !["add", "edit"].includes(session.kind)) {
+      await interaction.reply({ content: "That Guard rule form expired. Start again from Add Rule or Edit Rule.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "guard-condition-replace" && session.kind === "edit") {
+      session.conditions = [];
+      session.replaceConditions = true;
+    }
+    await interaction.update(guardConditionTypePayload(session));
+    return true;
+  }
+  if (action === "guard-condition-type") {
+    const session = getGuardSession(interaction);
+    const type = interaction.values?.[0];
+    if (!session || !["add", "edit"].includes(session.kind) || !guardService.CONDITION_TYPES.has(type) || session.conditions.length >= 5) {
+      await interaction.reply({ content: "That condition selection is no longer available. Reopen the Guard Manager and try again.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (["has_attachment", "has_image_attachment"].includes(type)) {
+      session.conditions.push({ type });
+      if (session.kind === "edit") session.replaceConditions = true;
+      await interaction.update(guardConditionsPayload(session));
+    } else {
+      session.pendingConditionType = type;
+      await interaction.showModal(conditionValueModal());
+    }
+    return true;
+  }
+  if (action === "guard-condition-value" && interaction.isModalSubmit?.()) {
+    const session = getGuardSession(interaction);
+    const type = session?.pendingConditionType;
+    const value = interaction.fields.getTextInputValue("value");
+    if (!session || !type || !value?.trim()) {
+      await interaction.reply({ content: "That Guard condition form expired or had no value. Start the rule again.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    session.conditions.push({ type, value: value.trim() });
+    session.pendingConditionType = null;
+    if (session.kind === "edit") session.replaceConditions = true;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.editReply(guardConditionsPayload(session));
+    return true;
+  }
+  if (action === "guard-condition-done") {
+    const session = getGuardSession(interaction);
+    if (!session || !["add", "edit"].includes(session.kind) || !session.conditions.length) {
+      await interaction.reply({ content: "Add at least one valid condition first.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await interaction.update(guardRuleDetailsPayload(session));
+    return true;
+  }
+  if (["guard-detail-reason", "guard-detail-mode", "guard-detail-action"].includes(action)) {
+    const session = getGuardSession(interaction);
+    const value = interaction.values?.[0];
+    if (!session || !["add", "edit"].includes(session.kind)) {
+      await interaction.reply({ content: "That Guard rule form expired. Start again from the Guard Manager.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "guard-detail-reason") session.category = value;
+    if (action === "guard-detail-mode") session.matchMode = value;
+    if (action === "guard-detail-action") session.action = value;
+    await interaction.update(guardRuleDetailsPayload(session));
+    return true;
+  }
+  if (action === "guard-detail-name") {
+    const session = getGuardSession(interaction);
+    if (!session || !["add", "edit"].includes(session.kind)) {
+      await interaction.reply({ content: "That Guard rule form expired. Start again from the Guard Manager.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await interaction.showModal(ruleNameModal(session.name));
+    return true;
+  }
+  if (action === "guard-rule-name" && interaction.isModalSubmit?.()) {
+    const session = getGuardSession(interaction);
+    if (!session || !["add", "edit"].includes(session.kind)) {
+      await interaction.reply({ content: "That Guard rule form expired. Start again from the Guard Manager.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    session.name = interaction.fields.getTextInputValue("name").trim() || null;
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.editReply(guardRuleDetailsPayload(session));
+    return true;
+  }
+  if (action === "guard-detail-save") {
+    const session = getGuardSession(interaction);
+    if (!session || !["add", "edit"].includes(session.kind)) {
+      await interaction.reply({ content: "That Guard rule form expired. Start again from the Guard Manager.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await saveGuardRule(interaction, session);
+    return true;
+  }
+  if (action === "guard-cancel" || action === "guard-condition-cancel") {
+    clearGuardSession(interaction);
+    await interaction.update(await guardPage(interaction.guild, "Guard Manager action cancelled."));
     return true;
   }
   if (action === "guard-history-open") {
@@ -347,6 +808,10 @@ module.exports = {
   mediaPage,
   guardPage,
   guardHistoryPayload,
+  ruleListPayload,
+  rulePickerPayload,
+  guardRuleDetailsPayload,
+  configureRequestedGuardReviewRoom,
   handleAdminRoomInteraction,
   refreshConfiguredAdminRooms,
   HISTORY_PAGE_SIZE,
