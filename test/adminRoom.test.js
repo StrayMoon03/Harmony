@@ -205,6 +205,148 @@ test("authorized controls open the existing Guard, history, Birthday, and commun
   }
 });
 
+test("Greetings Manager exposes current settings and edits only the selected setting", async () => {
+  const { guild, addChannel } = createGuild("greetings-manager-controls");
+  const panel = addChannel("greetings-admin-panel");
+  const oldChannel = addChannel("old-greeting-room");
+  const nextChannel = addChannel("new-greeting-room");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "greetings-panel-message", enabled: true });
+  greetingStore.saveGreetingSettings({
+    guildId: guild.id,
+    channelId: oldChannel.id,
+    entranceMessage: "Hello {member} in {server}.",
+    exitMessage: "Goodbye {name} from {server}.",
+  });
+  greetingStore.disableGreetingSettings(guild.id);
+
+  const open = guardInteraction(guild, "harmony-admin-room:greetings", { channelId: panel.id, message: { id: "greetings-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const payload = open.response;
+  assert.match(payload.embeds[0].data.title, /Greetings Manager/);
+  assert.match(payload.embeds[0].data.description, /Current Status:\*\* Off/);
+  assert.ok(payload.embeds[0].data.description.includes(`Greeting Channel:** <#${oldChannel.id}>`));
+  assert.match(payload.embeds[0].data.description, /Hello \{member\} in \{server\}/);
+  assert.match(payload.embeds[0].data.description, /Goodbye \{name\} from \{server\}/);
+  assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:greetings-channel-select"));
+  assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:greetings-preview"));
+  assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:greetings-test"));
+
+  const select = guardInteraction(guild, "harmony-admin-room:greetings-channel-select", { values: [nextChannel.id] });
+  await room.handleAdminRoomInteraction(select);
+  const saved = greetingStore.getGreetingSettings(guild.id);
+  assert.equal(saved.channel_id, nextChannel.id);
+  assert.equal(saved.enabled, 0, "changing the channel does not silently turn existing Off settings On");
+  assert.equal(saved.entrance_message, "Hello {member} in {server}.");
+  assert.equal(saved.exit_message, "Goodbye {name} from {server}.");
+});
+
+test("Greetings Manager configures a new channel, edits both message fields, and On/Off preserves configuration", async () => {
+  const { guild, addChannel } = createGuild("greetings-manager-enable");
+  const panel = addChannel("greetings-enable-panel");
+  const channel = addChannel("greetings-enable-room");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "greetings-enable-panel-message", enabled: true });
+
+  const open = guardInteraction(guild, "harmony-admin-room:greetings", { channelId: panel.id, message: { id: "greetings-enable-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.description, /Current Status:\*\* Not configured/);
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:greetings-channel-select", { values: [channel.id] }));
+  let saved = greetingStore.getGreetingSettings(guild.id);
+  assert.equal(saved.channel_id, channel.id);
+  assert.equal(saved.enabled, 1);
+
+  const entranceEdit = guardInteraction(guild, "harmony-admin-room:greetings-entrance-edit");
+  await room.handleAdminRoomInteraction(entranceEdit);
+  assert.match(entranceEdit.modal.data.title, /Entrance Message/);
+  const exitEdit = guardInteraction(guild, "harmony-admin-room:greetings-exit-edit");
+  await room.handleAdminRoomInteraction(exitEdit);
+  assert.match(exitEdit.modal.data.title, /Exit Message/);
+
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:greetings-entrance-submit", {
+    fields: { getTextInputValue: () => "Welcome {member} — {name} at {server}" },
+  }));
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:greetings-exit-submit", {
+    fields: { getTextInputValue: () => "Farewell {name}, from {server}" },
+  }));
+  saved = greetingStore.getGreetingSettings(guild.id);
+  assert.equal(saved.entrance_message, "Welcome {member} — {name} at {server}");
+  assert.equal(saved.exit_message, "Farewell {name}, from {server}");
+  assert.equal(saved.channel_id, channel.id);
+  assert.equal(saved.enabled, 1);
+
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:greetings-toggle"));
+  saved = greetingStore.getGreetingSettings(guild.id);
+  assert.equal(saved.enabled, 0);
+  assert.equal(saved.channel_id, channel.id);
+  assert.equal(saved.entrance_message, "Welcome {member} — {name} at {server}");
+  assert.equal(saved.exit_message, "Farewell {name}, from {server}");
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:greetings-toggle"));
+  assert.equal(greetingStore.getGreetingSettings(guild.id).enabled, 1);
+  assert.equal(greetingStore.getGreetingSettings(guild.id).channel_id, channel.id);
+});
+
+test("Greetings preview is private and non-pinging; Send Test keeps Administrator permission parity", async () => {
+  const { guild, addChannel } = createGuild("greetings-manager-preview");
+  guild.name = "Youtiful Stay";
+  const panel = addChannel("greetings-preview-panel");
+  const channel = addChannel("greetings-preview-room");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "greetings-preview-panel-message", enabled: true });
+  greetingStore.saveGreetingSettings({
+    guildId: guild.id,
+    channelId: channel.id,
+    entranceMessage: "Welcome {member} ({name}) to {server}!",
+    exitMessage: "Goodbye {name} from {server}.",
+  });
+
+  const open = guardInteraction(guild, "harmony-admin-room:greetings", { channelId: panel.id, message: { id: "greetings-preview-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const preview = guardInteraction(guild, "harmony-admin-room:greetings-preview", { member: { displayName: "Test Admin" } });
+  await room.handleAdminRoomInteraction(preview);
+  assert.equal(preview.response.flags, 64);
+  assert.match(preview.response.content, /Welcome <@guard-admin> \(Test Admin\) to Youtiful Stay/);
+  assert.equal(preview.response.allowedMentions.parse.length, 0);
+
+  const sendTest = guardInteraction(guild, "harmony-admin-room:greetings-test", {
+    memberPermissions: { has: (permission) => permission === PermissionFlagsBits.Administrator },
+    member: { displayName: "Test Admin" },
+  });
+  await room.handleAdminRoomInteraction(sendTest);
+  assert.equal(channel.sent.length, 1);
+  assert.equal(channel.sent[0].payload.content, "Welcome <@guard-admin> (Test Admin) to Youtiful Stay!");
+  assert.deepEqual(channel.sent[0].payload.allowedMentions, { users: ["guard-admin"] });
+  assert.match(sendTest.response.content, /Test delivered successfully/);
+
+  const manageGuildOnly = { has: (permission) => permission === PermissionFlagsBits.ManageGuild };
+  const managerOpen = guardInteraction(guild, "harmony-admin-room:greetings", {
+    channelId: panel.id,
+    message: { id: "greetings-preview-panel-message" },
+    memberPermissions: manageGuildOnly,
+  });
+  await room.handleAdminRoomInteraction(managerOpen);
+  assert.ok(!managerOpen.response.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:greetings-test"));
+  const forgedTest = guardInteraction(guild, "harmony-admin-room:greetings-test", { memberPermissions: manageGuildOnly });
+  await room.handleAdminRoomInteraction(forgedTest);
+  assert.match(forgedTest.response.content, /server owner or an Administrator/);
+  assert.equal(channel.sent.length, 1);
+});
+
+test("Greetings controls reject stale Admin Controls sessions and leave slash command definition intact", async () => {
+  const { guild, addChannel } = createGuild("greetings-manager-stale");
+  const panel = addChannel("greetings-stale-panel");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "greetings-current-panel", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:greetings", { channelId: panel.id, message: { id: "greetings-current-panel" } });
+  await room.handleAdminRoomInteraction(open);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "greetings-replaced-panel", enabled: true });
+  const stale = guardInteraction(guild, "harmony-admin-room:greetings-toggle");
+  await room.handleAdminRoomInteraction(stale);
+  assert.match(stale.response.content, /panel that is no longer active/i);
+
+  const greetingsCommand = require("../src/commands/greetings");
+  const schema = greetingsCommand.data.toJSON();
+  assert.equal(schema.name, "harmony-greetings");
+  assert.deepEqual(schema.options.map((option) => option.name), ["setup", "preview", "test", "off"]);
+  assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
+});
+
 function guardInteraction(guild, customId, extra = {}) {
   const interaction = {
     guild,
