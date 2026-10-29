@@ -31,6 +31,75 @@ function normalizeDiscordUsername(value) {
     .toLocaleLowerCase();
 }
 
+function mentionAliases(member) {
+  return [member.displayName, member.user?.globalName, member.user?.username]
+    .map((value) => String(value || "").trim())
+    .filter((value) => value && !value.includes("@"));
+}
+
+async function buildReleaseMessagePayload(guild, template, values, primaryUserId) {
+  const content = renderWelcomePassReleaseMessage(template, values);
+  const users = new Set([String(primaryUserId)]);
+
+  // A configured @name is converted only when it exactly identifies one
+  // current, non-bot member. If member data is unavailable or ambiguous, the
+  // text stays untouched and cannot ping anyone.
+  let members = guild.members.cache;
+  if (String(template || "").includes("@")) {
+    members = await guild.members.fetch().catch(() => guild.members.cache);
+  }
+  const aliases = new Map();
+  for (const member of members?.values?.() || []) {
+    if (!member?.id || member.user?.bot) continue;
+    for (const alias of mentionAliases(member)) {
+      const key = alias.toLocaleLowerCase();
+      if (!aliases.has(key)) aliases.set(key, new Set());
+      aliases.get(key).add(String(member.id));
+    }
+  }
+
+  // Existing literal Discord user mention markup is permitted only when it
+  // targets a member in this guild. Role mention markup is deliberately not
+  // included. The explicit parse: [] below blocks @everyone/@here/roles.
+  const knownUserIds = new Set(
+    [...(members?.values?.() || [])].map((member) => String(member.id))
+  );
+  const output = [];
+  const mentionPattern = /<@!?(\d{17,20})>/g;
+  let cursor = 0;
+  let match;
+  while ((match = mentionPattern.exec(content))) {
+    output.push(renderConfiguredNameMentions(content.slice(cursor, match.index), aliases, users));
+    output.push(match[0]);
+    if (knownUserIds.has(match[1])) users.add(match[1]);
+    cursor = match.index + match[0].length;
+  }
+  output.push(renderConfiguredNameMentions(content.slice(cursor), aliases, users));
+
+  return {
+    content: output.join(""),
+    allowedMentions: { parse: [], users: [...users] },
+  };
+}
+
+function renderConfiguredNameMentions(text, aliases, users) {
+  const names = [...aliases.keys()]
+    .filter((name) => !["everyone", "here"].includes(name))
+    .sort((a, b) => b.length - a.length);
+  if (!names.length || !text.includes("@")) return text;
+
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const alternatives = names.map(escapeRegex).join("|");
+  const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_<])@(${alternatives})(?=$|[^\\p{L}\\p{N}_])`, "giu");
+  return text.replace(pattern, (whole, prefix, name) => {
+    const matchingIds = aliases.get(name.toLocaleLowerCase());
+    if (!matchingIds || matchingIds.size !== 1) return whole;
+    const [id] = matchingIds;
+    users.add(id);
+    return `${prefix}<@${id}>`;
+  });
+}
+
 function validateWelcomePassRole(guild, role) {
   if (!role || role.managed || role.id === guild.id) {
     throw new Error("Please choose a normal server role, not an integration role or @everyone.");
@@ -252,18 +321,17 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
       member.displayName ||
       member.user.globalName ||
       member.user.username;
-    const releaseContent = renderWelcomePassReleaseMessage(
+    const releasePayload = await buildReleaseMessagePayload(
+      guild,
       settings.release_message,
       {
         memberMention: "<@" + member.id + ">",
         memberName,
         serverName: guild.name,
-      }
+      },
+      member.id
     );
-    await releaseChannel.send({
-      content: releaseContent,
-      allowedMentions: { users: [member.id] },
-    });
+    await releaseChannel.send(releasePayload);
   }
 
   const adminChannel = await fetchTextChannel(guild, settings.channel_id);
@@ -321,18 +389,17 @@ async function handleManualWelcomePassRoleAdded(
       newMember.displayName ||
       newMember.user.globalName ||
       newMember.user.username;
-    const releaseContent = renderWelcomePassReleaseMessage(
+    const releasePayload = await buildReleaseMessagePayload(
+      newMember.guild,
       settings.release_message,
       {
         memberMention: "<@" + newMember.id + ">",
         memberName,
         serverName: newMember.guild.name,
-      }
+      },
+      newMember.id
     );
-    await releaseChannel.send({
-      content: releaseContent,
-      allowedMentions: { users: [newMember.id] },
-    });
+    await releaseChannel.send(releasePayload);
   }
 
   const adminChannel = await fetchTextChannel(
