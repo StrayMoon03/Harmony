@@ -11,6 +11,7 @@ process.env.HARMONY_DB_PATH = path.join(tempDir, "admin-room.sqlite");
 const { getDb, closeDb } = require("../src/db/sqlite");
 const roomStore = require("../src/stores/adminRoomStore");
 const guardStore = require("../src/stores/communityGuardStore");
+const welcomePassStore = require("../src/stores/welcomePassStore");
 const room = require("../src/services/adminRoomService");
 const { managerPanelComponents } = require("../src/services/eventSchedulerService");
 
@@ -22,10 +23,12 @@ function permissionSet(allowed = true) {
 
 function createGuild(guildId = "admin-room-guild") {
   const channelsById = new Map();
+  const rolesById = new Map();
   const guild = {
     id: guildId,
     ownerId: "owner-id",
-    members: { me: { id: "bot-id" } },
+    members: { me: { id: "bot-id", permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } } },
+    roles: { cache: rolesById, fetch: async (id) => rolesById.get(id) || null },
     channels: {
       cache: channelsById,
       fetch: async (id) => channelsById.get(id) || null,
@@ -56,11 +59,17 @@ function createGuild(guildId = "admin-room-guild") {
     channelsById.set(id, channel);
     return channel;
   }
-  return { guild, addChannel };
+  function addRole(id, name = id, extra = {}) {
+    const role = { id, name, managed: false, ...extra };
+    rolesById.set(id, role);
+    return role;
+  }
+  return { guild, addChannel, addRole };
 }
 
-function client() {
-  return { isReady: () => true, user: { id: "bot-id" }, ws: { ping: 25 }, listenerCount: () => 1 };
+function client(guild = null) {
+  const cache = new Map(guild ? [[guild.id, guild]] : []);
+  return { isReady: () => true, user: { id: "bot-id" }, ws: { ping: 25 }, listenerCount: () => 1, guilds: { cache, fetch: async (id) => cache.get(id) || null } };
 }
 
 function setupInteraction({ guild, channel, action = "install" }) {
@@ -71,7 +80,7 @@ function setupInteraction({ guild, channel, action = "install" }) {
     guildId: guild.id,
     user: { id: "admin-id" },
     memberPermissions: permissionSet(true),
-    client: client(),
+    client: client(guild),
     options: {
       getSubcommand: () => action,
       getChannel: () => channel,
@@ -199,7 +208,7 @@ function guardInteraction(guild, customId, extra = {}) {
     channelId: "ephemeral-channel",
     user: { id: "guard-admin" },
     memberPermissions: permissionSet(true),
-    client: client(),
+    client: client(guild),
     customId,
     values: [],
     response: null,
@@ -344,6 +353,152 @@ test("requested Guard Review Room is seeded only when no room exists and never o
   assert.equal(next.channelId, "admin-selected-room");
   assert.equal(next.changed, false);
   assert.equal(guardStore.getSettings(guildId).channel_id, "admin-selected-room");
+});
+
+test("Welcome Pass controls update one setting at a time, toggle mode, and edit the template", async () => {
+  const { guild, addChannel, addRole } = createGuild("welcome-manager-controls");
+  const role = addRole("stay-role", "STAY");
+  const alerts = addChannel("private-alerts");
+  const memberRoom = addChannel("member-room");
+  const nextAlerts = addChannel("new-alerts");
+  const activePanel = addChannel("admin-panel-channel");
+  roomStore.savePanel({ guildId: guild.id, channelId: activePanel.id, messageId: "welcome-panel", enabled: true });
+  welcomePassStore.saveWelcomePassSettings({
+    guildId: guild.id,
+    roleId: role.id,
+    channelId: alerts.id,
+    releaseChannelId: memberRoom.id,
+    releaseMessage: "Welcome {member} to {server}!",
+  });
+  welcomePassStore.setWelcomePassGrantMode(guild.id, "manual");
+
+  const open = guardInteraction(guild, "harmony-admin-room:welcome", {
+    channelId: activePanel.id,
+    message: { id: "welcome-panel" },
+  });
+  await room.handleAdminRoomInteraction(open);
+  assert.equal(open.response.flags, 64);
+  assert.match(open.response.embeds[0].data.description, /Status:\*\* Configured/);
+  assert.match(open.response.embeds[0].data.description, /Approved Role:\*\* @STAY/);
+  assert.match(open.response.embeds[0].data.description, /Grant Mode:\*\* manual/);
+  const controls = open.response.components.flatMap((row) => row.components).map((component) => component.data.custom_id);
+  for (const id of ["welcome-role", "welcome-private", "welcome-member", "welcome-message", "welcome-mode"]) {
+    assert.ok(controls.includes(`harmony-admin-room:${id}`));
+  }
+
+  const rolePicker = guardInteraction(guild, "harmony-admin-room:welcome-role");
+  await room.handleAdminRoomInteraction(rolePicker);
+  assert.ok(rolePicker.response.components[0].components[0].toJSON().custom_id.includes("welcome-role-select"));
+  const roleSelect = guardInteraction(guild, "harmony-admin-room:welcome-role-select", { values: [role.id] });
+  await room.handleAdminRoomInteraction(roleSelect);
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id).channel_id, alerts.id);
+
+  const openChannel = guardInteraction(guild, "harmony-admin-room:welcome-private");
+  await room.handleAdminRoomInteraction(openChannel);
+  assert.equal(openChannel.response.components[0].components[0].data.channel_types[0], ChannelType.GuildText);
+  const selectChannel = guardInteraction(guild, "harmony-admin-room:welcome-private-select", { values: [nextAlerts.id] });
+  await room.handleAdminRoomInteraction(selectChannel);
+  let saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.channel_id, nextAlerts.id);
+  assert.equal(saved.role_id, role.id);
+  assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.release_message, "Welcome {member} to {server}!");
+  assert.equal(saved.grant_mode, "manual");
+
+  const toggle = guardInteraction(guild, "harmony-admin-room:welcome-mode");
+  await room.handleAdminRoomInteraction(toggle);
+  saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.grant_mode, "automatic");
+  assert.equal(saved.channel_id, nextAlerts.id);
+
+  const message = guardInteraction(guild, "harmony-admin-room:welcome-message");
+  await room.handleAdminRoomInteraction(message);
+  assert.match(message.modal.data.title, /Edit Welcome Pass Message/);
+  const submit = guardInteraction(guild, "harmony-admin-room:welcome-message-submit", {
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: () => "Congratulations, {member}! Welcome to {server}." },
+  });
+  await room.handleAdminRoomInteraction(submit);
+  saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.release_message, "Congratulations, {member}! Welcome to {server}.");
+  assert.equal(saved.role_id, role.id);
+  assert.equal(saved.channel_id, nextAlerts.id);
+  assert.equal(saved.release_channel_id, memberRoom.id);
+
+  const back = guardInteraction(guild, "harmony-admin-room:welcome:ephemeral");
+  await room.handleAdminRoomInteraction(back);
+  assert.match(back.response.embeds[0].data.title, /Welcome Pass Manager/);
+});
+
+test("Welcome Pass can be set up through selectors without partially saving or clearing existing settings", async () => {
+  const { guild, addChannel, addRole } = createGuild("welcome-manager-first-setup");
+  const role = addRole("new-stay-role", "STAY");
+  const alerts = addChannel("setup-alerts");
+  const memberRoom = addChannel("setup-members");
+  const panelChannel = addChannel("setup-admin-panel");
+  roomStore.savePanel({ guildId: guild.id, channelId: panelChannel.id, messageId: "setup-panel", enabled: true });
+
+  const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panelChannel.id, message: { id: "setup-panel" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.description, /Setup needed/);
+
+  const rolePicker = guardInteraction(guild, "harmony-admin-room:welcome-role");
+  await room.handleAdminRoomInteraction(rolePicker);
+  const roleSelect = guardInteraction(guild, "harmony-admin-room:welcome-role-select", { values: [role.id] });
+  await room.handleAdminRoomInteraction(roleSelect);
+  assert.match(roleSelect.response.embeds[0].data.description, /Private Alert Channel, Public\/Member Channel/);
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null, "incomplete setup remains session-only");
+
+  const privatePicker = guardInteraction(guild, "harmony-admin-room:welcome-private");
+  await room.handleAdminRoomInteraction(privatePicker);
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:welcome-private-select", { values: [alerts.id] }));
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null);
+
+  const memberPicker = guardInteraction(guild, "harmony-admin-room:welcome-member");
+  await room.handleAdminRoomInteraction(memberPicker);
+  const memberSelect = guardInteraction(guild, "harmony-admin-room:welcome-member-select", { values: [memberRoom.id] });
+  await room.handleAdminRoomInteraction(memberSelect);
+  const saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.role_id, role.id);
+  assert.equal(saved.channel_id, alerts.id);
+  assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.grant_mode, "automatic");
+});
+
+test("Welcome Pass unauthorized controls are rejected and unfinished setup can be discarded", async () => {
+  const { guild, addChannel } = createGuild("welcome-manager-auth");
+  const channel = addChannel("welcome-auth-panel");
+  roomStore.savePanel({ guildId: guild.id, channelId: channel.id, messageId: "welcome-auth-message", enabled: true });
+  const start = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: channel.id, message: { id: "welcome-auth-message" } });
+  await room.handleAdminRoomInteraction(start);
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:welcome-role"));
+  let response;
+  await room.handleAdminRoomInteraction({
+    ...guardInteraction(guild, "harmony-admin-room:welcome-role-select", { values: ["forged-role"] }),
+    memberPermissions: permissionSet(false),
+    reply: async (payload) => { response = payload; },
+  });
+  assert.match(response.content, /authorized server admins/i);
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null);
+
+  const cancel = guardInteraction(guild, "harmony-admin-room:welcome-cancel");
+  await room.handleAdminRoomInteraction(cancel);
+  assert.match(cancel.response.embeds[0].data.description, /selections were discarded/i);
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null);
+});
+
+test("Welcome Pass ephemeral navigation is rejected after its source Admin Controls panel moves", async () => {
+  const { guild, addChannel } = createGuild("welcome-manager-stale-navigation");
+  const oldChannel = addChannel("old-admin-room");
+  roomStore.savePanel({ guildId: guild.id, channelId: oldChannel.id, messageId: "old-admin-panel", enabled: true });
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:welcome", {
+    channelId: oldChannel.id,
+    message: { id: "old-admin-panel" },
+  }));
+  roomStore.savePanel({ guildId: guild.id, channelId: "new-admin-room", messageId: "new-admin-panel", enabled: true });
+  const back = guardInteraction(guild, "harmony-admin-room:welcome:ephemeral");
+  await room.handleAdminRoomInteraction(back);
+  assert.match(back.response.content, /no longer active/i);
 });
 
 test("a moved or disabled panel cannot launch Admin Room workflows", async () => {

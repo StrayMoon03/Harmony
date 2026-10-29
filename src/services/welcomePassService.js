@@ -6,7 +6,10 @@ const {
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
   renderWelcomePassReleaseMessage,
+  saveWelcomePassSettings,
+  updateWelcomePassSetting: updateStoredWelcomePassSetting,
 } = require("../stores/welcomePassStore");
+const { ChannelType, PermissionFlagsBits } = require("discord.js");
 const {
   attachWelcomePassBirthdayProfile,
 } = require("../stores/birthdayStore");
@@ -25,6 +28,58 @@ function normalizeDiscordUsername(value) {
     .trim()
     .replace(/^@/, "")
     .toLocaleLowerCase();
+}
+
+function validateWelcomePassRole(guild, role) {
+  if (!role || role.managed || role.id === guild.id) {
+    throw new Error("Please choose a normal server role, not an integration role or @everyone.");
+  }
+  const harmony = guild.members.me;
+  if (!harmony.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    throw new Error("Harmony needs the **Manage Roles** permission before it can grant STAY.");
+  }
+  if (harmony.roles.highest.comparePositionTo(role) <= 0) {
+    throw new Error(`Move Harmony’s bot role above **${role.name}** in Server Settings → Roles, then try again.`);
+  }
+  return role;
+}
+
+async function configureWelcomePass(client, settings) {
+  const guild = client.guilds.cache.get(settings.guildId) ||
+    await client.guilds.fetch(settings.guildId).catch(() => null);
+  if (!guild) throw new Error("Harmony could not find this server.");
+  const role = guild.roles.cache.get(settings.roleId) || await guild.roles.fetch(settings.roleId).catch(() => null);
+  validateWelcomePassRole(guild, role);
+  for (const [id, label] of [[settings.channelId, "private alert"], [settings.releaseChannelId, "member"]]) {
+    const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
+    if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
+      throw new Error(`Choose a server text channel for the ${label} channel.`);
+    }
+  }
+  saveWelcomePassSettings(settings);
+  await assignAllApprovedWelcomePasses(client);
+}
+
+async function updateWelcomePassSetting(client, guildId, field, value) {
+  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", releaseMessage: "release_message" }[field];
+  if (!property) throw new Error("Invalid Welcome Pass setting.");
+  const settings = getWelcomePassSettings(guildId);
+  if (!settings) throw new Error("Complete Welcome Pass setup before changing individual settings.");
+  const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
+  if (!guild) throw new Error("Harmony could not find this server.");
+  if (field === "roleId") {
+    const role = guild.roles.cache.get(value) || await guild.roles.fetch(value).catch(() => null);
+    validateWelcomePassRole(guild, role);
+  } else if (["channelId", "releaseChannelId"].includes(field)) {
+    const channel = guild.channels.cache.get(value) || await guild.channels.fetch(value).catch(() => null);
+    if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
+      throw new Error("Choose a text channel in this server.");
+    }
+  }
+  const changed = updateStoredWelcomePassSetting(guildId, field, value);
+  if (!changed) throw new Error("Welcome Pass setup changed before this update could be saved.");
+  await assignAllApprovedWelcomePasses(client);
+  return getWelcomePassSettings(guildId);
 }
 
 async function notifyDiscordUsernameIssue(
@@ -295,6 +350,9 @@ async function assignAllApprovedWelcomePasses(client) {
 
 module.exports = {
   autoLinkWelcomePassByDiscordUsername,
+  validateWelcomePassRole,
+  configureWelcomePass,
+  updateWelcomePassSetting,
   assignApprovedWelcomePass,
   handleManualWelcomePassRoleAdded,
   assignAllApprovedWelcomePasses,

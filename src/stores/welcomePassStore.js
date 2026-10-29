@@ -57,6 +57,25 @@ function getWelcomePassSettings(guildId) {
   ).get(guildId) || null;
 }
 
+function updateWelcomePassSetting(guildId, field, value) {
+  const columns = {
+    roleId: "role_id",
+    channelId: "channel_id",
+    releaseChannelId: "release_channel_id",
+    releaseMessage: "release_message",
+  };
+  const column = columns[field];
+  if (!column) throw new Error("Invalid Welcome Pass setting.");
+  const nextValue = field === "releaseMessage"
+    ? (String(value || "").trim() || DEFAULT_RELEASE_MESSAGE)
+    : String(value || "").trim();
+  if (!nextValue) throw new Error("Choose a valid Welcome Pass setting.");
+  return Number(getDb().prepare(`
+    UPDATE welcome_pass_settings SET ${column} = ?, updated_at = ?
+    WHERE guild_id = ?
+  `).run(nextValue, new Date().toISOString(), guildId).changes) > 0;
+}
+
 function listWelcomePassSettings() {
   return getDb().prepare(
     "SELECT * FROM welcome_pass_settings ORDER BY guild_id"
@@ -167,6 +186,7 @@ module.exports = {
   renderWelcomePassReleaseMessage,
   saveWelcomePassSettings,
   getWelcomePassSettings,
+  updateWelcomePassSetting,
   listWelcomePassSettings,
   setWelcomePassGrantMode,
   linkWelcomePassCode,
