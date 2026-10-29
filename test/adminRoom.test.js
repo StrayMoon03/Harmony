@@ -13,6 +13,7 @@ const roomStore = require("../src/stores/adminRoomStore");
 const guardStore = require("../src/stores/communityGuardStore");
 const welcomePassStore = require("../src/stores/welcomePassStore");
 const greetingStore = require("../src/stores/greetingStore");
+const memberCountStore = require("../src/stores/memberCountStore");
 const { renderGreetingMessage } = greetingStore;
 const { renderWelcomePassReleaseMessage } = welcomePassStore;
 const room = require("../src/services/adminRoomService");
@@ -31,11 +32,21 @@ function createGuild(guildId = "admin-room-guild") {
   const guild = {
     id: guildId,
     ownerId: "owner-id",
-    members: { me: { id: "bot-id", permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } } },
-    roles: { cache: rolesById, fetch: async (id) => rolesById.get(id) || null },
+    members: {
+      me: { id: "bot-id", permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } },
+      fetch: async () => new Map(),
+    },
+    roles: { cache: rolesById, everyone: { id: guildId }, fetch: async (id) => rolesById.get(id) || null },
     channels: {
       cache: channelsById,
       fetch: async (id) => channelsById.get(id) || null,
+      create: async (options) => {
+        const channel = addChannel(`created-${channelsById.size + 1}`);
+        channel.name = options.name;
+        channel.type = options.type;
+        channel.parentId = options.parent || null;
+        return channel;
+      },
     },
   };
   function addChannel(id) {
@@ -43,6 +54,8 @@ function createGuild(guildId = "admin-room-guild") {
     const channel = {
       id,
       guildId: guild.id,
+      name: id,
+      parentId: null,
       type: ChannelType.GuildText,
       isTextBased: () => true,
       permissionsFor: () => ({ has: () => true }),
@@ -58,6 +71,9 @@ function createGuild(guildId = "admin-room-guild") {
         sent.push(message);
         return message;
       },
+      setName: async (name) => { channel.name = name; return channel; },
+      setParent: async (parent) => { channel.parentId = parent.id; return channel; },
+      setPosition: async () => channel,
       sent,
     };
     channelsById.set(id, channel);
@@ -347,6 +363,150 @@ test("Greetings controls reject stale Admin Controls sessions and leave slash co
   assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
 });
 
+test("Member Counts Manager reads current configuration and opening it never creates or refreshes counters", async () => {
+  const { guild, addChannel } = createGuild("member-count-manager-read-only-open");
+  const panel = addChannel("member-count-admin-panel");
+  const before = guild.channels.cache.size;
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-panel-message", enabled: true });
+
+  const open = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.equal(open.response.flags, 64);
+  assert.match(open.response.embeds[0].data.title, /Member Counts Manager/);
+  assert.match(open.response.embeds[0].data.description, /Current Status:\*\* Not configured/);
+  assert.match(open.response.embeds[0].data.description, /Configured STAY role:\*\* Not selected/);
+  assert.equal(guild.channels.cache.size, before);
+  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
+  const components = open.response.components.flatMap((row) => row.components);
+  assert.ok(components.some((item) => item.data.custom_id === "harmony-admin-room:members-role-select"));
+  assert.ok(components.some((item) => item.data.custom_id === "harmony-admin-room:members-refresh" && item.data.disabled));
+});
+
+test("Member Counts setup uses the existing service, rejects @everyone, and reports refreshed totals privately", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-manager-setup");
+  const panel = addChannel("member-count-setup-panel");
+  const stayRole = addRole("stay-role", "STAY");
+  guild.members.fetch = async () => new Map([
+    ["human-with-role", { user: { bot: false }, roles: { cache: { has: (id) => id === stayRole.id } } }],
+    ["human-without-role", { user: { bot: false }, roles: { cache: { has: () => false } } }],
+    ["bot-member", { user: { bot: true }, roles: { cache: { has: () => false } } }],
+  ]);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-setup-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-setup-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const before = guild.channels.cache.size;
+
+  const everyone = guardInteraction(guild, "harmony-admin-room:members-role-select", { values: [guild.id] });
+  await room.handleAdminRoomInteraction(everyone);
+  assert.match(everyone.response.content, /other than @everyone/);
+  assert.equal(guild.channels.cache.size, before);
+
+  const setup = guardInteraction(guild, "harmony-admin-room:members-role-select", { values: [stayRole.id] });
+  await room.handleAdminRoomInteraction(setup);
+  const saved = memberCountStore.getMemberCountSettings(guild.id);
+  assert.equal(saved.role_id, stayRole.id);
+  assert.equal(saved.enabled, 1);
+  assert.ok(saved.category_id);
+  assert.ok(saved.total_channel_id);
+  assert.ok(saved.stay_channel_id);
+  assert.ok(saved.no_role_channel_id);
+  assert.equal(guild.channels.cache.size, before + 4, "setup creates one category and three counters");
+  assert.match(setup.response.embeds[0].data.description, /Total members: \*\*2\*\* · STAY members: \*\*1\*\* · No STAY role: \*\*1\*\*/);
+
+  const refresh = guardInteraction(guild, "harmony-admin-room:members-refresh");
+  await room.handleAdminRoomInteraction(refresh);
+  assert.equal(refresh.deferred.flags, 64);
+  assert.match(refresh.response, /\*\*2\*\* total members, \*\*1\*\* with the STAY role, and \*\*1\*\* without it/);
+});
+
+test("Member Counts explicit setup reuses existing counters and changing role does not duplicate channels", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-manager-reuse");
+  const panel = addChannel("member-count-reuse-panel");
+  const category = addChannel("existing-counter-category");
+  category.type = ChannelType.GuildCategory;
+  const total = addChannel("existing-total-counter");
+  total.type = ChannelType.GuildVoice;
+  total.parentId = category.id;
+  const stay = addChannel("existing-stay-counter");
+  stay.type = ChannelType.GuildVoice;
+  stay.parentId = category.id;
+  const noRole = addChannel("existing-no-role-counter");
+  noRole.type = ChannelType.GuildVoice;
+  noRole.parentId = category.id;
+  const role = addRole("old-stay-role", "Old STAY");
+  const newRole = addRole("new-stay-role", "New STAY");
+  memberCountStore.saveMemberCountSettings({ guildId: guild.id, roleId: role.id, categoryId: category.id, totalChannelId: total.id, stayChannelId: stay.id, noRoleChannelId: noRole.id });
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-reuse-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-reuse-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const before = guild.channels.cache.size;
+  const setup = guardInteraction(guild, "harmony-admin-room:members-role-select", { values: [newRole.id] });
+  await room.handleAdminRoomInteraction(setup);
+  const saved = memberCountStore.getMemberCountSettings(guild.id);
+  assert.equal(saved.role_id, newRole.id);
+  assert.equal(saved.category_id, category.id);
+  assert.equal(saved.total_channel_id, total.id);
+  assert.equal(saved.stay_channel_id, stay.id);
+  assert.equal(saved.no_role_channel_id, noRole.id);
+  assert.equal(guild.channels.cache.size, before, "selecting a role updates the role and reuses intact saved channels");
+});
+
+test("Member Counts On/Off preserves setup and re-enables saved counters without recreation", async () => {
+  const { guild, addChannel } = createGuild("member-count-manager-toggle");
+  const panel = addChannel("member-count-toggle-panel");
+  const channels = [addChannel("count-category"), addChannel("count-total"), addChannel("count-stay"), addChannel("count-no-role")];
+  memberCountStore.saveMemberCountSettings({ guildId: guild.id, roleId: "stay-role-toggle", categoryId: channels[0].id, totalChannelId: channels[1].id, stayChannelId: channels[2].id, noRoleChannelId: channels[3].id });
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-toggle-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-toggle-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.description, /Current Status:\*\* On/);
+  const before = guild.channels.cache.size;
+
+  const off = guardInteraction(guild, "harmony-admin-room:members-toggle");
+  await room.handleAdminRoomInteraction(off);
+  let saved = memberCountStore.getMemberCountSettings(guild.id);
+  assert.equal(saved.enabled, 0);
+  assert.deepEqual([saved.category_id, saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map((channel) => channel.id));
+  assert.equal(guild.channels.cache.size, before);
+
+  const on = guardInteraction(guild, "harmony-admin-room:members-toggle");
+  await room.handleAdminRoomInteraction(on);
+  saved = memberCountStore.getMemberCountSettings(guild.id);
+  assert.equal(saved.enabled, 1);
+  assert.deepEqual([saved.category_id, saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map((channel) => channel.id));
+  assert.equal(guild.channels.cache.size, before, "re-enabling changes only the saved enabled flag");
+});
+
+test("Member Counts setup preserves the bot Manage Channels permission check and stale Admin panel protection", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-manager-protection");
+  const panel = addChannel("member-count-protection-panel");
+  const role = addRole("stay-role-protection", "STAY");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-protection-panel-message", enabled: true });
+  const noPermission = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-protection-panel-message" } });
+  await room.handleAdminRoomInteraction(noPermission);
+  guild.members.me.permissions.has = (permission) => permission !== PermissionFlagsBits.ManageChannels;
+  const denied = guardInteraction(guild, "harmony-admin-room:members-role-select", { values: [role.id] });
+  await room.handleAdminRoomInteraction(denied);
+  assert.match(denied.response.content, /needs \*\*Manage Channels\*\*/);
+  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
+
+  guild.members.me.permissions.has = () => true;
+  const staleOpen = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-protection-panel-message" } });
+  await room.handleAdminRoomInteraction(staleOpen);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-replaced-panel", enabled: true });
+  const stale = guardInteraction(guild, "harmony-admin-room:members-toggle");
+  await room.handleAdminRoomInteraction(stale);
+  assert.match(stale.response.content, /panel that is no longer active/i);
+});
+
+test("/harmony-member-counts slash command remains registered with its existing subcommands and permissions", () => {
+  const command = require("../src/commands/memberCounts");
+  const schema = command.data.toJSON();
+  assert.equal(schema.name, "harmony-member-counts");
+  assert.deepEqual(schema.options.map((option) => option.name), ["setup", "refresh", "status", "off"]);
+  assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
+});
+
 function guardInteraction(guild, customId, extra = {}) {
   const interaction = {
     guild,
@@ -360,7 +520,8 @@ function guardInteraction(guild, customId, extra = {}) {
     response: null,
     update: async (payload) => { interaction.response = payload; return payload; },
     reply: async (payload) => { interaction.response = payload; return payload; },
-    deferReply: async () => { interaction.deferred = true; },
+    deferReply: async (payload) => { interaction.deferred = payload || true; },
+    deferUpdate: async () => { interaction.deferredUpdate = true; },
     editReply: async (payload) => { interaction.response = payload; return payload; },
     showModal: async (modal) => { interaction.modal = modal; },
     ...extra,
