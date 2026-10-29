@@ -5,6 +5,7 @@ const {
   linkWelcomePassCode,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
+  getPendingWelcomePassAssignmentForMember,
   renderWelcomePassReleaseMessage,
   saveWelcomePassSettings,
   updateWelcomePassSetting: updateStoredWelcomePassSetting,
@@ -44,13 +45,23 @@ function validateWelcomePassRole(guild, role) {
   return role;
 }
 
+function resolveWelcomePassEntryChannelId(welcomePassSettings, greetingSettings) {
+  return welcomePassSettings?.entry_channel_id || greetingSettings?.channel_id || null;
+}
+
+function resolveWelcomePassEntryMessage(welcomePassSettings, greetingSettings) {
+  return welcomePassSettings?.entry_message || greetingSettings?.entrance_message || null;
+}
+
 async function configureWelcomePass(client, settings) {
   const guild = client.guilds.cache.get(settings.guildId) ||
     await client.guilds.fetch(settings.guildId).catch(() => null);
   if (!guild) throw new Error("Harmony could not find this server.");
   const role = guild.roles.cache.get(settings.roleId) || await guild.roles.fetch(settings.roleId).catch(() => null);
   validateWelcomePassRole(guild, role);
-  for (const [id, label] of [[settings.channelId, "private alert"], [settings.releaseChannelId, "member"]]) {
+  const channels = [[settings.channelId, "private alert"], [settings.releaseChannelId, "member"]];
+  if (settings.entryChannelId) channels.push([settings.entryChannelId, "Welcome Pass entry"]);
+  for (const [id, label] of channels) {
     const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
     if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
       throw new Error(`Choose a server text channel for the ${label} channel.`);
@@ -61,7 +72,7 @@ async function configureWelcomePass(client, settings) {
 }
 
 async function updateWelcomePassSetting(client, guildId, field, value) {
-  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", releaseMessage: "release_message" }[field];
+  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", entryChannelId: "entry_channel_id", entryMessage: "entry_message", releaseMessage: "release_message" }[field];
   if (!property) throw new Error("Invalid Welcome Pass setting.");
   const settings = getWelcomePassSettings(guildId);
   if (!settings) throw new Error("Complete Welcome Pass setup before changing individual settings.");
@@ -70,7 +81,7 @@ async function updateWelcomePassSetting(client, guildId, field, value) {
   if (field === "roleId") {
     const role = guild.roles.cache.get(value) || await guild.roles.fetch(value).catch(() => null);
     validateWelcomePassRole(guild, role);
-  } else if (["channelId", "releaseChannelId"].includes(field)) {
+  } else if (["channelId", "releaseChannelId", "entryChannelId"].includes(field)) {
     const channel = guild.channels.cache.get(value) || await guild.channels.fetch(value).catch(() => null);
     if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
       throw new Error("Choose a text channel in this server.");
@@ -177,7 +188,7 @@ async function autoLinkWelcomePassByDiscordUsername(
   };
 }
 
-async function assignApprovedWelcomePass(client, code) {
+async function assignApprovedWelcomePass(client, code, { sendMessages = true } = {}) {
   const assignment = getWelcomePassAssignment(code);
   if (!assignment) return { status: "approval_missing" };
   if (!assignment.guild_id || !assignment.user_id) {
@@ -216,6 +227,13 @@ async function assignApprovedWelcomePass(client, code) {
     );
   }
 
+  // Startup/configuration reconciliation may restore a missing role, but it
+  // must never replay member-facing or staff-facing admission messages.
+  if (!sendMessages) {
+    if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
+    return { status: "reconciled", guildId: guild.id, userId: member.id };
+  }
+
   const releaseChannel = await fetchTextChannel(
     guild,
     settings.release_channel_id
@@ -223,6 +241,11 @@ async function assignApprovedWelcomePass(client, code) {
   if (settings.release_channel_id && !releaseChannel) {
     throw new Error("Configured Welcome Pass member channel is unavailable.");
   }
+
+  // Persist the admission before external sends. Discord can accept a message
+  // and then the process can stop before recording it; claiming first keeps
+  // restart/retry paths from posting the same welcome again.
+  if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
 
   if (releaseChannel) {
     const memberName =
@@ -242,8 +265,6 @@ async function assignApprovedWelcomePass(client, code) {
       allowedMentions: { users: [member.id] },
     });
   }
-
-  markWelcomePassAssigned(assignment.code);
 
   const adminChannel = await fetchTextChannel(guild, settings.channel_id);
   if (adminChannel) {
@@ -282,6 +303,9 @@ async function handleManualWelcomePassRoleAdded(
     newMember.roles.cache.has(roleId);
   if (!roleWasAdded) return { status: "ignored" };
 
+  const assignment = getPendingWelcomePassAssignmentForMember(newMember.guild.id, newMember.id);
+  if (!assignment) return { status: "no_pending_approval" };
+
   const releaseChannel = await fetchTextChannel(
     newMember.guild,
     settings.release_channel_id
@@ -289,6 +313,8 @@ async function handleManualWelcomePassRoleAdded(
   if (settings.release_channel_id && !releaseChannel) {
     throw new Error("Configured Welcome Pass member channel is unavailable.");
   }
+
+  if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
 
   if (releaseChannel) {
     const memberName =
@@ -338,7 +364,7 @@ async function assignAllApprovedWelcomePasses(client) {
   const pending = listPendingWelcomePassApprovals();
   for (const item of pending) {
     try {
-      await assignApprovedWelcomePass(client, item.code);
+      await assignApprovedWelcomePass(client, item.code, { sendMessages: false });
     } catch (error) {
       console.error(
         "Could not retry Welcome Pass " + item.code + ":",
@@ -351,6 +377,8 @@ async function assignAllApprovedWelcomePasses(client) {
 module.exports = {
   autoLinkWelcomePassByDiscordUsername,
   validateWelcomePassRole,
+  resolveWelcomePassEntryChannelId,
+  resolveWelcomePassEntryMessage,
   configureWelcomePass,
   updateWelcomePassSetting,
   assignApprovedWelcomePass,

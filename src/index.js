@@ -44,7 +44,10 @@ const {
 const {
   assignAllApprovedWelcomePasses,
   handleManualWelcomePassRoleAdded,
+  resolveWelcomePassEntryChannelId,
+  resolveWelcomePassEntryMessage,
 } = require("./services/welcomePassService");
+const { getWelcomePassSettings } = require("./stores/welcomePassStore");
 const {
   startWelcomePassServer,
 } = require("./services/welcomePassServer");
@@ -252,10 +255,9 @@ client.on("guildMemberAdd", async (member) => {
     return;
   }
 
-  const channel = await getConfiguredGreetingChannel(
-    member.guild,
-    settings
-  );
+  const welcomePassSettings = getWelcomePassSettings(member.guild.id);
+  const channelId = resolveWelcomePassEntryChannelId(welcomePassSettings, settings);
+  const channel = await getConfiguredGreetingChannel(member.guild, { ...settings, channel_id: channelId });
   if (!channel) {
     console.warn(
       "Configured greeting channel is unavailable in " +
@@ -266,7 +268,7 @@ client.on("guildMemberAdd", async (member) => {
   }
 
   const content = renderGreetingMessage(
-    settings.entrance_message,
+    resolveWelcomePassEntryMessage(welcomePassSettings, settings) || settings.entrance_message,
     {
       memberMention: "<@" + member.id + ">",
       memberName:

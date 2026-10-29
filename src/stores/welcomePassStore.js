@@ -24,6 +24,8 @@ function saveWelcomePassSettings({
   roleId,
   channelId,
   releaseChannelId,
+  entryChannelId,
+  entryMessage,
   releaseMessage,
 }) {
   getDb().prepare(`
@@ -32,20 +34,26 @@ function saveWelcomePassSettings({
       role_id,
       channel_id,
       release_channel_id,
+      entry_channel_id,
+      entry_message,
       release_message,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(guild_id) DO UPDATE SET
       role_id = excluded.role_id,
       channel_id = excluded.channel_id,
       release_channel_id = excluded.release_channel_id,
+      entry_channel_id = COALESCE(excluded.entry_channel_id, welcome_pass_settings.entry_channel_id),
+      entry_message = COALESCE(excluded.entry_message, welcome_pass_settings.entry_message),
       release_message = excluded.release_message,
       updated_at = excluded.updated_at
   `).run(
     guildId,
     roleId,
     channelId,
-    releaseChannelId,
+    releaseChannelId || null,
+    entryChannelId || null,
+    entryMessage || null,
     releaseMessage || DEFAULT_RELEASE_MESSAGE,
     new Date().toISOString()
   );
@@ -62,14 +70,18 @@ function updateWelcomePassSetting(guildId, field, value) {
     roleId: "role_id",
     channelId: "channel_id",
     releaseChannelId: "release_channel_id",
+    entryChannelId: "entry_channel_id",
+    entryMessage: "entry_message",
     releaseMessage: "release_message",
   };
   const column = columns[field];
   if (!column) throw new Error("Invalid Welcome Pass setting.");
   const nextValue = field === "releaseMessage"
     ? (String(value || "").trim() || DEFAULT_RELEASE_MESSAGE)
-    : String(value || "").trim();
-  if (!nextValue) throw new Error("Choose a valid Welcome Pass setting.");
+    : field === "entryMessage"
+      ? (String(value || "").trim() || null)
+      : String(value || "").trim();
+  if (nextValue === null && field !== "entryMessage" || nextValue === "") throw new Error("Choose a valid Welcome Pass setting.");
   return Number(getDb().prepare(`
     UPDATE welcome_pass_settings SET ${column} = ?, updated_at = ?
     WHERE guild_id = ?
@@ -148,6 +160,29 @@ function recordWelcomePassApproval({ code, approverName }) {
   return normalizedCode;
 }
 
+function claimWelcomePassSubmissionAlert(code) {
+  const result = getDb().prepare(`
+    INSERT OR IGNORE INTO welcome_pass_submission_alerts (code, claimed_at)
+    VALUES (?, ?)
+  `).run(normalizeWelcomePassCode(code), new Date().toISOString());
+  return Number(result.changes) === 1;
+}
+
+function markWelcomePassSubmissionAlertDelivered(code, messageId = null) {
+  return Number(getDb().prepare(`
+    UPDATE welcome_pass_submission_alerts
+    SET delivered_at = ?, message_id = ?
+    WHERE code = ? AND delivered_at IS NULL
+  `).run(new Date().toISOString(), messageId || null, normalizeWelcomePassCode(code)).changes) === 1;
+}
+
+function getWelcomePassSubmissionAlert(code) {
+  return getDb().prepare(`
+    SELECT code, claimed_at, delivered_at, message_id
+    FROM welcome_pass_submission_alerts WHERE code = ?
+  `).get(normalizeWelcomePassCode(code)) || null;
+}
+
 function getWelcomePassAssignment(code) {
   return getDb().prepare(`
     SELECT
@@ -174,9 +209,21 @@ function listPendingWelcomePassApprovals() {
 }
 
 function markWelcomePassAssigned(code) {
-  getDb().prepare(
-    "UPDATE welcome_pass_links SET assigned_at = ? WHERE code = ?"
-  ).run(new Date().toISOString(), normalizeWelcomePassCode(code));
+  return Number(getDb().prepare(
+    "UPDATE welcome_pass_links SET assigned_at = ? WHERE code = ? AND assigned_at IS NULL"
+  ).run(new Date().toISOString(), normalizeWelcomePassCode(code)).changes) > 0;
+}
+
+function getPendingWelcomePassAssignmentForMember(guildId, userId) {
+  return getDb().prepare(`
+    SELECT a.code, a.approver_name, a.approved_at,
+      l.guild_id, l.user_id, l.linked_at, l.assigned_at
+    FROM welcome_pass_approvals a
+    JOIN welcome_pass_links l ON l.code = a.code
+    WHERE l.guild_id = ? AND l.user_id = ? AND l.assigned_at IS NULL
+    ORDER BY a.approved_at DESC
+    LIMIT 1
+  `).get(guildId, userId) || null;
 }
 
 module.exports = {
@@ -191,7 +238,11 @@ module.exports = {
   setWelcomePassGrantMode,
   linkWelcomePassCode,
   recordWelcomePassApproval,
+  claimWelcomePassSubmissionAlert,
+  markWelcomePassSubmissionAlertDelivered,
+  getWelcomePassSubmissionAlert,
   getWelcomePassAssignment,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
+  getPendingWelcomePassAssignmentForMember,
 };

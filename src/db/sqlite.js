@@ -80,6 +80,13 @@ function migrate(database) {
       approved_at    TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS welcome_pass_submission_alerts (
+      code         TEXT PRIMARY KEY,
+      claimed_at   TEXT NOT NULL,
+      delivered_at TEXT,
+      message_id   TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
       ON welcome_pass_links (guild_id, user_id);
 
@@ -697,6 +704,12 @@ function migrate(database) {
     database.exec(
       "ALTER TABLE welcome_pass_settings ADD COLUMN grant_mode TEXT NOT NULL DEFAULT 'automatic'"
     );
+  }
+  if (!welcomePassSettingColumns.has("entry_channel_id")) {
+    database.exec("ALTER TABLE welcome_pass_settings ADD COLUMN entry_channel_id TEXT");
+  }
+  if (!welcomePassSettingColumns.has("entry_message")) {
+    database.exec("ALTER TABLE welcome_pass_settings ADD COLUMN entry_message TEXT");
   }
 
   const birthdayProfileColumns = new Set(

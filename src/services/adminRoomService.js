@@ -352,6 +352,8 @@ function welcomeDraft(interaction) {
     roleId: settings?.role_id || null,
     channelId: settings?.channel_id || null,
     releaseChannelId: settings?.release_channel_id || null,
+    entryChannelId: settings?.entry_channel_id || greetingStore.getGreetingSettings(interaction.guildId)?.channel_id || null,
+    entryMessage: settings?.entry_message || null,
     releaseMessage: settings?.release_message || welcomePassStore.DEFAULT_RELEASE_MESSAGE,
   };
   setWelcomeDraft(interaction, draft);
@@ -360,36 +362,54 @@ function welcomeDraft(interaction) {
 
 function welcomePassPage(guild, userId, notice = null) {
   const settings = welcomePassStore.getWelcomePassSettings(guild.id);
+  const greetingSettings = greetingStore.getGreetingSettings(guild.id);
   const draft = userId ? getWelcomeDraft({ guildId: guild.id, user: { id: userId } }) : null;
-  const complete = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
+  const baseConfigured = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
+  const entryChannelId = settings?.entry_channel_id || draft?.entryChannelId || greetingSettings?.channel_id;
+  // Existing installations keep their configured state and continue using the
+  // prior Greetings channel until an explicit Welcome Pass entry channel is set.
+  const complete = baseConfigured && (Boolean(entryChannelId) || Boolean(settings));
   const roleId = settings?.role_id || draft?.roleId;
   const privateChannelId = settings?.channel_id || draft?.channelId;
   const memberChannelId = settings?.release_channel_id || draft?.releaseChannelId;
-  const template = settings?.release_message || draft?.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE;
+  const entryMessage = settings?.entry_message || draft?.entryMessage || greetingSettings?.entrance_message || greetingStore.DEFAULT_ENTRANCE_MESSAGE;
+  const releaseMessage = settings?.release_message || draft?.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE;
   const role = roleId ? guild.roles.cache.get(roleId) : null;
   const description = [
     notice,
     `**Status:** ${complete ? "Configured" : "Setup needed"}`,
     `**Approved Role:** ${role?.name ? `@${role.name}` : (roleId ? `<@&${roleId}>` : "Not selected")}`,
-    `**Private Alert Channel:** ${privateChannelId ? `<#${privateChannelId}>` : "Not selected"}`,
-    `**Public/Member Channel:** ${memberChannelId ? `<#${memberChannelId}>` : "Not selected"}`,
-    `**Grant Mode:** ${complete ? (settings.grant_mode || "automatic") : "Set after setup"}`,
-    `**Message Template:**\n${template.slice(0, 1100)}`,
+    `**Welcome Pass Entry Channel:** ${entryChannelId ? `<#${entryChannelId}>` : "Not selected"}${!settings?.entry_channel_id && greetingSettings?.channel_id ? " (following the current entrance greeting channel)" : ""}`,
+    `**New-member entrance greeting:** ${!greetingSettings ? "Not configured" : greetingSettings.enabled ? "On" : "Off"}`,
+    `**Pass Submission Alerts:** ${privateChannelId ? `<#${privateChannelId}>` : "Not selected"}`,
+    "This room’s primary purpose is to alert staff when a new pass is waiting for review. A separate STAY-role confirmation may also be posted after admission.",
+    `**Approved Member Welcome Channel:** ${memberChannelId ? `<#${memberChannelId}>` : "Not selected"}`,
+    `**Grant Mode:** ${baseConfigured ? (settings.grant_mode || "automatic") : "Set after setup"}`,
+    `**New-Member Entrance Message:**\n${entryMessage.slice(0, 500)}`,
+    `**Approved Member Welcome Message:**\n${releaseMessage.slice(0, 500)}`,
     complete
       ? (settings.grant_mode === "manual"
         ? "Manual mode: an admin grants the configured role; Harmony then sends the member message and private confirmation. Approvals and member linking remain available. A separate Disable control is not provided because the current backend has no non-destructive disabled state."
         : "Automatic mode: after approval and an exact Discord account match, Harmony grants the role and sends the configured messages.")
-      : "Select the role and both channels to finish setup. Your selections stay in this private setup session until saved; existing configuration is not cleared.",
+      : "Select the role, Entry Channel, Pass Submission Alerts, and Approved Member Welcome Channel to finish setup. Selections stay in this private setup session until saved; existing configuration is not cleared.",
+    !greetingSettings || !greetingSettings.enabled
+      ? "The Entry Channel routes the existing entrance greeting. Greetings must be configured and On for Harmony to send that message; this screen does not change Greetings settings."
+      : null,
     "The current backend has no separate non-destructive Disable state. Manual mode changes role granting, but does not turn off approvals or member linking.",
   ].filter(Boolean).join("\n\n");
   const components = [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome-role").setLabel("Approved Role").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-private").setLabel("Private Alert Channel").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-member").setLabel("Public/Member Channel").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-message").setLabel("Message Template").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-mode").setLabel(complete ? `Switch to ${settings.grant_mode === "manual" ? "Automatic" : "Manual"}` : "Grant Mode")
-      .setStyle(ButtonStyle.Primary).setDisabled(!complete),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-entry").setLabel("Welcome Pass Entry Channel").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-private").setLabel("Pass Submission Alerts").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-member").setLabel("Approved Member Welcome Channel").setStyle(ButtonStyle.Secondary),
   )];
+  components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-entry-message").setLabel("New-Member Entrance Message").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-approved-message").setLabel("Approved Member Welcome Message").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+    .setCustomId("harmony-admin-room:welcome-mode")
+    .setLabel(baseConfigured ? `Switch to ${settings.grant_mode === "manual" ? "Automatic" : "Manual"}` : "Grant Mode")
+    .setStyle(ButtonStyle.Primary).setDisabled(!baseConfigured)));
   if (!complete && draft) components.push(new ActionRowBuilder().addComponents(new ButtonBuilder()
     .setCustomId("harmony-admin-room:welcome-cancel").setLabel("Cancel Setup").setStyle(ButtonStyle.Secondary)));
   return pagePayload("🎟️ Welcome Pass Manager", description, components);
@@ -404,28 +424,51 @@ function welcomePickerPayload(field) {
       back,
     ]);
   }
-  const privateChannel = field === "private";
-  return pagePayload(privateChannel ? "Choose the Private Alert Channel" : "Choose the Public/Member Channel", privateChannel
-    ? "Choose where Harmony sends private admin alerts for Welcome Pass matches and approvals."
-    : "Choose where Harmony posts the member’s approval message.", [
+  const labels = {
+    entry: ["Choose the Welcome Pass Entry Channel", "Choose where Harmony sends new arrivals to complete the Welcome Pass."],
+    private: ["Choose Pass Submission Alerts", "Choose where Harmony notifies staff when a new Welcome Pass is submitted and waiting for review."],
+    member: ["Choose the Approved Member Welcome Channel", "Choose where Harmony posts the member’s existing approved Welcome Pass message."],
+  };
+  return pagePayload(labels[field][0], labels[field][1], [
     new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
       .setCustomId(`harmony-admin-room:welcome-${field}-select`)
-      .setPlaceholder(privateChannel ? "Choose a private alert text channel" : "Choose a public/member text channel")
+      .setPlaceholder(`Choose ${labels[field][0].replace(/^Choose /, "").toLowerCase()}`)
       .setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)),
     back,
   ]);
 }
 
-function welcomeMessageModal(value) {
-  const input = new TextInputBuilder().setCustomId("message").setLabel("Member approval message")
+function welcomeMessageModal(kind, value) {
+  const entry = kind === "entry";
+  const title = entry ? "Edit Entrance Message" : "Edit Approved Welcome Message";
+  const input = new TextInputBuilder().setCustomId("message").setLabel(entry ? "New-member entrance message" : "Approved member welcome message")
     .setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000)
-    .setPlaceholder("Use {member}, {name}, and {server}. Leave blank to restore the default.");
+    .setPlaceholder("Use {member} to mention the member. Leave blank to restore the current fallback.");
   if (value) input.setValue(value.slice(0, 1000));
-  return new ModalBuilder().setCustomId("harmony-admin-room:welcome-message-submit")
-    .setTitle("Edit Welcome Pass Message").addComponents(new ActionRowBuilder().addComponents(input));
+  return new ModalBuilder().setCustomId(`harmony-admin-room:welcome-${entry ? "entry" : "approved"}-message-submit`)
+    .setTitle(title).addComponents(new ActionRowBuilder().addComponents(input));
 }
 
-async function saveWelcomeManagerField(interaction, field, value) {
+function welcomeMessagePromptPayload(guild, userId, kind, notice = null) {
+  const settings = welcomePassStore.getWelcomePassSettings(guild.id);
+  const draft = userId ? getWelcomeDraft({ guildId: guild.id, user: { id: userId } }) : null;
+  const greeting = greetingStore.getGreetingSettings(guild.id);
+  const entry = kind === "entry";
+  const title = entry ? "👋 New-Member Entrance Message" : "💜 Approved Member Welcome Message";
+  const channelId = entry
+    ? (settings?.entry_channel_id || draft?.entryChannelId || greeting?.channel_id)
+    : (settings?.release_channel_id || draft?.releaseChannelId);
+  const message = entry
+    ? (settings?.entry_message || draft?.entryMessage || greeting?.entrance_message || greetingStore.DEFAULT_ENTRANCE_MESSAGE)
+    : (settings?.release_message || draft?.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE);
+  const action = entry ? "welcome-entry-message-edit" : "welcome-approved-message-edit";
+  return pagePayload(title, [notice, channelId ? `**Channel:** <#${channelId}>` : "**Channel:** Select a channel in the manager first.", "**Current message:**", message, "Use `{member}` where Harmony should mention the member."].filter(Boolean).join("\n\n"), [
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-admin-room:${action}`).setLabel("Edit Message").setStyle(ButtonStyle.Primary)),
+    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("harmony-admin-room:welcome:ephemeral").setLabel("Back to Welcome Pass").setStyle(ButtonStyle.Secondary)),
+  ]);
+}
+
+async function saveWelcomeManagerField(interaction, field, value, promptMessage = false) {
   const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
   const isComplete = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
   let notice;
@@ -433,19 +476,24 @@ async function saveWelcomeManagerField(interaction, field, value) {
     try {
       await welcomePassService.updateWelcomePassSetting(interaction.client, interaction.guildId, field, value);
     } catch (error) {
-      await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, `Setting was not changed: ${error.message || "Please check the selected value."}`));
+    await interaction.update(promptMessage
+      ? welcomeMessagePromptPayload(interaction.guild, interaction.user.id, field === "entryChannelId" ? "entry" : "approved", `Setting was not changed: ${error.message || "Please check the selected value."}`)
+      : welcomePassPage(interaction.guild, interaction.user.id, `Setting was not changed: ${error.message || "Please check the selected value."}`));
       return;
     }
     clearWelcomeDraft(interaction);
     notice = field === "roleId" ? `Approved role updated to <@&${value}>.`
-      : field === "channelId" ? `Private Alert Channel updated to <#${value}>.`
-        : field === "releaseChannelId" ? `Public/Member Channel updated to <#${value}>.`
+      : field === "channelId" ? `Pass Submission Alerts updated to <#${value}>.`
+        : field === "releaseChannelId" ? `Approved Member Welcome Channel updated to <#${value}>.`
+          : field === "entryChannelId" ? `Welcome Pass Entry Channel updated to <#${value}>.`
+            : field === "entryMessage" ? "New-member entrance message updated."
+              : field === "releaseMessage" ? "Approved Member Welcome Message updated."
           : "Welcome Pass message template updated.";
   } else {
     const draft = welcomeDraft(interaction);
     draft[field] = value;
     setWelcomeDraft(interaction, draft);
-    if (draft.roleId && draft.channelId && draft.releaseChannelId) {
+    if (draft.roleId && draft.entryChannelId && draft.channelId && draft.releaseChannelId) {
       try {
         await welcomePassService.configureWelcomePass(interaction.client, {
           guildId: interaction.guildId,
@@ -459,13 +507,18 @@ async function saveWelcomeManagerField(interaction, field, value) {
     } else {
       const missing = [
         !draft.roleId && "Approved Role",
-        !draft.channelId && "Private Alert Channel",
-        !draft.releaseChannelId && "Public/Member Channel",
+        !draft.entryChannelId && "Welcome Pass Entry Channel",
+        !draft.channelId && "Pass Submission Alerts",
+        !draft.releaseChannelId && "Approved Member Welcome Channel",
       ].filter(Boolean);
       notice = `Selection held for this setup session only. Still needed: ${missing.join(", ")}. Select the remaining controls to save setup.`;
     }
   }
-  await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, notice));
+  if (promptMessage && ["entryChannelId", "releaseChannelId"].includes(field)) {
+    await interaction.update(welcomeMessagePromptPayload(interaction.guild, interaction.user.id, field === "entryChannelId" ? "entry" : "approved", notice));
+  } else {
+    await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, notice));
+  }
 }
 
 function communityToolPage(guildId, area) {
@@ -733,9 +786,11 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: "This Welcome Pass screen came from an Admin Controls panel that is no longer active. Open Welcome Pass from the current panel.", flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (["welcome-role", "welcome-private", "welcome-member"].includes(action)) {
+  if (["welcome-role", "welcome-entry", "welcome-private", "welcome-member"].includes(action)) {
     welcomeDraft(interaction);
-    const field = action === "welcome-role" ? "role" : action === "welcome-private" ? "private" : "member";
+    const field = action === "welcome-role" ? "role"
+      : action === "welcome-entry" ? "entry"
+        : action === "welcome-private" ? "private" : "member";
     await interaction.update(welcomePickerPayload(field));
     return true;
   }
@@ -750,23 +805,40 @@ async function handleAdminRoomInteraction(interaction) {
     }
     return true;
   }
-  if (action === "welcome-private-select" || action === "welcome-member-select") {
+  if (["welcome-entry-select", "welcome-private-select", "welcome-member-select"].includes(action)) {
     const channelId = interaction.values?.[0];
     const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
     if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
       await interaction.reply({ content: "Choose a text channel in this server.", flags: MessageFlags.Ephemeral });
       return true;
     }
-    await saveWelcomeManagerField(interaction, action === "welcome-private-select" ? "channelId" : "releaseChannelId", channel.id);
+    const field = action === "welcome-entry-select" ? "entryChannelId"
+      : action === "welcome-private-select" ? "channelId" : "releaseChannelId";
+    await saveWelcomeManagerField(interaction, field, channel.id, field !== "channelId");
     return true;
   }
-  if (action === "welcome-message") {
+  if (["welcome-entry-message", "welcome-approved-message"].includes(action)) {
+    welcomeDraft(interaction);
+    const kind = action === "welcome-entry-message" ? "entry" : "approved";
+    await interaction.update(welcomeMessagePromptPayload(interaction.guild, interaction.user.id, kind));
+    return true;
+  }
+  if (["welcome-entry-message-edit", "welcome-approved-message-edit"].includes(action)) {
     const draft = welcomeDraft(interaction);
     const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
-    await interaction.showModal(welcomeMessageModal(settings?.release_message || draft.releaseMessage));
+    const kind = action === "welcome-entry-message-edit" ? "entry" : "approved";
+    const value = kind === "entry"
+      ? (settings?.entry_message || draft.entryMessage || greetingStore.getGreetingSettings(interaction.guildId)?.entrance_message || greetingStore.DEFAULT_ENTRANCE_MESSAGE)
+      : (settings?.release_message || draft.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE);
+    await interaction.showModal(welcomeMessageModal(kind, value));
     return true;
   }
-  if (action === "welcome-message-submit" && interaction.isModalSubmit?.()) {
+  if (action === "welcome-entry-message-submit" && interaction.isModalSubmit?.()) {
+    const message = interaction.fields.getTextInputValue("message");
+    await saveWelcomeManagerField(interaction, "entryMessage", message);
+    return true;
+  }
+  if (action === "welcome-approved-message-submit" && interaction.isModalSubmit?.()) {
     const message = interaction.fields.getTextInputValue("message");
     await saveWelcomeManagerField(interaction, "releaseMessage", message);
     return true;
