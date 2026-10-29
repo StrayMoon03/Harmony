@@ -199,7 +199,7 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
       isButton: () => true, reply: async (message) => { payload = message; },
     };
     assert.equal(await refreshService.handleRefreshInteraction(interaction), true);
-    assert.match(payload.content, /short-lived secure refresh request/i);
+    assert.match(payload.content, /short-lived secure instagram cookie refresh request/i);
     assert.equal(payload.components[0].components[0].data.style, 5);
     assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\/[0-9a-f-]{36}$/);
     assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
@@ -228,12 +228,13 @@ test("status distinguishes session expiry from security checkpoints and never of
   };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
   const text = JSON.stringify(payload);
-  assert.match(text, /Secure session refresh is not yet configured/);
+  assert.match(text, /Instagram cookies need to be refreshed, but secure cookie refresh is not fully set up/);
   assert.match(text, /Owner attention required/);
   assert.doesNotMatch(text, /harmony-session-refresh:/);
-  assert.equal(payload.components[0].components[0].data.custom_id, "harmony-status:refresh");
+  assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-status:refresh"));
+  assert.doesNotMatch(text, /Refresh Instagram Cookies|harmony-session-refresh:/);
   const regularAdminPayload = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
-  assert.match(JSON.stringify(regularAdminPayload), /ask the owner or a Credential Manager/);
+  assert.match(JSON.stringify(regularAdminPayload), /ask the owner or a Credential Manager/i);
   assert.match(JSON.stringify(regularAdminPayload), /Owner attention required/);
 });
 

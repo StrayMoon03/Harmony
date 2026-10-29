@@ -10,8 +10,8 @@ const RATE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_REQUESTS_PER_HOUR = 3;
 const SERVICES = requestStore.SERVICES;
 const SAFE_RESULT_MESSAGES = Object.freeze({
-  unauthorized: "Only the owner or a configured Credential Manager can request a session refresh.",
-  secure_refresh_unavailable: "Secure session refresh is not yet available. No credentials were changed.",
+  unauthorized: "Only the owner or a configured Credential Manager can request a secure cookie refresh.",
+  secure_refresh_unavailable: "Secure cookie refresh is not yet available. No credentials were changed.",
   rate_limited: "Too many refresh requests were made recently. Try again later.",
   invalid_request: "This refresh request is invalid or has expired.",
   scope_mismatch: "This refresh request does not match the signed-in admin or selected service.",
@@ -33,7 +33,7 @@ function tokenDigest(token) {
 
 function formatRefreshOutcome({ ok, reason }) {
   if (ok) return "The secure refresh request was accepted.";
-  return SAFE_RESULT_MESSAGES[reason] || "The secure session refresh could not be completed.";
+  return SAFE_RESULT_MESSAGES[reason] || "The secure cookie refresh could not be completed.";
 }
 
 function createRefreshWorkflow({
@@ -167,7 +167,7 @@ async function handleRefreshInteraction(interaction) {
           : refreshWorkflow.issue(authorizedContext, service);
   const payload = {
     content: result.ok
-      ? `A short-lived secure refresh request is ready for ${service}. Open the protected page, sign in to Discord, and submit the new cookie export there.`
+      ? `A short-lived secure ${service} cookie refresh request is ready. Open the protected page, sign in to Discord, and submit the new cookie export there.`
       : formatRefreshOutcome(result),
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },

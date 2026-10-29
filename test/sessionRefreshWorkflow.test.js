@@ -71,19 +71,29 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
   assert.equal(requests.getRequest(context().requestId).status, "completed");
 });
 
-test("Status exposes Refresh Session only for an explicitly expired operational service", () => {
+test("Status offers cookie refresh only for explicit expiry and only to authorized credential managers", () => {
   const report = { checkedAt: "2026-10-28T00:00:00.000Z", rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.attention, explanation: "Sign-in required.", action: "Session refresh required." },
     { id: "social-threads", name: "Threads", status: STATUS.owner, explanation: "Security checkpoint.", action: "Owner attention required." },
   ] };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
-  const buttonIds = payload.components[0].components.map((component) => component.data.custom_id);
+  const buttons = payload.components.flatMap((row) => row.components);
+  const buttonIds = buttons.map((component) => component.data.custom_id);
   assert.ok(buttonIds.includes("harmony-session-refresh:instagram"));
   assert.ok(buttonIds.includes("harmony-status:refresh"));
+  assert.ok(buttons.some((button) => button.data.label === "Refresh Instagram Cookies"));
   assert.ok(!buttonIds.includes("harmony-session-refresh:threads"));
   const regular = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
-  assert.ok(!regular.components[0].components.some((component) => String(component.data.custom_id).startsWith("harmony-session-refresh:")));
-  assert.match(JSON.stringify(regular), /ask the owner or a Credential Manager/i);
+  const regularButtons = regular.components.flatMap((row) => row.components);
+  assert.ok(!regularButtons.some((component) => String(component.data.custom_id).startsWith("harmony-session-refresh:")));
+  assert.ok(!regularButtons.some((component) => /Refresh .* Cookies/.test(component.data.label || "")));
+  assert.match(JSON.stringify(regular), /Instagram cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
+  assert.match(JSON.stringify(regular), /Owner attention required/);
+
+  const unknown = statusCommand.makeStatusPayload({ checkedAt: report.checkedAt, rows: [
+    { id: "social-instagram", name: "Instagram", status: STATUS.unknown, explanation: "Login validity is not actively verified.", action: "No action unless a media request reports a login issue." },
+  ] }, { canManageCredentials: true });
+  assert.doesNotMatch(JSON.stringify(unknown), /cookies need to be refreshed|harmony-session-refresh:/i);
 });
 
 test("ambiguous validation and rotation failure preserve the existing credential", async (t) => {

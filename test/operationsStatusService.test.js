@@ -56,7 +56,7 @@ test("unconfigured session is reported honestly and explicit auth failure reques
   statusService.recordSocialAuthFailure("youtube", "2026-10-27T00:00:00.000Z");
   const failed = await statusService.checkSocial("youtube");
   assert.equal(failed.status, statusService.STATUS.attention);
-  assert.match(failed.action, /Session refresh required/);
+  assert.match(failed.action, /YouTube cookies need to be refreshed/);
   statusService.recordSocialSuccess("youtube");
   assert.equal((await statusService.checkSocial("youtube")).status, statusService.STATUS.unknown);
   assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Login required to view this post")), true);
@@ -95,6 +95,8 @@ test("permission metadata separates diagnosis from credential management", () =>
 
   const owner = statusService.getAdminCapabilities({ guild: guild(), userId: "owner-1", member: { permissions: { has: () => false } } });
   assert.equal(owner.canManageCredentials, true);
+  assert.equal(owner.canViewOwnerDiagnostics, true);
+  assert.equal(trusted.canViewOwnerDiagnostics, false);
 });
 
 test("owner capability refreshes guild metadata when the interaction guild lacks ownerId", async () => {
@@ -134,7 +136,7 @@ test("harmony-status resolves a guild owner before rendering session-refresh gui
     editReply: async (payload) => { interaction.response = payload; return payload; },
   };
   await statusCommand.execute(interaction);
-  assert.match(interaction.response.embeds[0].data.footer.text, /Refresh Session appears/);
+  assert.ok(interaction.response.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:diagnostics"));
 });
 
 test("Status / Health button uses the same refreshed guild-owner authorization", async () => {
@@ -153,7 +155,63 @@ test("Status / Health button uses the same refreshed guild-owner authorization",
     update: async (payload) => { interaction.response = payload; },
   };
   assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
-  assert.match(interaction.response.embeds[0].data.footer.text, /Refresh Session appears/);
+  assert.ok(interaction.response.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:diagnostics"));
+});
+
+test("admin Status is actionable and concise while owner diagnostics retain detailed safe signals", async () => {
+  const report = {
+    checkedAt: "2026-10-28T12:00:00.000Z",
+    rows: [
+      { id: "discord", name: "Harmony / Discord connection", status: statusService.STATUS.healthy, explanation: "Harmony is connected to Discord.", action: "No action needed." },
+      { id: "database", name: "Database", status: statusService.STATUS.healthy, explanation: "Database reads succeed.", action: "No action needed." },
+      { id: "discovery", name: "Event discovery", status: statusService.STATUS.attention, explanation: "Automatic source checks are off.", action: "Turn discovery on in the Stray Kids Schedule Manager." },
+      { id: "event-sync", name: "Discord/event synchronization", status: statusService.STATUS.unknown, explanation: "Listeners are attached; end-to-end sync is not tracked.", action: "Use Calendar reconciliation controls." },
+      { id: "social-instagram", name: "Instagram", status: statusService.STATUS.unknown, explanation: "Session validity is not actively tested.", action: "No action unless a request reports a login problem." },
+      { id: "social-threads", name: "Threads", status: statusService.STATUS.unknown, explanation: "Session validity is not actively tested.", action: "No action unless a request reports a login problem." },
+      { id: "social-facebook", name: "Facebook", status: statusService.STATUS.attention, explanation: "Facebook cookies need to be refreshed after a media request reported sign-in is required.", action: "Facebook cookies need to be refreshed." },
+      { id: "social-youtube", name: "YouTube", status: statusService.STATUS.owner, explanation: "A security checkpoint was reported.", action: "Owner attention required; resolve the account check with the platform." },
+      { id: "guard", name: "Community Guard", status: statusService.STATUS.attention, explanation: "Monitoring is off.", action: "Turn monitoring on in Harmony Guard." },
+    ],
+  };
+  const regular = statusCommand.makeStatusPayload(report, { canDiagnose: true, canManageCredentials: false });
+  const adminText = JSON.stringify(regular);
+  assert.match(adminText, /Harmony \/ Discord/);
+  assert.match(adminText, /Social Media Links/);
+  assert.match(adminText, /Facebook cookies need to be refreshed/);
+  assert.match(adminText, /Ask the owner or a Credential Manager/);
+  assert.match(adminText, /Owner\/Developer Required/);
+  assert.match(adminText, /Event discovery/);
+  assert.match(adminText, /Community Guard/);
+  assert.doesNotMatch(adminText, /Database|Discord\/event synchronization|Railway|OAuth/);
+  assert.doesNotMatch(adminText, /harmony-session-refresh:/);
+
+  const owner = statusCommand.makeStatusPayload(report, { canDiagnose: true, canManageCredentials: true, canViewOwnerDiagnostics: true, isGuildOwner: true });
+  assert.ok(owner.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:diagnostics"));
+  const diagnostics = statusCommand.makeOwnerDiagnosticsPayload(report);
+  const diagnosticText = JSON.stringify(diagnostics);
+  assert.match(diagnosticText, /Database/);
+  assert.match(diagnosticText, /Discord\/event synchronization/);
+  assert.match(diagnosticText, /Community Guard/);
+  assert.match(diagnosticText, /Secure Cookie Refresh Readiness/);
+  assert.match(diagnosticText, /secure cookie refresh not fully configured/i);
+  assert.doesNotMatch(diagnosticText, /COOKIE_VALUE|token-value|oauth-secret|private-cookie-file/);
+});
+
+test("owner diagnostics component rejects credential managers and regular admins server-side", async () => {
+  let response;
+  const interaction = {
+    customId: "harmony-status:diagnostics",
+    isButton: () => true,
+    message: {},
+    guild: { id: "diagnostics-auth", ownerId: "owner-id" },
+    member: { permissions: { has: (permission) => permission === PermissionFlagsBits.Administrator }, roles: { cache: [{ id: "credential-manager" }] } },
+    user: { id: "trusted-manager" },
+    client: client(),
+    update: async (payload) => { response = payload; },
+  };
+  assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
+  assert.match(response.content, /server owner/);
+  assert.doesNotMatch(JSON.stringify(response), /Database|Owner Diagnostics/);
 });
 
 test("Guard status includes monitoring, active rules, and Review Room visibility", async () => {
@@ -184,10 +242,13 @@ test("Guard status includes monitoring, active rules, and Review Room visibility
 test("status response is ephemeral and includes a fresh-check control without secrets", () => {
   const payload = statusCommand.makeStatusPayload({
     checkedAt: "2026-10-27T12:00:00.000Z",
-    rows: [{ id: "test", name: "Test", status: statusService.STATUS.unknown, explanation: "Unable to verify.", action: "Ask owner.", lastChecked: null }],
+    rows: [
+      { id: "discord", name: "Harmony / Discord connection", status: statusService.STATUS.healthy, explanation: "Connected.", action: "No action." },
+      { id: "social-instagram", name: "Instagram", status: statusService.STATUS.unknown, explanation: "Cannot confirm login validity.", action: "No action unless a media request reports a login issue." },
+    ],
   }, { canManageCredentials: false });
   assert.equal(payload.flags, 64);
-  assert.equal(payload.components[0].components[0].data.custom_id, "harmony-status:refresh");
+  assert.ok(payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:refresh"));
   assert.equal(JSON.stringify(payload).includes("COOKIE"), false);
 });
 

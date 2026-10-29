@@ -15,7 +15,7 @@ const RESULT_MESSAGES = Object.freeze({
   rollback_attention: "Harmony could not confirm the session setting was restored. Stop and contact the owner; no credential details are shown here.",
   activation_failure: "Harmony could not safely activate the new session. The previous session was restored.",
   activation_rollback_attention: "Session activation failed and the previous setting could not be confirmed. Contact the owner before retrying.",
-  success: "Session refreshed, activated, and verified. No restart was required.",
+  success: "Cookies refreshed, activated, and verified. No restart was required.",
 });
 
 function base64Buffer(buffer) {

@@ -65,6 +65,8 @@ function getAdminCapabilities({ guild, member, userId, resolvedGuildOwnerId, cre
   return {
     canDiagnose: diagnose,
     canViewFullStatus: diagnose,
+    canViewOwnerDiagnostics: owner,
+    isGuildOwner: owner,
     canManageCredentials: owner || (diagnose && hasCredentialRole),
     credentialManagementAvailable: false,
     credentialManagerRoleConfigured: hasCredentialRole,
@@ -132,8 +134,8 @@ async function checkSocial(platform) {
     `social-${platform}`,
     name,
     STATUS.attention,
-    "A recent media request explicitly indicated that sign-in or refreshed session access is required.",
-    "Session refresh required; ask the owner or trusted Credential Manager.",
+    `${name} cookies need to be refreshed. A media request reported that sign-in or a renewed session is required.`,
+    `${name} cookies need to be refreshed.`,
     authFailure.at
   );
   const configured = await sessionConfigured(platform);

@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, resolveAdminCapabilities, STATUS } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -22,57 +22,143 @@ const STATUS_PRESENTATION = {
   [STATUS.unknown]: { icon: "⚪", label: "Not Configured / Unable to Verify", color: 0x99aab5 },
 };
 
-function makeStatusPayload(report, capabilities) {
-  const rows = report.rows || [];
+function statusView(status) {
+  return STATUS_PRESENTATION[status] || STATUS_PRESENTATION[STATUS.unknown];
+}
+
+function isSocialRow(row) {
+  return /^social-(instagram|threads|facebook|youtube)$/.test(row?.id || "");
+}
+
+function hasCookieRefreshEvidence(row) {
+  return isSocialRow(row) && row.status === STATUS.attention &&
+    /(?:cookies need to be refreshed|session refresh required)/i.test(row.action || "");
+}
+
+function statusAction(row, capabilities = {}) {
+  if (hasCookieRefreshEvidence(row)) {
+    const platform = row.name;
+    if (!capabilities.canManageCredentials) {
+      return `${platform} cookies need to be refreshed. Ask the owner or a Credential Manager.`;
+    }
+    const service = row.id.slice("social-".length);
+    return isServiceRefreshAvailable(service)
+      ? `Click **Refresh ${platform} Cookies** below to open the secure refresh page.`
+      : `${platform} cookies need to be refreshed, but secure cookie refresh is not fully set up. Ask the owner to complete setup.`;
+  }
+  return row.action || "No action available.";
+}
+
+function adminPresentationRows(report) {
+  const sourceRows = report.rows || [];
+  const rows = [];
+  const discord = sourceRows.find((row) => row.id === "discord");
+  if (discord) rows.push({ ...discord, name: "Harmony / Discord" });
+
+  const socialRows = sourceRows.filter(isSocialRow);
+  const socialIssues = socialRows.filter((row) => row.status === STATUS.attention || row.status === STATUS.owner);
+  const quietSocialRows = socialRows.filter((row) => row.status !== STATUS.attention && row.status !== STATUS.owner);
+  if (quietSocialRows.length) {
+    const healthy = quietSocialRows.filter((row) => row.status === STATUS.healthy);
+    const unverified = quietSocialRows.filter((row) => row.status !== STATUS.healthy);
+    const summaryStatus = unverified.length ? STATUS.unknown : STATUS.healthy;
+    const explanation = unverified.length
+      ? `No explicit login failure is currently recorded for ${unverified.map((row) => row.name).join(", ")}. Harmony does not actively test external logins during a Status check.`
+      : `Recent authenticated media retrieval succeeded for ${healthy.map((row) => row.name).join(", ")}.`;
+    rows.push({
+      id: "social-summary",
+      name: "Social Media Links",
+      status: summaryStatus,
+      explanation,
+      action: unverified.length ? "No cookie change is indicated unless a media request reports a login problem." : "No action needed.",
+    });
+  }
+  rows.push(...socialIssues);
+
+  for (const id of ["discovery", "guard"]) {
+    const row = sourceRows.find((candidate) => candidate.id === id);
+    if (row && row.status !== STATUS.healthy) rows.push(row);
+  }
+  return rows;
+}
+
+function makeStatusPayload(report, capabilities = {}) {
+  const rows = adminPresentationRows(report);
   const hasAttention = rows.some((row) => row.status === STATUS.attention || row.status === STATUS.owner);
   const embed = new EmbedBuilder()
     .setTitle("Harmony Status / Health")
     .setColor(hasAttention ? 0xfee75c : 0x5865f2)
-    .setDescription(`Fresh local checks · ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}\nExternal platform login validity is not probed.`)
+    .setDescription(`Admin overview · checked ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}. External platform login validity is not actively probed.`)
     .addFields(rows.map((row) => {
-      const view = STATUS_PRESENTATION[row.status] || STATUS_PRESENTATION[STATUS.unknown];
+      const view = statusView(row.status);
       return {
         name: `${view.icon} ${row.name} — ${view.label}`,
-        value: `${row.explanation}\n**Next:** ${statusAction(row, capabilities)}\n**Last signal/check:** ${row.lastChecked ? new Date(row.lastChecked).toISOString() : "Not recorded"}`.slice(0, 1024),
+        value: `${row.explanation}\n**Next:** ${statusAction(row, capabilities)}`.slice(0, 1024),
         inline: false,
       };
-    }))
-    .setFooter({ text: capabilities.canManageCredentials
-      ? "Refresh Session appears when a service has an explicit login problem and secure refresh is configured."
-      : "Session refresh is not available. Ask the owner or trusted Credential Manager if a session needs attention." });
+    }));
+
   const refreshButtons = capabilities.canManageCredentials
-    ? rows.filter((row) => /^social-(instagram|threads|facebook|youtube)$/.test(row.id || "") &&
-      row.status === STATUS.attention && /session refresh required/i.test(row.action || "") &&
-      isServiceRefreshAvailable(row.id.slice("social-".length))
-    ).slice(0, 4).map((row) => new ButtonBuilder()
-      .setCustomId(`harmony-session-refresh:${row.id.slice("social-".length)}`)
-      .setLabel(`Refresh ${row.name}`)
-      .setStyle(ButtonStyle.Success))
+    ? (report.rows || []).filter((row) => hasCookieRefreshEvidence(row) &&
+      isServiceRefreshAvailable(row.id.slice("social-".length)))
+      .slice(0, 4).map((row) => new ButtonBuilder()
+        .setCustomId(`harmony-session-refresh:${row.id.slice("social-".length)}`)
+        .setLabel(`Refresh ${row.name} Cookies`)
+        .setStyle(ButtonStyle.Success))
     : [];
-  const buttons = [...refreshButtons, new ButtonBuilder()
-    .setCustomId("harmony-status:refresh")
-    .setLabel("Refresh Status")
-    .setStyle(ButtonStyle.Primary)];
+  const statusButtons = [
+    new ButtonBuilder().setCustomId("harmony-status:refresh").setLabel("Refresh Status").setStyle(ButtonStyle.Primary),
+    ...(capabilities.canViewOwnerDiagnostics ? [new ButtonBuilder()
+      .setCustomId("harmony-status:diagnostics")
+      .setLabel("Owner Diagnostics")
+      .setStyle(ButtonStyle.Secondary)] : []),
+  ];
+  const components = [];
+  if (refreshButtons.length) components.push(new ActionRowBuilder().addComponents(...refreshButtons));
+  components.push(new ActionRowBuilder().addComponents(...statusButtons));
   return {
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(buttons)],
+    components,
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
   };
 }
 
-function statusAction(row, capabilities) {
-  if (/^social-(instagram|threads|facebook|youtube)$/.test(row.id || "") && row.status === STATUS.attention && /session refresh required/i.test(row.action || "")) {
-    const service = row.id.slice("social-".length);
-    if (!capabilities.canManageCredentials) return "Session refresh required — ask the owner or a Credential Manager.";
-    return isServiceRefreshAvailable(service)
-      ? "Session refresh is available to an authorized Credential Manager."
-      : "Secure session refresh is not yet configured for this service. No credentials were changed; ask the owner to complete setup.";
-  }
-  return row.action;
+function makeOwnerDiagnosticsPayload(report) {
+  const rows = report.rows || [];
+  const detailFields = rows.map((row) => {
+    const view = statusView(row.status);
+    const lastSignal = row.lastChecked
+      ? new Date(row.lastChecked).toISOString()
+      : "No signal/check recorded.";
+    return {
+      name: `${view.icon} ${row.name} — ${view.label}`.slice(0, 256),
+      value: `**Details:** ${row.explanation}\n**Suggested action:** ${row.action || "No action available."}\n**Last signal/check:** ${lastSignal}`.slice(0, 1024),
+      inline: false,
+    };
+  });
+  const refreshReadiness = Object.entries(SOCIAL).map(([service, name]) =>
+    `${name}: ${isServiceRefreshAvailable(service) ? "Secure cookie refresh available" : "Secure cookie refresh not fully configured"}`
+  ).join("\n");
+  const embed = new EmbedBuilder()
+    .setTitle("Harmony Owner Diagnostics")
+    .setColor(0x5865f2)
+    .setDescription(`Detailed local system signals · checked ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}. Social platforms are not actively logged into by this check.`)
+    .addFields(detailFields)
+    .addFields({ name: "Secure Cookie Refresh Readiness", value: refreshReadiness, inline: false })
+    .setFooter({ text: "No cookie contents, credential values, OAuth secrets, or Railway tokens are shown." });
+  return {
+    embeds: [embed],
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-status:back").setLabel("Back to Status").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-status:diagnostics-refresh").setLabel("Refresh Diagnostics").setStyle(ButtonStyle.Primary),
+    )],
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: { parse: [] },
+  };
 }
 
-function capabilitiesFor(interaction) {
+async function capabilitiesFor(interaction) {
   return resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
 }
 
@@ -85,7 +171,22 @@ async function respondWithStatus(interaction, { update = false } = {}) {
     return interaction.reply(payload);
   }
   const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
-  const payload = makeStatusPayload(report, capabilities, interaction.guild?.id);
+  const payload = makeStatusPayload(report, capabilities);
+  if (update && interaction.message) return interaction.update({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
+  if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
+  return interaction.reply(payload);
+}
+
+async function respondWithOwnerDiagnostics(interaction, { update = false } = {}) {
+  const capabilities = await capabilitiesFor(interaction);
+  if (!capabilities.canViewOwnerDiagnostics) {
+    const payload = { content: "Owner diagnostics are available only to the server owner.", flags: MessageFlags.Ephemeral };
+    if (update && interaction.message) return interaction.update({ content: payload.content, embeds: [], components: [] });
+    if (interaction.deferred || interaction.replied) return interaction.editReply({ content: payload.content, components: [] });
+    return interaction.reply(payload);
+  }
+  const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
+  const payload = makeOwnerDiagnosticsPayload(report);
   if (update && interaction.message) return interaction.update({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
   if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
   return interaction.reply(payload);
@@ -97,8 +198,19 @@ async function execute(interaction) {
 }
 
 async function handleStatusInteraction(interaction) {
-  if (!interaction.isButton?.() || !["harmony-status:open", "harmony-status:refresh"].includes(interaction.customId)) return false;
-  await respondWithStatus(interaction, { update: interaction.customId === "harmony-status:refresh" });
+  const actions = new Set([
+    "harmony-status:open",
+    "harmony-status:refresh",
+    "harmony-status:diagnostics",
+    "harmony-status:diagnostics-refresh",
+    "harmony-status:back",
+  ]);
+  if (!interaction.isButton?.() || !actions.has(interaction.customId)) return false;
+  if (interaction.customId === "harmony-status:diagnostics" || interaction.customId === "harmony-status:diagnostics-refresh") {
+    await respondWithOwnerDiagnostics(interaction, { update: true });
+  } else {
+    await respondWithStatus(interaction, { update: interaction.customId !== "harmony-status:open" });
+  }
   return true;
 }
 
@@ -106,7 +218,11 @@ module.exports = {
   data,
   execute,
   makeStatusPayload,
+  makeOwnerDiagnosticsPayload,
+  adminPresentationRows,
+  hasCookieRefreshEvidence,
   statusAction,
   respondWithStatus,
+  respondWithOwnerDiagnostics,
   handleStatusInteraction,
 };
