@@ -4,13 +4,8 @@ const {
   MessageFlags,
   ChannelType,
 } = require("discord.js");
-const {
-  DEFAULT_RELEASE_MESSAGE,
-  saveWelcomePassSettings,
-} = require("../stores/welcomePassStore");
-const {
-  assignAllApprovedWelcomePasses,
-} = require("../services/welcomePassService");
+const { DEFAULT_RELEASE_MESSAGE } = require("../stores/welcomePassStore");
+const { configureWelcomePass } = require("../services/welcomePassService");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-pass-setup")
@@ -66,38 +61,18 @@ async function execute(interaction) {
   const memberMessage =
     interaction.options.getString("member-message") ||
     DEFAULT_RELEASE_MESSAGE;
-  const harmony = interaction.guild.members.me;
-
-  if (role.managed || role.id === interaction.guild.id) {
-    await interaction.editReply(
-      "Please choose a normal server role, not an integration role or @everyone."
-    );
+  try {
+    await configureWelcomePass(interaction.client, {
+      guildId: interaction.guild.id,
+      roleId: role.id,
+      channelId: privateChannel.id,
+      releaseChannelId: memberChannel.id,
+      releaseMessage: memberMessage,
+    });
+  } catch (error) {
+    await interaction.editReply(error.message || "Harmony could not save Welcome Pass settings.");
     return;
   }
-
-  if (!harmony.permissions.has(PermissionFlagsBits.ManageRoles)) {
-    await interaction.editReply(
-      "Harmony needs the **Manage Roles** permission before it can grant STAY."
-    );
-    return;
-  }
-
-  if (harmony.roles.highest.comparePositionTo(role) <= 0) {
-    await interaction.editReply(
-      "Move Harmony’s bot role above **" + role.name + "** in Server Settings → Roles, then run this command again."
-    );
-    return;
-  }
-
-  saveWelcomePassSettings({
-    guildId: interaction.guild.id,
-    roleId: role.id,
-    channelId: privateChannel.id,
-    releaseChannelId: memberChannel.id,
-    releaseMessage: memberMessage,
-  });
-
-  await assignAllApprovedWelcomePasses(interaction.client);
 
   await interaction.editReply({
     content: [

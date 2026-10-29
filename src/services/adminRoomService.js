@@ -8,6 +8,7 @@ const {
   ModalBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -17,6 +18,7 @@ const guardStore = require("../stores/communityGuardStore");
 const guardService = require("./communityGuardService");
 const birthdayManager = require("./birthdayManagerService");
 const welcomePassStore = require("../stores/welcomePassStore");
+const welcomePassService = require("./welcomePassService");
 const greetingStore = require("../stores/greetingStore");
 const memberCountStore = require("../stores/memberCountStore");
 const collectionStore = require("../stores/collectionStore");
@@ -32,6 +34,8 @@ const GUARD_RULE_PICKER_PAGE_SIZE = 25;
 const REQUESTED_GUARD_REVIEW_ROOM_ID = "1554747061252005938";
 const guardManagerSessions = new Map();
 const GUARD_SESSION_TTL_MS = 15 * 60 * 1000;
+const welcomeManagerSessions = new Map();
+const welcomeNavigationSessions = new Map();
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -295,20 +299,178 @@ function ruleNameModal(name = null) {
     .setTitle("Guard Rule Name").addComponents(new ActionRowBuilder().addComponents(input));
 }
 
-function welcomePassPage(guildId) {
-  const settings = welcomePassStore.getWelcomePassSettings(guildId);
-  const text = settings
-    ? `Setup: **Configured**\nGrant mode: **${settings.grant_mode || "automatic"}**\nRole: <@&${settings.role_id}>\nPrivate alerts: <#${settings.channel_id}>\nMember channel: <#${settings.release_channel_id}>\n\nApprovals come from the connected Welcome Pass site. Harmony processes the approval and role assignment; there is no Discord approval queue.`
-    : "Welcome Pass is not configured for this server. Configure the role, alert channel, and member message using the existing setup command.";
-  return pagePayload("🎟️ Welcome Pass", `${text}\n\n${commandHelp([
-    ["harmony-pass-setup", "configure Welcome Pass role automation and messages"],
-    ["harmony-pass-mode", "choose automatic or manual role granting"],
-  ])}`);
+function welcomeSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function getWelcomeDraft(interaction) {
+  const key = welcomeSessionKey(interaction);
+  const draft = welcomeManagerSessions.get(key);
+  if (!draft || Date.now() - draft.updatedAt > GUARD_SESSION_TTL_MS) {
+    welcomeManagerSessions.delete(key);
+    return null;
+  }
+  draft.updatedAt = Date.now();
+  return draft;
+}
+
+function setWelcomeDraft(interaction, draft) {
+  draft.updatedAt = Date.now();
+  welcomeManagerSessions.set(welcomeSessionKey(interaction), draft);
+}
+
+function clearWelcomeDraft(interaction) {
+  welcomeManagerSessions.delete(welcomeSessionKey(interaction));
+}
+
+function setWelcomeNavigation(interaction) {
+  welcomeNavigationSessions.set(welcomeSessionKey(interaction), {
+    panelId: interaction.message?.id,
+    updatedAt: Date.now(),
+  });
+}
+
+function hasActiveWelcomeNavigation(interaction) {
+  const key = welcomeSessionKey(interaction);
+  const session = welcomeNavigationSessions.get(key);
+  const panel = roomStore.getPanel(interaction.guildId);
+  if (!session || Date.now() - session.updatedAt > GUARD_SESSION_TTL_MS ||
+    !panel?.enabled || panel.message_id !== session.panelId) {
+    welcomeNavigationSessions.delete(key);
+    clearWelcomeDraft(interaction);
+    return false;
+  }
+  session.updatedAt = Date.now();
+  return true;
+}
+
+function welcomeDraft(interaction) {
+  const existing = getWelcomeDraft(interaction);
+  if (existing) return existing;
+  const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
+  const draft = {
+    roleId: settings?.role_id || null,
+    channelId: settings?.channel_id || null,
+    releaseChannelId: settings?.release_channel_id || null,
+    releaseMessage: settings?.release_message || welcomePassStore.DEFAULT_RELEASE_MESSAGE,
+  };
+  setWelcomeDraft(interaction, draft);
+  return draft;
+}
+
+function welcomePassPage(guild, userId, notice = null) {
+  const settings = welcomePassStore.getWelcomePassSettings(guild.id);
+  const draft = userId ? getWelcomeDraft({ guildId: guild.id, user: { id: userId } }) : null;
+  const complete = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
+  const roleId = settings?.role_id || draft?.roleId;
+  const privateChannelId = settings?.channel_id || draft?.channelId;
+  const memberChannelId = settings?.release_channel_id || draft?.releaseChannelId;
+  const template = settings?.release_message || draft?.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE;
+  const role = roleId ? guild.roles.cache.get(roleId) : null;
+  const description = [
+    notice,
+    `**Status:** ${complete ? "Configured" : "Setup needed"}`,
+    `**Approved Role:** ${role?.name ? `@${role.name}` : (roleId ? `<@&${roleId}>` : "Not selected")}`,
+    `**Private Alert Channel:** ${privateChannelId ? `<#${privateChannelId}>` : "Not selected"}`,
+    `**Public/Member Channel:** ${memberChannelId ? `<#${memberChannelId}>` : "Not selected"}`,
+    `**Grant Mode:** ${complete ? (settings.grant_mode || "automatic") : "Set after setup"}`,
+    `**Message Template:**\n${template.slice(0, 1100)}`,
+    complete
+      ? (settings.grant_mode === "manual"
+        ? "Manual mode: an admin grants the configured role; Harmony then sends the member message and private confirmation. Approvals and member linking remain available. A separate Disable control is not provided because the current backend has no non-destructive disabled state."
+        : "Automatic mode: after approval and an exact Discord account match, Harmony grants the role and sends the configured messages.")
+      : "Select the role and both channels to finish setup. Your selections stay in this private setup session until saved; existing configuration is not cleared.",
+    "The current backend has no separate non-destructive Disable state. Manual mode changes role granting, but does not turn off approvals or member linking.",
+  ].filter(Boolean).join("\n\n");
+  const components = [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-role").setLabel("Approved Role").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-private").setLabel("Private Alert Channel").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-member").setLabel("Public/Member Channel").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-message").setLabel("Message Template").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-mode").setLabel(complete ? `Switch to ${settings.grant_mode === "manual" ? "Automatic" : "Manual"}` : "Grant Mode")
+      .setStyle(ButtonStyle.Primary).setDisabled(!complete),
+  )];
+  if (!complete && draft) components.push(new ActionRowBuilder().addComponents(new ButtonBuilder()
+    .setCustomId("harmony-admin-room:welcome-cancel").setLabel("Cancel Setup").setStyle(ButtonStyle.Secondary)));
+  return pagePayload("🎟️ Welcome Pass Manager", description, components);
+}
+
+function welcomePickerPayload(field) {
+  const back = new ActionRowBuilder().addComponents(new ButtonBuilder()
+    .setCustomId("harmony-admin-room:welcome:ephemeral").setLabel("Back to Welcome Pass").setStyle(ButtonStyle.Secondary));
+  if (field === "role") {
+    return pagePayload("Choose the Approved Role", "Choose the server role Harmony grants after approval.", [
+      new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId("harmony-admin-room:welcome-role-select").setPlaceholder("Choose an approved role").setMinValues(1).setMaxValues(1)),
+      back,
+    ]);
+  }
+  const privateChannel = field === "private";
+  return pagePayload(privateChannel ? "Choose the Private Alert Channel" : "Choose the Public/Member Channel", privateChannel
+    ? "Choose where Harmony sends private admin alerts for Welcome Pass matches and approvals."
+    : "Choose where Harmony posts the member’s approval message.", [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId(`harmony-admin-room:welcome-${field}-select`)
+      .setPlaceholder(privateChannel ? "Choose a private alert text channel" : "Choose a public/member text channel")
+      .setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)),
+    back,
+  ]);
+}
+
+function welcomeMessageModal(value) {
+  const input = new TextInputBuilder().setCustomId("message").setLabel("Member approval message")
+    .setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000)
+    .setPlaceholder("Use {member}, {name}, and {server}. Leave blank to restore the default.");
+  if (value) input.setValue(value.slice(0, 1000));
+  return new ModalBuilder().setCustomId("harmony-admin-room:welcome-message-submit")
+    .setTitle("Edit Welcome Pass Message").addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+async function saveWelcomeManagerField(interaction, field, value) {
+  const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
+  const isComplete = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
+  let notice;
+  if (isComplete) {
+    try {
+      await welcomePassService.updateWelcomePassSetting(interaction.client, interaction.guildId, field, value);
+    } catch (error) {
+      await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, `Setting was not changed: ${error.message || "Please check the selected value."}`));
+      return;
+    }
+    clearWelcomeDraft(interaction);
+    notice = field === "roleId" ? `Approved role updated to <@&${value}>.`
+      : field === "channelId" ? `Private Alert Channel updated to <#${value}>.`
+        : field === "releaseChannelId" ? `Public/Member Channel updated to <#${value}>.`
+          : "Welcome Pass message template updated.";
+  } else {
+    const draft = welcomeDraft(interaction);
+    draft[field] = value;
+    setWelcomeDraft(interaction, draft);
+    if (draft.roleId && draft.channelId && draft.releaseChannelId) {
+      try {
+        await welcomePassService.configureWelcomePass(interaction.client, {
+          guildId: interaction.guildId,
+          ...draft,
+        });
+        clearWelcomeDraft(interaction);
+        notice = "Welcome Pass setup is complete. Existing approvals were checked using the current workflow.";
+      } catch (error) {
+        notice = `Setup was not saved: ${error.message || "Please check the selected role and channels."}`;
+      }
+    } else {
+      const missing = [
+        !draft.roleId && "Approved Role",
+        !draft.channelId && "Private Alert Channel",
+        !draft.releaseChannelId && "Public/Member Channel",
+      ].filter(Boolean);
+      notice = `Selection held for this setup session only. Still needed: ${missing.join(", ")}. Select the remaining controls to save setup.`;
+    }
+  }
+  await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, notice));
 }
 
 function communityToolPage(guildId, area) {
   if (area === "guard") return null;
-  if (area === "welcome") return welcomePassPage(guildId);
+  if (area === "welcome") return null;
   if (area === "greetings") {
     const settings = greetingStore.getGreetingSettings(guildId);
     return pagePayload("👋 Greetings", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**${settings?.channel_id ? `\nChannel: <#${settings.channel_id}>` : ""}\n\n${commandHelp([["harmony-greetings", "setup, preview, test, or turn greetings off"]])}`);
@@ -525,7 +687,7 @@ async function handleAdminRoomInteraction(interaction) {
   }
   const [, action, parameter] = interaction.customId.split(":");
   const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "birthdays", "status", "media"]);
-  if (panelActions.has(action) && !(action === "guard" && parameter === "ephemeral")) {
+  if (panelActions.has(action) && !(["guard", "welcome"].includes(action) && parameter === "ephemeral")) {
     const active = roomStore.getPanel(interaction.guildId);
     if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
       await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
@@ -551,6 +713,81 @@ async function handleAdminRoomInteraction(interaction) {
     const payload = await guardPage(interaction.guild);
     if (parameter === "ephemeral") await interaction.update(payload);
     else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action === "welcome") {
+    if (parameter === "ephemeral") {
+      if (!hasActiveWelcomeNavigation(interaction)) {
+        await interaction.reply({ content: "This Welcome Pass screen came from an Admin Controls panel that is no longer active. Open Welcome Pass from the current panel.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.update(welcomePassPage(interaction.guild, interaction.user.id));
+      return true;
+    }
+    setWelcomeNavigation(interaction);
+    welcomeDraft(interaction);
+    await interaction.reply({ ...welcomePassPage(interaction.guild, interaction.user.id), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action.startsWith("welcome-") && !hasActiveWelcomeNavigation(interaction)) {
+    await interaction.reply({ content: "This Welcome Pass screen came from an Admin Controls panel that is no longer active. Open Welcome Pass from the current panel.", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (["welcome-role", "welcome-private", "welcome-member"].includes(action)) {
+    welcomeDraft(interaction);
+    const field = action === "welcome-role" ? "role" : action === "welcome-private" ? "private" : "member";
+    await interaction.update(welcomePickerPayload(field));
+    return true;
+  }
+  if (action === "welcome-role-select") {
+    const roleId = interaction.values?.[0];
+    const role = roleId && (interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null));
+    try {
+      welcomePassService.validateWelcomePassRole(interaction.guild, role);
+      await saveWelcomeManagerField(interaction, "roleId", role.id);
+    } catch (error) {
+      await interaction.reply({ content: error.message || "Choose a valid approved role.", flags: MessageFlags.Ephemeral });
+    }
+    return true;
+  }
+  if (action === "welcome-private-select" || action === "welcome-member-select") {
+    const channelId = interaction.values?.[0];
+    const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
+    if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
+      await interaction.reply({ content: "Choose a text channel in this server.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await saveWelcomeManagerField(interaction, action === "welcome-private-select" ? "channelId" : "releaseChannelId", channel.id);
+    return true;
+  }
+  if (action === "welcome-message") {
+    const draft = welcomeDraft(interaction);
+    const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
+    await interaction.showModal(welcomeMessageModal(settings?.release_message || draft.releaseMessage));
+    return true;
+  }
+  if (action === "welcome-message-submit" && interaction.isModalSubmit?.()) {
+    const message = interaction.fields.getTextInputValue("message");
+    await saveWelcomeManagerField(interaction, "releaseMessage", message);
+    return true;
+  }
+  if (action === "welcome-mode") {
+    const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
+    if (!settings?.role_id || !settings?.channel_id || !settings?.release_channel_id) {
+      await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, "Choose the approved role and both channels before changing grant mode."));
+      return true;
+    }
+    const mode = settings.grant_mode === "manual" ? "automatic" : "manual";
+    welcomePassStore.setWelcomePassGrantMode(interaction.guildId, mode);
+    const notice = mode === "manual"
+      ? "Grant Mode is now Manual. Harmony waits for an admin to grant the configured role, then sends the member message and private confirmation."
+      : "Grant Mode is now Automatic. Harmony grants the role after approval and an exact Discord account match.";
+    await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, notice));
+    return true;
+  }
+  if (action === "welcome-cancel") {
+    clearWelcomeDraft(interaction);
+    await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, "Unfinished setup selections were discarded. Existing configuration is unchanged."));
     return true;
   }
   if (action === "guard-room") {
@@ -772,8 +1009,8 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (["welcome", "greetings", "members", "collections", "logs"].includes(action)) {
-    const area = action === "welcome" ? "welcome" : action;
+  if (["greetings", "members", "collections", "logs"].includes(action)) {
+    const area = action;
     const payload = communityToolPage(interaction.guildId, area);
     if (payload) await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
     return true;
