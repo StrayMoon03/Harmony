@@ -216,7 +216,7 @@ test("authorized controls open the existing Guard, history, Birthday, and commun
 
   await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:welcome" });
   assert.match(base.response.embeds[0].data.title, /Welcome Pass/);
-  for (const [action, title] of [["greetings", "Greetings"], ["members", "Member Counts"], ["collections", "Collections"], ["logs", "Message Logs"], ["media", "Media & System"]]) {
+  for (const [action, title] of [["greetings", "Greetings"], ["members", "Member Counts"], ["collections", "Collections"], ["logs", "Message Logs"], ["media", "Media & Errors Manager"]]) {
     await room.handleAdminRoomInteraction({ ...base, customId: `harmony-admin-room:${action}` });
     assert.match(base.response.embeds[0].data.title, new RegExp(title));
   }
