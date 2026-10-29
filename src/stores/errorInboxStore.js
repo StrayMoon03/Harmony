@@ -32,8 +32,17 @@ function disableErrorInbox() {
     .run(new Date().toISOString()).changes > 0;
 }
 
+function enableErrorInbox() {
+  return getDb()
+    .prepare(
+      "UPDATE error_inbox_settings SET enabled = 1, updated_at = ? WHERE id = 1"
+    )
+    .run(new Date().toISOString()).changes > 0;
+}
+
 module.exports = {
   getErrorInboxSettings,
   saveErrorInboxSettings,
   disableErrorInbox,
+  enableErrorInbox,
 };
