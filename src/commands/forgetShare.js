@@ -37,6 +37,8 @@ const {
 } = require("../modules/media/threads");
 const shareStore = require("../stores/shareStore");
 
+const INVALID_LINK_MESSAGE = "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, X, YouTube, or Threads post link.";
+
 const data = new SlashCommandBuilder()
   .setName("harmony-forget")
   .setDescription("Allow a previously shared social post to be shared again")
@@ -110,6 +112,13 @@ async function resolveShareKey(input) {
   return null;
 }
 
+async function forgetSharedPost(input, guildId) {
+  const key = await resolveShareKey(input);
+  if (!key || !key.mediaId) return { status: "invalid", key: null };
+  const removed = shareStore.remove(key.platform, key.mediaId, guildId);
+  return { status: removed ? "removed" : "not_found", key };
+}
+
 async function execute(interaction) {
   await interaction.deferReply({
     flags: MessageFlags.Ephemeral,
@@ -118,24 +127,17 @@ async function execute(interaction) {
   const link = interaction.options.getString("link", true).trim();
 
   try {
-    const key = await resolveShareKey(link);
+    const result = await forgetSharedPost(link, interaction.guildId);
 
-    if (!key || !key.mediaId) {
+    if (result.status === "invalid") {
       await interaction.editReply({
-        content:
-          "I couldn’t recognize that link. Please use an Instagram, Facebook, TikTok, X, YouTube, or Threads post link.",
+        content: INVALID_LINK_MESSAGE,
       });
       return;
     }
 
-    const removed = shareStore.remove(
-      key.platform,
-      key.mediaId,
-      interaction.guildId
-    );
-
     await interaction.editReply({
-      content: removed
+      content: result.status === "removed"
         ? "That post has been removed from Harmony’s memory and can be shared again."
         : "Harmony doesn’t currently have that post saved in her memory.",
     });
@@ -153,4 +155,6 @@ module.exports = {
   data,
   execute,
   resolveShareKey,
+  forgetSharedPost,
+  INVALID_LINK_MESSAGE,
 };
