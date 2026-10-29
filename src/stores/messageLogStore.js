@@ -23,6 +23,12 @@ function disableLogSettings(guildId) {
   ).run(new Date().toISOString(), guildId).changes > 0;
 }
 
+function enableLogSettings(guildId) {
+  return getDb().prepare(
+    "UPDATE message_log_settings SET enabled = 1, updated_at = ? WHERE guild_id = ?"
+  ).run(new Date().toISOString(), guildId).changes > 0;
+}
+
 function addExcludedChannel(guildId, channelId) {
   getDb().prepare(
     "INSERT OR IGNORE INTO message_log_exclusions (guild_id, channel_id) VALUES (?, ?)"
@@ -94,7 +100,7 @@ function purgeExpiredSnapshots(now) {
 }
 
 module.exports = {
-  getLogSettings, saveLogSettings, disableLogSettings,
+  getLogSettings, saveLogSettings, disableLogSettings, enableLogSettings,
   addExcludedChannel, removeExcludedChannel, listExcludedChannels,
   isChannelExcluded, saveSnapshot, getSnapshot, addLogPost,
   listExpiredLogPosts, removeLogPost, purgeExpiredSnapshots,
