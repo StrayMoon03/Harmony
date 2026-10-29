@@ -13,8 +13,18 @@ const STATUS = Object.freeze({
   owner: "owner_required",
   unknown: "unknown",
 });
-const SOCIAL = Object.freeze({ instagram: "Instagram", threads: "Threads", facebook: "Facebook", youtube: "YouTube" });
+const SOCIAL = Object.freeze({
+  instagram: "Instagram",
+  facebook: "Facebook",
+  youtube: "YouTube",
+  threads: "Threads",
+  tiktok: "TikTok",
+  x: "X",
+});
+const COOKIE_SERVICES = new Set(["instagram", "threads", "facebook", "youtube"]);
+const SOCIAL_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const authFailures = new Map();
+const socialSuccesses = new Map();
 
 function isExplicitAuthenticationFailure(error) {
   const text = [error?.message, error?.stderr, typeof error === "string" ? error : ""]
@@ -87,11 +97,19 @@ async function resolveAdminCapabilities(context = {}) {
 
 function recordSocialAuthFailure(platform, at = new Date().toISOString(), kind = "session") {
   const key = String(platform || "").toLowerCase();
-  if (SOCIAL[key]) authFailures.set(key, { at, kind: kind === "owner" ? "owner" : "session" });
+  if (COOKIE_SERVICES.has(key)) {
+    socialSuccesses.delete(key);
+    authFailures.set(key, { at, kind: kind === "owner" ? "owner" : "session" });
+  }
 }
 
-function recordSocialSuccess(platform) {
-  authFailures.delete(String(platform || "").toLowerCase());
+function recordSocialSuccess(platform, at = new Date().toISOString()) {
+  const key = String(platform || "").toLowerCase();
+  if (!SOCIAL[key]) return;
+  // Ordinary media success may clear a stale login failure, but a platform
+  // security checkpoint still needs the owner to resolve it explicitly.
+  if (authFailures.get(key)?.kind !== "owner") authFailures.delete(key);
+  socialSuccesses.set(key, at);
 }
 
 function sessionPath(platform) {
@@ -121,6 +139,7 @@ async function sessionConfigured(platform) {
 
 async function checkSocial(platform) {
   const name = SOCIAL[platform];
+  if (!name) return statusRow(`social-${platform}`, String(platform), STATUS.unknown, "This platform is not supported.");
   const authFailure = authFailures.get(platform);
   if (authFailure?.kind === "owner") return statusRow(
     `social-${platform}`,
@@ -138,7 +157,19 @@ async function checkSocial(platform) {
     `${name} cookies need to be refreshed.`,
     authFailure.at
   );
-  const configured = await sessionConfigured(platform);
+  const successAt = socialSuccesses.get(platform);
+  const successAge = successAt ? Date.now() - new Date(successAt).getTime() : Infinity;
+  if (Number.isFinite(successAge) && successAge >= 0 && successAge <= SOCIAL_SUCCESS_TTL_MS) {
+    return statusRow(
+      `social-${platform}`,
+      name,
+      STATUS.healthy,
+      "A recent media retrieval succeeded.",
+      "No action needed.",
+      successAt
+    );
+  }
+  const configured = COOKIE_SERVICES.has(platform) ? await sessionConfigured(platform) : false;
   return statusRow(
     `social-${platform}`,
     name,
@@ -160,8 +191,8 @@ async function checkDiscovery(guildId) {
   if (!guildId) return statusRow("discovery", "Event discovery", STATUS.unknown, "A server context is needed to check discovery settings.");
   const config = eventStore.getCalendarDiscoveryConfig(guildId);
   const state = eventStore.getCalendarDiscoveryState(guildId, "jype-straykids-schedule");
-  if (!config?.enabled) return statusRow("discovery", "Event discovery", STATUS.attention,
-    "Automatic Stray Kids schedule checks are off for this server.", "Turn discovery on in the Stray Kids Schedule Manager.", state?.last_run_at || undefined);
+  if (!config?.enabled) return statusRow("discovery", "Event discovery", STATUS.unknown,
+    "Automatic Stray Kids schedule checks are off for this server.", "No action needed.", state?.last_run_at || undefined);
   if (state?.last_error) return statusRow("discovery", "Event discovery", STATUS.attention,
     "The latest scheduled source check did not complete successfully.", "Try Check Now in the Stray Kids Schedule Manager; if it keeps failing, ask the owner.", state.last_run_at || undefined);
   if (!state?.last_success_at) return statusRow("discovery", "Event discovery", STATUS.unknown,
@@ -190,7 +221,7 @@ async function checkGuard(guild) {
       : roomConfigured
         ? "The permission check found no ordinary-member access, but review channel permissions should be confirmed."
         : "";
-  if (!settings.enabled) return statusRow("guard", "Community Guard", STATUS.attention,
+  if (!settings.enabled) return statusRow("guard", "Community Guard", STATUS.unknown,
     `Monitoring is off. Review Room: ${roomConfigured ? "configured" : "missing or unavailable"}. Active rules: ${rules.length}.${visibilitySummary ? ` ${visibilitySummary}` : ""}`, "Turn monitoring on with /harmony-guard setup.");
   if (!roomConfigured) return statusRow("guard", "Community Guard", STATUS.attention,
     `Monitoring is on, but the configured Review Room is unavailable. Active rules: ${rules.length}.`, "Use /harmony-guard setup to select an available room.");
@@ -253,6 +284,8 @@ async function runStatusCheck({ client, guild, actorId }) {
 module.exports = {
   STATUS,
   SOCIAL,
+  COOKIE_SERVICES,
+  SOCIAL_SUCCESS_TTL_MS,
   getAdminCapabilities,
   resolveAdminCapabilities,
   parseConfiguredRoleIds,
