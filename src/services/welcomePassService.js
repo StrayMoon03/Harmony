@@ -44,13 +44,19 @@ function validateWelcomePassRole(guild, role) {
   return role;
 }
 
+function resolveWelcomePassEntryChannelId(welcomePassSettings, greetingSettings) {
+  return welcomePassSettings?.entry_channel_id || greetingSettings?.channel_id || null;
+}
+
 async function configureWelcomePass(client, settings) {
   const guild = client.guilds.cache.get(settings.guildId) ||
     await client.guilds.fetch(settings.guildId).catch(() => null);
   if (!guild) throw new Error("Harmony could not find this server.");
   const role = guild.roles.cache.get(settings.roleId) || await guild.roles.fetch(settings.roleId).catch(() => null);
   validateWelcomePassRole(guild, role);
-  for (const [id, label] of [[settings.channelId, "private alert"], [settings.releaseChannelId, "member"]]) {
+  const channels = [[settings.channelId, "private alert"], [settings.releaseChannelId, "member"]];
+  if (settings.entryChannelId) channels.push([settings.entryChannelId, "Welcome Pass entry"]);
+  for (const [id, label] of channels) {
     const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
     if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
       throw new Error(`Choose a server text channel for the ${label} channel.`);
@@ -61,7 +67,7 @@ async function configureWelcomePass(client, settings) {
 }
 
 async function updateWelcomePassSetting(client, guildId, field, value) {
-  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", releaseMessage: "release_message" }[field];
+  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", entryChannelId: "entry_channel_id", releaseMessage: "release_message" }[field];
   if (!property) throw new Error("Invalid Welcome Pass setting.");
   const settings = getWelcomePassSettings(guildId);
   if (!settings) throw new Error("Complete Welcome Pass setup before changing individual settings.");
@@ -70,7 +76,7 @@ async function updateWelcomePassSetting(client, guildId, field, value) {
   if (field === "roleId") {
     const role = guild.roles.cache.get(value) || await guild.roles.fetch(value).catch(() => null);
     validateWelcomePassRole(guild, role);
-  } else if (["channelId", "releaseChannelId"].includes(field)) {
+  } else if (["channelId", "releaseChannelId", "entryChannelId"].includes(field)) {
     const channel = guild.channels.cache.get(value) || await guild.channels.fetch(value).catch(() => null);
     if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
       throw new Error("Choose a text channel in this server.");
@@ -351,6 +357,7 @@ async function assignAllApprovedWelcomePasses(client) {
 module.exports = {
   autoLinkWelcomePassByDiscordUsername,
   validateWelcomePassRole,
+  resolveWelcomePassEntryChannelId,
   configureWelcomePass,
   updateWelcomePassSetting,
   assignApprovedWelcomePass,

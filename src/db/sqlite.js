@@ -698,6 +698,9 @@ function migrate(database) {
       "ALTER TABLE welcome_pass_settings ADD COLUMN grant_mode TEXT NOT NULL DEFAULT 'automatic'"
     );
   }
+  if (!welcomePassSettingColumns.has("entry_channel_id")) {
+    database.exec("ALTER TABLE welcome_pass_settings ADD COLUMN entry_channel_id TEXT");
+  }
 
   const birthdayProfileColumns = new Set(
     database.prepare("PRAGMA table_info(birthday_profiles)").all()

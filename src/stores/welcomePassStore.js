@@ -24,6 +24,7 @@ function saveWelcomePassSettings({
   roleId,
   channelId,
   releaseChannelId,
+  entryChannelId,
   releaseMessage,
 }) {
   getDb().prepare(`
@@ -32,13 +33,15 @@ function saveWelcomePassSettings({
       role_id,
       channel_id,
       release_channel_id,
+      entry_channel_id,
       release_message,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(guild_id) DO UPDATE SET
       role_id = excluded.role_id,
       channel_id = excluded.channel_id,
       release_channel_id = excluded.release_channel_id,
+      entry_channel_id = COALESCE(excluded.entry_channel_id, welcome_pass_settings.entry_channel_id),
       release_message = excluded.release_message,
       updated_at = excluded.updated_at
   `).run(
@@ -46,6 +49,7 @@ function saveWelcomePassSettings({
     roleId,
     channelId,
     releaseChannelId,
+    entryChannelId || null,
     releaseMessage || DEFAULT_RELEASE_MESSAGE,
     new Date().toISOString()
   );
@@ -62,6 +66,7 @@ function updateWelcomePassSetting(guildId, field, value) {
     roleId: "role_id",
     channelId: "channel_id",
     releaseChannelId: "release_channel_id",
+    entryChannelId: "entry_channel_id",
     releaseMessage: "release_message",
   };
   const column = columns[field];

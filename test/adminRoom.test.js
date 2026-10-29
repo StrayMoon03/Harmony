@@ -12,7 +12,9 @@ const { getDb, closeDb } = require("../src/db/sqlite");
 const roomStore = require("../src/stores/adminRoomStore");
 const guardStore = require("../src/stores/communityGuardStore");
 const welcomePassStore = require("../src/stores/welcomePassStore");
+const greetingStore = require("../src/stores/greetingStore");
 const room = require("../src/services/adminRoomService");
+const { resolveWelcomePassEntryChannelId } = require("../src/services/welcomePassService");
 const { managerPanelComponents } = require("../src/services/eventSchedulerService");
 
 getDb();
@@ -360,6 +362,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   const role = addRole("stay-role", "STAY");
   const alerts = addChannel("private-alerts");
   const memberRoom = addChannel("member-room");
+  const entryRoom = addChannel("entry-room");
   const nextAlerts = addChannel("new-alerts");
   const activePanel = addChannel("admin-panel-channel");
   roomStore.savePanel({ guildId: guild.id, channelId: activePanel.id, messageId: "welcome-panel", enabled: true });
@@ -368,6 +371,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
     roleId: role.id,
     channelId: alerts.id,
     releaseChannelId: memberRoom.id,
+    entryChannelId: entryRoom.id,
     releaseMessage: "Welcome {member} to {server}!",
   });
   welcomePassStore.setWelcomePassGrantMode(guild.id, "manual");
@@ -380,9 +384,13 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.equal(open.response.flags, 64);
   assert.match(open.response.embeds[0].data.description, /Status:\*\* Configured/);
   assert.match(open.response.embeds[0].data.description, /Approved Role:\*\* @STAY/);
+  assert.ok(open.response.embeds[0].data.description.includes(`Welcome Pass Entry Channel:** <#${entryRoom.id}>`));
+  assert.ok(open.response.embeds[0].data.description.includes(`Staff Approval Alerts:** <#${alerts.id}>`));
+  assert.ok(open.response.embeds[0].data.description.includes(`Approved Member Welcome Channel:** <#${memberRoom.id}>`));
+  assert.doesNotMatch(open.response.embeds[0].data.description, /Private Alert Channel|Public\/Member Channel/);
   assert.match(open.response.embeds[0].data.description, /Grant Mode:\*\* manual/);
   const controls = open.response.components.flatMap((row) => row.components).map((component) => component.data.custom_id);
-  for (const id of ["welcome-role", "welcome-private", "welcome-member", "welcome-message", "welcome-mode"]) {
+  for (const id of ["welcome-role", "welcome-entry", "welcome-private", "welcome-member", "welcome-message", "welcome-mode"]) {
     assert.ok(controls.includes(`harmony-admin-room:${id}`));
   }
 
@@ -393,15 +401,27 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   await room.handleAdminRoomInteraction(roleSelect);
   assert.equal(welcomePassStore.getWelcomePassSettings(guild.id).channel_id, alerts.id);
 
+  const entryPicker = guardInteraction(guild, "harmony-admin-room:welcome-entry");
+  await room.handleAdminRoomInteraction(entryPicker);
+  assert.match(entryPicker.response.embeds[0].data.title, /Welcome Pass Entry Channel/);
+  const entrySelect = guardInteraction(guild, "harmony-admin-room:welcome-entry-select", { values: ["new-entry-room"] });
+  const newEntryRoom = addChannel("new-entry-room");
+  await room.handleAdminRoomInteraction(entrySelect);
+  let saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.entry_channel_id, newEntryRoom.id);
+  assert.equal(saved.channel_id, alerts.id);
+  assert.equal(saved.release_channel_id, memberRoom.id);
+
   const openChannel = guardInteraction(guild, "harmony-admin-room:welcome-private");
   await room.handleAdminRoomInteraction(openChannel);
   assert.equal(openChannel.response.components[0].components[0].data.channel_types[0], ChannelType.GuildText);
   const selectChannel = guardInteraction(guild, "harmony-admin-room:welcome-private-select", { values: [nextAlerts.id] });
   await room.handleAdminRoomInteraction(selectChannel);
-  let saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  saved = welcomePassStore.getWelcomePassSettings(guild.id);
   assert.equal(saved.channel_id, nextAlerts.id);
   assert.equal(saved.role_id, role.id);
   assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.entry_channel_id, newEntryRoom.id);
   assert.equal(saved.release_message, "Welcome {member} to {server}!");
   assert.equal(saved.grant_mode, "manual");
 
@@ -424,6 +444,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.equal(saved.role_id, role.id);
   assert.equal(saved.channel_id, nextAlerts.id);
   assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.entry_channel_id, newEntryRoom.id);
 
   const back = guardInteraction(guild, "harmony-admin-room:welcome:ephemeral");
   await room.handleAdminRoomInteraction(back);
@@ -435,6 +456,7 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   const role = addRole("new-stay-role", "STAY");
   const alerts = addChannel("setup-alerts");
   const memberRoom = addChannel("setup-members");
+  const entryRoom = addChannel("setup-entry");
   const panelChannel = addChannel("setup-admin-panel");
   roomStore.savePanel({ guildId: guild.id, channelId: panelChannel.id, messageId: "setup-panel", enabled: true });
 
@@ -446,7 +468,7 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   await room.handleAdminRoomInteraction(rolePicker);
   const roleSelect = guardInteraction(guild, "harmony-admin-room:welcome-role-select", { values: [role.id] });
   await room.handleAdminRoomInteraction(roleSelect);
-  assert.match(roleSelect.response.embeds[0].data.description, /Private Alert Channel, Public\/Member Channel/);
+  assert.match(roleSelect.response.embeds[0].data.description, /Welcome Pass Entry Channel, Staff Approval Alerts, Approved Member Welcome Channel/);
   assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null, "incomplete setup remains session-only");
 
   const privatePicker = guardInteraction(guild, "harmony-admin-room:welcome-private");
@@ -458,11 +480,79 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   await room.handleAdminRoomInteraction(memberPicker);
   const memberSelect = guardInteraction(guild, "harmony-admin-room:welcome-member-select", { values: [memberRoom.id] });
   await room.handleAdminRoomInteraction(memberSelect);
+  assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null, "entry destination is required before first setup is saved");
+  const entryPicker = guardInteraction(guild, "harmony-admin-room:welcome-entry");
+  await room.handleAdminRoomInteraction(entryPicker);
+  const entrySelect = guardInteraction(guild, "harmony-admin-room:welcome-entry-select", { values: [entryRoom.id] });
+  await room.handleAdminRoomInteraction(entrySelect);
   const saved = welcomePassStore.getWelcomePassSettings(guild.id);
   assert.equal(saved.role_id, role.id);
   assert.equal(saved.channel_id, alerts.id);
   assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.entry_channel_id, entryRoom.id);
   assert.equal(saved.grant_mode, "automatic");
+});
+
+test("legacy Welcome Pass installations keep using the existing Greetings entry channel until overridden", async () => {
+  const { guild, addChannel, addRole } = createGuild("welcome-manager-legacy-entry");
+  const greetingEntry = addChannel("legacy-greeting-entry");
+  const explicitEntry = addChannel("explicit-welcome-entry");
+  const alerts = addChannel("legacy-staff-alerts");
+  const approved = addChannel("legacy-approved-room");
+  const role = addRole("legacy-stay", "STAY");
+  const panelChannel = addChannel("legacy-admin-panel");
+  greetingStore.saveGreetingSettings({
+    guildId: guild.id,
+    channelId: greetingEntry.id,
+    entranceMessage: "Complete your Welcome Pass, {member}!",
+    exitMessage: "Goodbye, {name}.",
+  });
+  welcomePassStore.saveWelcomePassSettings({
+    guildId: guild.id,
+    roleId: role.id,
+    channelId: alerts.id,
+    releaseChannelId: approved.id,
+    releaseMessage: "Approved {member}.",
+  });
+  roomStore.savePanel({ guildId: guild.id, channelId: panelChannel.id, messageId: "legacy-admin-message", enabled: true });
+
+  const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panelChannel.id, message: { id: "legacy-admin-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const summary = open.response.embeds[0].data.description;
+  assert.match(summary, /Status:\*\* Configured/);
+  assert.ok(summary.includes(`Welcome Pass Entry Channel:** <#${greetingEntry.id}> (following the current entrance greeting channel)`));
+  assert.equal(resolveWelcomePassEntryChannelId(welcomePassStore.getWelcomePassSettings(guild.id), greetingStore.getGreetingSettings(guild.id)), greetingEntry.id);
+
+  const picker = guardInteraction(guild, "harmony-admin-room:welcome-entry");
+  await room.handleAdminRoomInteraction(picker);
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:welcome-entry-select", { values: [explicitEntry.id] }));
+  const saved = welcomePassStore.getWelcomePassSettings(guild.id);
+  assert.equal(saved.entry_channel_id, explicitEntry.id);
+  assert.equal(saved.channel_id, alerts.id);
+  assert.equal(saved.release_channel_id, approved.id);
+  assert.equal(greetingStore.getGreetingSettings(guild.id).channel_id, greetingEntry.id, "Welcome Pass override does not change Greetings or exit-message destination");
+  assert.equal(resolveWelcomePassEntryChannelId(saved, greetingStore.getGreetingSettings(guild.id)), explicitEntry.id);
+});
+
+test("slash-style Welcome Pass setup updates preserve an existing entry-channel override", () => {
+  const guildId = "welcome-entry-preserve-on-setup";
+  const original = {
+    guildId,
+    roleId: "preserve-role",
+    channelId: "preserve-staff",
+    releaseChannelId: "preserve-approved",
+    entryChannelId: "preserve-entry",
+    releaseMessage: "Original message",
+  };
+  welcomePassStore.saveWelcomePassSettings(original);
+  welcomePassStore.saveWelcomePassSettings({
+    ...original,
+    entryChannelId: undefined,
+    releaseMessage: "Updated message",
+  });
+  const saved = welcomePassStore.getWelcomePassSettings(guildId);
+  assert.equal(saved.entry_channel_id, "preserve-entry");
+  assert.equal(saved.release_message, "Updated message");
 });
 
 test("Welcome Pass unauthorized controls are rejected and unfinished setup can be discarded", async () => {
