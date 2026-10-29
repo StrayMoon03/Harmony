@@ -228,14 +228,14 @@ test("status distinguishes session expiry from security checkpoints and never of
   };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
   const text = JSON.stringify(payload);
-  assert.match(text, /Instagram cookies need to be refreshed, but secure cookie refresh is not fully set up/);
-  assert.match(text, /Owner attention required/);
+  assert.match(text, /\*\*Instagram\*\* — Cookies need to be refreshed\. Ask the owner to finish secure setup/);
+  assert.match(text, /\*\*Threads\*\* — Owner\/Developer Required/);
   assert.doesNotMatch(text, /harmony-session-refresh:/);
   assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-status:refresh"));
   assert.doesNotMatch(text, /Refresh Instagram Cookies|harmony-session-refresh:/);
   const regularAdminPayload = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
   assert.match(JSON.stringify(regularAdminPayload), /ask the owner or a Credential Manager/i);
-  assert.match(JSON.stringify(regularAdminPayload), /Owner attention required/);
+  assert.match(JSON.stringify(regularAdminPayload), /\*\*Threads\*\* — Owner\/Developer Required/);
 });
 
 test("failed validation audit accepts no submitted session or raw error and cannot rotate a secret", () => {
