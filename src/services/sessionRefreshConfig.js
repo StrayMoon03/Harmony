@@ -8,6 +8,15 @@ const SECRET_VARIABLES = Object.freeze({
   youtube: "YOUTUBE_COOKIES_BASE64",
 });
 
+function normalizeInstagramUsername(value) {
+  const username = String(value || "").trim().replace(/^@/, "").toLowerCase();
+  return /^[a-z0-9._]{1,30}$/.test(username) ? username : null;
+}
+
+function expectedInstagramUsername(env = process.env) {
+  return normalizeInstagramUsername(env.INSTAGRAM_EXPECTED_USERNAME);
+}
+
 function publicBaseUrl(env = process.env) {
   const raw = String(env.SESSION_REFRESH_PUBLIC_URL || "").trim();
   try {
@@ -32,6 +41,7 @@ function isServiceRefreshAvailable(service, { env = process.env, fsImpl = fs } =
   const pathName = SESSION_PATH_ENV[service];
   const cookiePath = pathName && env[pathName];
   if (!base64Name || !pathName || !env[base64Name] || !cookiePath || !oauthConfigured(env) || !rotationConfigured(env)) return false;
+  if (service === "instagram" && !expectedInstagramUsername(env)) return false;
   try {
     return fsImpl.statSync(cookiePath).isFile();
   } catch {
@@ -53,4 +63,4 @@ function configSnapshot(env = process.env) {
   };
 }
 
-module.exports = { SECRET_VARIABLES, publicBaseUrl, oauthConfigured, rotationConfigured, isServiceRefreshAvailable, configuredServiceName, configSnapshot };
+module.exports = { SECRET_VARIABLES, normalizeInstagramUsername, expectedInstagramUsername, publicBaseUrl, oauthConfigured, rotationConfigured, isServiceRefreshAvailable, configuredServiceName, configSnapshot };

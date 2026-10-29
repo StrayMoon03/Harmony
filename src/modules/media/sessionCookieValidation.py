@@ -35,6 +35,15 @@ SERVICE_CONFIG = {
 }
 
 
+def normalize_instagram_username(value):
+    if not isinstance(value, str):
+        return None
+    username = value.strip().removeprefix("@").lower()
+    if not re.fullmatch(r"[a-z0-9._]{1,30}", username):
+        return None
+    return username
+
+
 def parse_netscape_candidate(service, contents, now=None):
     config = SERVICE_CONFIG.get(service)
     if not config or not isinstance(contents, str):
@@ -92,7 +101,7 @@ def path_is_auth_challenge(url):
     return any(part in path for part in ("/checkpoint", "/challenge", "/accounts/suspended"))
 
 
-def classify_browser_result(service, final_url, signals):
+def classify_browser_result(service, final_url, signals, expected_username=None):
     if path_is_auth_challenge(final_url) or signals.get("checkpoint") is True:
         return "OWNER_REQUIRED"
     if signals.get("login_form") is True or signals.get("login_route") is True:
@@ -106,8 +115,16 @@ def classify_browser_result(service, final_url, signals):
     }.get(service, ())
     if not any(host == domain or host.endswith("." + domain) for domain in trusted_hosts):
         return "INCONCLUSIVE"
+    if service == "instagram" and signals.get("instagram_edit_form") is True:
+        expected = normalize_instagram_username(expected_username)
+        observed = normalize_instagram_username(signals.get("instagram_username"))
+        if expected is None or observed is None:
+            return "IDENTITY_UNVERIFIABLE"
+        if observed != expected:
+            return "IDENTITY_MISMATCH"
+        return "AUTHENTICATED"
     authenticated = {
-        "instagram": signals.get("instagram_edit_form") is True,
+        "instagram": False,
         "threads": signals.get("account_menu") is True,
         "facebook": signals.get("facebook_account_menu") is True,
         "youtube": signals.get("youtube_account_avatar") is True,
@@ -138,16 +155,25 @@ def inspect_with_browser(service, cookies):
             "login_route": bool(re.search(r"/(?:accounts/login|login|signin)(?:/|$)", urlparse(current_url).path, re.I)),
             "login_form": page.locator('input[type="password"]').count() > 0,
             "instagram_edit_form": False,
+            "instagram_username": None,
             "account_menu": False,
             "facebook_account_menu": False,
             "youtube_account_avatar": False,
         }
         if service == "instagram":
-            signals["instagram_edit_form"] = (
+            username_inputs = page.locator('input[name="username"], input[autocomplete="username"]')
+            has_edit_form = (
                 urlparse(current_url).hostname in ("www.instagram.com", "instagram.com")
                 and urlparse(current_url).path.rstrip("/") == "/accounts/edit"
-                and page.locator('input[name="username"], input[autocomplete="username"]').count() > 0
+                and username_inputs.count() > 0
             )
+            if has_edit_form:
+                signals["instagram_edit_form"] = True
+                try:
+                    username = username_inputs.first.input_value(timeout=5000)
+                    signals["instagram_username"] = username
+                except Exception:
+                    pass
         elif service == "threads":
             signals["account_menu"] = page.get_by_role("link", name=re.compile(r"^(log out|logout|switch accounts)$", re.I)).count() > 0
             if not signals["account_menu"]:
@@ -161,7 +187,12 @@ def inspect_with_browser(service, cookies):
                 and page.locator('ytd-topbar-menu-button-renderer #avatar-btn img, button#avatar-btn img').count() > 0
                 and page.locator('a[href*="ServiceLogin"], a[href^="/signin"]').count() == 0
             )
-        status = classify_browser_result(service, current_url, signals)
+        status = classify_browser_result(
+            service,
+            current_url,
+            signals,
+            expected_username=os.environ.get("INSTAGRAM_EXPECTED_USERNAME") if service == "instagram" else None,
+        )
         context.close()
         browser.close()
         return status

@@ -15,6 +15,7 @@ Object.assign(process.env, {
   SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "mock-project-token",
   SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
   INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
+  INSTAGRAM_EXPECTED_USERNAME: "@MissHarmony",
   INSTAGRAM_COOKIES: cookiePath,
   HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: "",
 });
@@ -122,6 +123,9 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
     const form = await request(server, "/session-refresh/form", { headers: { Cookie: cookie } });
     assert.equal(form.status, 200);
     assert.match(form.body, /Netscape-format/);
+    assert.match(form.body, /Instagram account: Miss Harmony/);
+    assert.match(form.body, /@missharmony/);
+    assert.match(form.body, /dedicated Miss Harmony Instagram browser session/);
     const csrf = form.body.match(/name="csrf" value="([^"]+)"/)[1];
     const candidate = "# Netscape HTTP Cookie File\nPRIVATE_COOKIE_VALUE_NEVER_RETURNED_OR_STORED";
     const formBody = new URLSearchParams({ csrf, candidate }).toString();

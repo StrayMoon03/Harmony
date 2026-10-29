@@ -37,7 +37,7 @@ class SessionCookieValidationTests(unittest.TestCase):
     def test_authenticated_signal_requires_platform_specific_positive_evidence(self):
         self.assertEqual(validator.classify_browser_result(
             "instagram", "https://www.instagram.com/accounts/edit/",
-            {"instagram_edit_form": True},
+            {"instagram_edit_form": True, "instagram_username": "MissHarmony"}, "@missharmony",
         ), "AUTHENTICATED")
         self.assertEqual(validator.classify_browser_result(
             "threads", "https://www.threads.net/", {"account_menu": True},
@@ -49,6 +49,29 @@ class SessionCookieValidationTests(unittest.TestCase):
             "youtube", "https://www.youtube.com/feed/you", {"youtube_account_avatar": True},
         ), "AUTHENTICATED")
         self.assertEqual(validator.classify_browser_result("instagram", "https://www.instagram.com/", {}), "INCONCLUSIVE")
+
+    def test_instagram_identity_must_match_expected_username_case_insensitively_with_optional_at(self):
+        self.assertEqual(validator.normalize_instagram_username(" @Miss.Harmony_7 "), "miss.harmony_7")
+        self.assertEqual(validator.classify_browser_result(
+            "instagram", "https://www.instagram.com/accounts/edit/",
+            {"instagram_edit_form": True, "instagram_username": "@MiSsHaRmOnY"}, "missharmony",
+        ), "AUTHENTICATED")
+        self.assertEqual(validator.classify_browser_result(
+            "instagram", "https://www.instagram.com/accounts/edit/",
+            {"instagram_edit_form": True, "instagram_username": "personal_account"}, "missharmony",
+        ), "IDENTITY_MISMATCH")
+
+    def test_instagram_identity_fails_closed_when_expected_or_observed_name_is_missing_or_invalid(self):
+        edit_url = "https://www.instagram.com/accounts/edit/"
+        self.assertEqual(validator.classify_browser_result(
+            "instagram", edit_url, {"instagram_edit_form": True, "instagram_username": "missharmony"}, None,
+        ), "IDENTITY_UNVERIFIABLE")
+        self.assertEqual(validator.classify_browser_result(
+            "instagram", edit_url, {"instagram_edit_form": True, "instagram_username": ""}, "missharmony",
+        ), "IDENTITY_UNVERIFIABLE")
+        self.assertEqual(validator.classify_browser_result(
+            "instagram", edit_url, {"instagram_edit_form": True, "instagram_username": "missharmony"}, "bad/name",
+        ), "IDENTITY_UNVERIFIABLE")
 
     def test_checkpoint_and_login_signals_never_count_as_success(self):
         self.assertEqual(validator.classify_browser_result(

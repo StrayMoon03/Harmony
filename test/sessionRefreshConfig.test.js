@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { isServiceRefreshAvailable, publicBaseUrl } = require("../src/services/sessionRefreshConfig");
+const { isServiceRefreshAvailable, publicBaseUrl, expectedInstagramUsername } = require("../src/services/sessionRefreshConfig");
 
 test("services become available independently only when their HTTPS, OAuth, rotation, and runtime inputs exist", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harmony-refresh-config-"));
@@ -18,8 +18,12 @@ test("services become available independently only when their HTTPS, OAuth, rota
       SESSION_REFRESH_RAILWAY_SERVICE_ID: "service-id",
       INSTAGRAM_COOKIES_BASE64: "present",
       INSTAGRAM_COOKIES: instagramPath,
+      INSTAGRAM_EXPECTED_USERNAME: "@MissHarmony",
     };
     assert.equal(isServiceRefreshAvailable("instagram", { env }), true);
+    assert.equal(expectedInstagramUsername(env), "missharmony");
+    assert.equal(isServiceRefreshAvailable("instagram", { env: { ...env, INSTAGRAM_EXPECTED_USERNAME: "" } }), false);
+    assert.equal(isServiceRefreshAvailable("instagram", { env: { ...env, INSTAGRAM_EXPECTED_USERNAME: "bad/name" } }), false);
     assert.equal(isServiceRefreshAvailable("threads", { env }), false);
     assert.equal(publicBaseUrl(env), "https://harmony.example");
     assert.equal(publicBaseUrl({ ...env, SESSION_REFRESH_PUBLIC_URL: "http://harmony.example" }), null);

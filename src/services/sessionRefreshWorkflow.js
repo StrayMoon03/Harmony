@@ -3,7 +3,7 @@ const requestStore = require("../stores/credentialRefreshStore");
 const runtimeSecrets = require("./runtimeSecrets");
 const { validateSessionCookie } = require("./sessionCookieValidator");
 const { createRailwaySessionSecretProvider } = require("./railwaySessionSecretProvider");
-const { SECRET_VARIABLES } = require("./sessionRefreshConfig");
+const { SECRET_VARIABLES, expectedInstagramUsername } = require("./sessionRefreshConfig");
 const { recordSocialSuccess } = require("./operationsStatusService");
 
 const RESULT_MESSAGES = Object.freeze({
@@ -61,6 +61,12 @@ function createSessionRefreshWorkflow({
       record(context, service, "validation", false);
       complete(context, service);
       return { ok: false, reason: "invalid_format", message: RESULT_MESSAGES.invalid_format };
+    }
+
+    if (service === "instagram" && !expectedInstagramUsername()) {
+      record(context, service, "validation", false);
+      complete(context, service);
+      return { ok: false, reason: "validation_unavailable", message: RESULT_MESSAGES.validation_unavailable };
     }
 
     let validation;

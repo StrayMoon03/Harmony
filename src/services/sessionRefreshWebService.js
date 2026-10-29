@@ -4,7 +4,7 @@ const auditStore = require("../stores/operationsAuditStore");
 const { resolveAdminCapabilities } = require("./operationsStatusService");
 const { refreshWorkflow: defaultRefreshWorkflow } = require("./sessionRefreshService");
 const { createSessionRefreshWorkflow } = require("./sessionRefreshWorkflow");
-const { isServiceRefreshAvailable, configSnapshot, publicBaseUrl } = require("./sessionRefreshConfig");
+const { isServiceRefreshAvailable, configSnapshot, publicBaseUrl, expectedInstagramUsername } = require("./sessionRefreshConfig");
 
 const MAX_FORM_BYTES = 1024 * 1024 + 8192;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -24,7 +24,7 @@ const PAGE_HEADERS = Object.freeze({
 });
 
 const COOKIE_GUIDANCE = Object.freeze({
-  instagram: "Upload a Netscape-format cookies.txt export from the Instagram account Harmony is authorized to use. The export must include the Instagram session and CSRF cookies.",
+  instagram: "Upload a Netscape-format cookies.txt export from the dedicated Miss Harmony Instagram account. The export must include the Instagram session and CSRF cookies.",
   threads: "Upload a Netscape-format cookies.txt export from the Threads account Harmony is authorized to use. The export must include the Threads session and CSRF cookies.",
   facebook: "Upload a Netscape-format cookies.txt export from the Facebook account Harmony is authorized to use. The export must include the c_user and xs cookies.",
   youtube: "Upload a Netscape-format cookies.txt export from the YouTube account Harmony is authorized to use. Include YouTube and Google cookies, including LOGIN_INFO and a SAPISID-family cookie.",
@@ -169,7 +169,10 @@ async function resolveAuthorizedActor(client, requestRecord, userId) {
 function formPage(session) {
   const csrf = session.csrf;
   const service = session.service;
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Refresh ${service} cookies</title><style>body{font:16px system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem;color:#202124}textarea{box-sizing:border-box;width:100%;min-height:18rem;font:13px monospace}button{padding:.7rem 1rem;margin-top:1rem}small{color:#555}</style><body><main><h1>Refresh ${service} cookies</h1><p>${COOKIE_GUIDANCE[service]}</p><p>This page is protected by Discord sign-in. Harmony validates the candidate before updating the existing session. The cookie contents are sent only in this HTTPS form body; they are not saved in Harmony's database or returned in the result.</p><form method="post" action="/session-refresh/submit" enctype="application/x-www-form-urlencoded" autocomplete="off"><input type="hidden" name="csrf" value="${csrf}"><label for="candidate">Paste the complete cookies.txt export</label><p><textarea id="candidate" name="candidate" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></p><small>Do not paste this into Discord. Keep this page open until Harmony shows the result.</small><p><button type="submit">Validate and refresh cookies</button></p></form></main></body></html>`;
+  const instagramIdentityNotice = service === "instagram"
+    ? `<p><strong>Instagram account: Miss Harmony</strong></p><p>Export cookies from the dedicated Miss Harmony Instagram browser session${expectedInstagramUsername() ? ` (@${escapeHtml(expectedInstagramUsername())})` : ""}. Harmony verifies the signed-in username before replacing the current cookies.</p>`
+    : "";
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Refresh ${service} cookies</title><style>body{font:16px system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem;color:#202124}textarea{box-sizing:border-box;width:100%;min-height:18rem;font:13px monospace}button{padding:.7rem 1rem;margin-top:1rem}small{color:#555}</style><body><main><h1>Refresh ${service} cookies</h1>${instagramIdentityNotice}<p>${COOKIE_GUIDANCE[service]}</p><p>This page is protected by Discord sign-in. Harmony validates the candidate before updating the existing session. The cookie contents are sent only in this HTTPS form body; they are not saved in Harmony's database or returned in the result.</p><form method="post" action="/session-refresh/submit" enctype="application/x-www-form-urlencoded" autocomplete="off"><input type="hidden" name="csrf" value="${csrf}"><label for="candidate">Paste the complete cookies.txt export</label><p><textarea id="candidate" name="candidate" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></p><small>Do not paste this into Discord. Keep this page open until Harmony shows the result.</small><p><button type="submit">Validate and refresh cookies</button></p></form></main></body></html>`;
 }
 
 function resultPage(result) {

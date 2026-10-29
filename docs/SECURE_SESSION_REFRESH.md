@@ -47,6 +47,7 @@ All values are server-side; never put them in Discord, a browser form, repositor
 | `DISCORD_OAUTH_CLIENT_SECRET` | Server-side OAuth secret; also derives signed refresh-state cookies. |
 | `SESSION_REFRESH_RAILWAY_PROJECT_TOKEN` | Railway Project Access Token for the target project environment. |
 | `SESSION_REFRESH_RAILWAY_SERVICE_ID` | Exact Harmony Railway service ID in that project/environment. |
+| `INSTAGRAM_EXPECTED_USERNAME` | Required Instagram handle for the dedicated Miss Harmony account. Instagram cookie refresh is unavailable when this is missing or invalid. A leading `@` is optional. |
 | `HARMONY_CREDENTIAL_MANAGER_ROLE_IDS` | Existing comma/space separated Discord role IDs allowed to manage credentials. The guild owner is always authorized. |
 
 Register this exact Discord OAuth redirect URI for the application: `<SESSION_REFRESH_PUBLIC_URL>/session-refresh/oauth/callback`. Keep the existing four `*_COOKIES_BASE64` variables configured. A service is offered independently; one missing session file/secret does not disable the other configured services.

@@ -227,12 +227,13 @@ test("regular admins never receive secure cookie controls and refresh-capable ad
   assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies need to be refreshed/);
   assert.match(JSON.stringify(regular), /Ask the owner or a Credential Manager/);
   assert.doesNotMatch(JSON.stringify(regular), /harmony-session-refresh:|Refresh Instagram Cookies/);
-  const oldEnv = Object.fromEntries(["INSTAGRAM_COOKIES", "INSTAGRAM_COOKIES_BASE64", "SESSION_REFRESH_PUBLIC_URL", "DISCORD_OAUTH_CLIENT_ID", "DISCORD_OAUTH_CLIENT_SECRET", "SESSION_REFRESH_RAILWAY_PROJECT_TOKEN", "SESSION_REFRESH_RAILWAY_SERVICE_ID"].map((key) => [key, process.env[key]]));
+  const oldEnv = Object.fromEntries(["INSTAGRAM_COOKIES", "INSTAGRAM_COOKIES_BASE64", "INSTAGRAM_EXPECTED_USERNAME", "SESSION_REFRESH_PUBLIC_URL", "DISCORD_OAUTH_CLIENT_ID", "DISCORD_OAUTH_CLIENT_SECRET", "SESSION_REFRESH_RAILWAY_PROJECT_TOKEN", "SESSION_REFRESH_RAILWAY_SERVICE_ID"].map((key) => [key, process.env[key]]));
   const cookieFile = path.join(tempDir, "refresh-available-cookies.txt");
   fs.writeFileSync(cookieFile, "test-cookie");
   Object.assign(process.env, {
     INSTAGRAM_COOKIES: cookieFile,
     INSTAGRAM_COOKIES_BASE64: "bm90LWEtdXNlci1zZWNyZXQ=",
+    INSTAGRAM_EXPECTED_USERNAME: "MissHarmony",
     SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
     DISCORD_OAUTH_CLIENT_ID: "test-client-id",
     DISCORD_OAUTH_CLIENT_SECRET: "test-client-secret",
