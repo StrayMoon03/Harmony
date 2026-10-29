@@ -12,6 +12,7 @@ const { PermissionFlagsBits } = require("discord.js");
 const { getDb, closeDb } = require("../src/db/sqlite");
 const statusService = require("../src/services/operationsStatusService");
 const guardStore = require("../src/stores/communityGuardStore");
+const eventStore = require("../src/stores/eventSchedulerStore");
 const statusCommand = require("../src/commands/status");
 const { managerPanelComponents } = require("../src/services/eventSchedulerService");
 
@@ -43,7 +44,10 @@ test("a failed check does not prevent other systems from rendering", async () =>
   const rows = await statusService.collectStatus({ client: client({ failReady: true }), guild: guild("independent") });
   assert.equal(rows.find((row) => row.id === "discord").status, statusService.STATUS.owner);
   assert.equal(rows.find((row) => row.id === "database").status, statusService.STATUS.healthy);
-  assert.equal(rows.length, 9);
+  assert.equal(rows.length, 11);
+  assert.deepEqual(rows.filter((row) => row.id.startsWith("social-")).map((row) => row.id).sort(), [
+    "social-facebook", "social-instagram", "social-threads", "social-tiktok", "social-x", "social-youtube",
+  ]);
   assert.equal(JSON.stringify(rows).includes("SECRET_VALUE"), false);
 });
 
@@ -58,7 +62,7 @@ test("unconfigured session is reported honestly and explicit auth failure reques
   assert.equal(failed.status, statusService.STATUS.attention);
   assert.match(failed.action, /YouTube cookies need to be refreshed/);
   statusService.recordSocialSuccess("youtube");
-  assert.equal((await statusService.checkSocial("youtube")).status, statusService.STATUS.unknown);
+  assert.equal((await statusService.checkSocial("youtube")).status, statusService.STATUS.healthy);
   assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Login required to view this post")), true);
   assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Cookie file could not be read")), false);
   statusService.recordSocialAuthFailure("threads", "2026-10-27T00:00:00.000Z", "owner");
@@ -66,9 +70,21 @@ test("unconfigured session is reported honestly and explicit auth failure reques
   assert.equal(checkpoint.status, statusService.STATUS.owner);
   assert.match(checkpoint.action, /Owner attention required/);
   statusService.recordSocialSuccess("threads");
+  assert.equal((await statusService.checkSocial("threads")).status, statusService.STATUS.owner);
+  statusService.recordSocialSuccess("threads");
+});
+
+test("a successful Instagram media retrieval clears the prior expiry signal and records current working evidence", async () => {
+  statusService.recordSocialAuthFailure("instagram", "2026-10-28T08:00:00.000Z", "session");
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.attention);
+  statusService.recordSocialSuccess("instagram", new Date().toISOString());
+  const row = await statusService.checkSocial("instagram");
+  assert.equal(row.status, statusService.STATUS.healthy);
+  assert.match(row.explanation, /recent media retrieval succeeded/i);
 });
 
 test("session file presence never exposes its path or contents or claims authentication", async () => {
+  statusService.recordSocialSuccess("instagram", "2020-01-01T00:00:00.000Z");
   const secretPath = path.join(tempDir, "private-cookie-file.txt");
   fs.writeFileSync(secretPath, "SESSION_COOKIE_VALUE_NEVER_OUTPUT");
   process.env.INSTAGRAM_COOKIES = secretPath;
@@ -158,30 +174,34 @@ test("Status / Health button uses the same refreshed guild-owner authorization",
   assert.ok(interaction.response.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:diagnostics"));
 });
 
-test("admin Status is actionable and concise while owner diagnostics retain detailed safe signals", async () => {
+test("regular-admin Status shows each platform as simple dashboard lights while owner diagnostics stay detailed", async () => {
   const report = {
     checkedAt: "2026-10-28T12:00:00.000Z",
     rows: [
       { id: "discord", name: "Harmony / Discord connection", status: statusService.STATUS.healthy, explanation: "Harmony is connected to Discord.", action: "No action needed." },
       { id: "database", name: "Database", status: statusService.STATUS.healthy, explanation: "Database reads succeed.", action: "No action needed." },
-      { id: "discovery", name: "Event discovery", status: statusService.STATUS.attention, explanation: "Automatic source checks are off.", action: "Turn discovery on in the Stray Kids Schedule Manager." },
+      { id: "discovery", name: "Event discovery", status: statusService.STATUS.unknown, explanation: "Automatic Stray Kids schedule checks are off for this server.", action: "No action needed." },
       { id: "event-sync", name: "Discord/event synchronization", status: statusService.STATUS.unknown, explanation: "Listeners are attached; end-to-end sync is not tracked.", action: "Use Calendar reconciliation controls." },
       { id: "social-instagram", name: "Instagram", status: statusService.STATUS.unknown, explanation: "Session validity is not actively tested.", action: "No action unless a request reports a login problem." },
-      { id: "social-threads", name: "Threads", status: statusService.STATUS.unknown, explanation: "Session validity is not actively tested.", action: "No action unless a request reports a login problem." },
-      { id: "social-facebook", name: "Facebook", status: statusService.STATUS.attention, explanation: "Facebook cookies need to be refreshed after a media request reported sign-in is required.", action: "Facebook cookies need to be refreshed." },
+      { id: "social-facebook", name: "Facebook", status: statusService.STATUS.attention, explanation: "Facebook cookies need to be refreshed after a media request reported sign-in is required. SECRET_DIAGNOSTIC", action: "Facebook cookies need to be refreshed." },
       { id: "social-youtube", name: "YouTube", status: statusService.STATUS.owner, explanation: "A security checkpoint was reported.", action: "Owner attention required; resolve the account check with the platform." },
-      { id: "guard", name: "Community Guard", status: statusService.STATUS.attention, explanation: "Monitoring is off.", action: "Turn monitoring on in Harmony Guard." },
+      { id: "social-threads", name: "Threads", status: statusService.STATUS.healthy, explanation: "A recent media retrieval succeeded.", action: "No action needed." },
+      { id: "social-tiktok", name: "TikTok", status: statusService.STATUS.unknown, explanation: "No verified retrieval yet.", action: "No action available." },
+      { id: "social-x", name: "X", status: statusService.STATUS.unknown, explanation: "No verified retrieval yet.", action: "No action available." },
+      { id: "guard", name: "Community Guard", status: statusService.STATUS.unknown, explanation: "Monitoring is off. Review Room: configured. Active rules: 4. Ordinary members appear able to view the Review Room.", action: "Turn monitoring on with /harmony-guard setup." },
     ],
   };
   const regular = statusCommand.makeStatusPayload(report, { canDiagnose: true, canManageCredentials: false });
   const adminText = JSON.stringify(regular);
-  assert.match(adminText, /Harmony \/ Discord/);
-  assert.match(adminText, /Social Media Links/);
-  assert.match(adminText, /Facebook cookies need to be refreshed/);
-  assert.match(adminText, /Ask the owner or a Credential Manager/);
-  assert.match(adminText, /Owner\/Developer Required/);
-  assert.match(adminText, /Event discovery/);
-  assert.match(adminText, /Community Guard/);
+  for (const expected of [
+    "**Harmony** — Working", "**Discord** — Connected", "**Instagram** — Unable to Verify",
+    "**Facebook** — Cookies need to be refreshed", "**YouTube** — Owner/Developer Required",
+    "**Threads** — Working", "**TikTok** — Unable to Verify", "**X** — Unable to Verify",
+    "**Event Discovery** — Off", "**Community Guard** — Off",
+  ]) assert.ok(adminText.includes(expected), expected);
+  assert.doesNotMatch(adminText, /Social Media Links/);
+  assert.match(adminText, /\*\*Facebook\*\* — Cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
+  assert.doesNotMatch(adminText, /SECRET_DIAGNOSTIC|Active rules|Review Room|ordinary members|\/harmony-guard|Turn discovery on|No explicit login failure|does not actively test/);
   assert.doesNotMatch(adminText, /Database|Discord\/event synchronization|Railway|OAuth/);
   assert.doesNotMatch(adminText, /harmony-session-refresh:/);
 
@@ -192,9 +212,75 @@ test("admin Status is actionable and concise while owner diagnostics retain deta
   assert.match(diagnosticText, /Database/);
   assert.match(diagnosticText, /Discord\/event synchronization/);
   assert.match(diagnosticText, /Community Guard/);
+  assert.match(diagnosticText, /Active rules: 4/);
+  assert.match(diagnosticText, /Review Room/);
   assert.match(diagnosticText, /Secure Cookie Refresh Readiness/);
   assert.match(diagnosticText, /secure cookie refresh not fully configured/i);
   assert.doesNotMatch(diagnosticText, /COOKIE_VALUE|token-value|oauth-secret|private-cookie-file/);
+});
+
+test("regular admins never receive secure cookie controls and refresh-capable admins do", () => {
+  const report = { checkedAt: new Date().toISOString(), rows: [
+    { id: "social-instagram", name: "Instagram", status: statusService.STATUS.attention, explanation: "Sensitive authentication evidence.", action: "Instagram cookies need to be refreshed." },
+  ] };
+  const regular = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
+  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies need to be refreshed/);
+  assert.match(JSON.stringify(regular), /Ask the owner or a Credential Manager/);
+  assert.doesNotMatch(JSON.stringify(regular), /harmony-session-refresh:|Refresh Instagram Cookies/);
+  const oldEnv = Object.fromEntries(["INSTAGRAM_COOKIES", "INSTAGRAM_COOKIES_BASE64", "SESSION_REFRESH_PUBLIC_URL", "DISCORD_OAUTH_CLIENT_ID", "DISCORD_OAUTH_CLIENT_SECRET", "SESSION_REFRESH_RAILWAY_PROJECT_TOKEN", "SESSION_REFRESH_RAILWAY_SERVICE_ID"].map((key) => [key, process.env[key]]));
+  const cookieFile = path.join(tempDir, "refresh-available-cookies.txt");
+  fs.writeFileSync(cookieFile, "test-cookie");
+  Object.assign(process.env, {
+    INSTAGRAM_COOKIES: cookieFile,
+    INSTAGRAM_COOKIES_BASE64: "bm90LWEtdXNlci1zZWNyZXQ=",
+    SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
+    DISCORD_OAUTH_CLIENT_ID: "test-client-id",
+    DISCORD_OAUTH_CLIENT_SECRET: "test-client-secret",
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "test-project-token",
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: "test-service-id",
+  });
+  try {
+    const credentialManager = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
+    assert.ok(credentialManager.components.flatMap((row) => row.components).some((button) => button.data.label === "Refresh Instagram Cookies"));
+  } finally {
+    for (const [key, value] of Object.entries(oldEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("disabled discovery and Guard are neutral while enabled faults remain attention states", async () => {
+  const id = "status-neutral-options";
+  getDb();
+  eventStore.saveCalendarDiscoveryConfig(id, { enabled: 0 });
+  const discoveryOff = await statusService.checkDiscovery(id);
+  assert.equal(discoveryOff.status, statusService.STATUS.unknown);
+
+  const guardUnconfigured = await statusService.checkGuard(guild("guard-not-configured"));
+  assert.equal(guardUnconfigured.status, statusService.STATUS.unknown);
+  const unconfiguredPayload = statusCommand.makeStatusPayload({ checkedAt: new Date().toISOString(), rows: [guardUnconfigured] });
+  assert.match(JSON.stringify(unconfiguredPayload), /Community Guard\*\* — Not Set Up/);
+  const everyone = { id, permissions: { has: () => false } };
+  const publicRole = { id: "member-role", permissions: { has: () => false } };
+  const manager = {
+    id: "guard-neutral-room",
+    isTextBased: () => true,
+    guild: { roles: { everyone, cache: new Map([[publicRole.id, publicRole]]) }, members: { cache: new Map() } },
+    permissionOverwrites: { cache: new Map() },
+    permissionsFor: () => ({ has: () => false }),
+  };
+  const guardGuild = { id, channels: { cache: new Map([[manager.id, manager]]), fetch: async () => manager } };
+  guardStore.saveSettings(id, manager.id);
+  guardStore.setMonitoringEnabled(id, false);
+  const guardOff = await statusService.checkGuard(guardGuild);
+  assert.equal(guardOff.status, statusService.STATUS.unknown);
+  assert.match(guardOff.explanation, /Monitoring is off/);
+
+  eventStore.saveCalendarDiscoveryConfig(id, { enabled: 1 });
+  eventStore.saveCalendarDiscoveryState(id, "jype-straykids-schedule", { lastError: "source error" });
+  const discoveryFault = await statusService.checkDiscovery(id);
+  assert.equal(discoveryFault.status, statusService.STATUS.attention);
 });
 
 test("owner diagnostics component rejects credential managers and regular admins server-side", async () => {

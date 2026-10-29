@@ -19,7 +19,8 @@ const { getDb, closeDb } = require("../src/db/sqlite");
 const { createSessionRefreshWorkflow } = require("../src/services/sessionRefreshWorkflow");
 const requests = require("../src/stores/credentialRefreshStore");
 const statusCommand = require("../src/commands/status");
-const { STATUS } = require("../src/services/operationsStatusService");
+const statusService = require("../src/services/operationsStatusService");
+const { STATUS } = statusService;
 
 let requestNumber = 0;
 let activeRequestId = "";
@@ -43,6 +44,8 @@ function makeRequest(now = "2026-10-28T00:00:00.000Z") {
 
 test("successful refresh validates, rotates, atomically activates, verifies, and keeps secrets out of SQLite/audit", async () => {
   getDb();
+  statusService.recordSocialAuthFailure("instagram", "2026-10-28T00:00:30.000Z", "session");
+  assert.equal((await statusService.checkSocial("instagram")).status, STATUS.attention);
   makeRequest();
   const events = [];
   const audit = { recordCredentialRefreshStage: (entry) => events.push({ ...entry }) };
@@ -69,6 +72,9 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
     "validation_true", "rotation_true", "activation_true", "verification_true",
   ]);
   assert.equal(requests.getRequest(context().requestId).status, "completed");
+  const refreshedStatus = await statusService.checkSocial("instagram");
+  assert.equal(refreshedStatus.status, STATUS.healthy);
+  assert.match(refreshedStatus.explanation, /recent media retrieval succeeded/i);
 });
 
 test("Status offers cookie refresh only for explicit expiry and only to authorized credential managers", () => {
@@ -87,8 +93,8 @@ test("Status offers cookie refresh only for explicit expiry and only to authoriz
   const regularButtons = regular.components.flatMap((row) => row.components);
   assert.ok(!regularButtons.some((component) => String(component.data.custom_id).startsWith("harmony-session-refresh:")));
   assert.ok(!regularButtons.some((component) => /Refresh .* Cookies/.test(component.data.label || "")));
-  assert.match(JSON.stringify(regular), /Instagram cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
-  assert.match(JSON.stringify(regular), /Owner attention required/);
+  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
+  assert.match(JSON.stringify(regular), /Owner\/Developer Required/);
 
   const unknown = statusCommand.makeStatusPayload({ checkedAt: report.checkedAt, rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.unknown, explanation: "Login validity is not actively verified.", action: "No action unless a media request reports a login issue." },

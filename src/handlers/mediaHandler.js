@@ -464,7 +464,6 @@ async function processMediaMessage(message, lifecycle) {
 
       const downloadResult =
         await downloadMedia(originalUrl);
-      recordSocialSuccess(platform);
 
       const classification = classify(
         downloadResult.files,
@@ -476,6 +475,7 @@ async function processMediaMessage(message, lifecycle) {
           "No media files were downloaded."
         );
       }
+      recordSocialSuccess(platform);
 
       const creator = downloadResult.creator || resolveCreator(
         info,
@@ -586,7 +586,6 @@ async function processMediaMessage(message, lifecycle) {
           normalizedUrl,
           originalUrl
         );
-      recordSocialSuccess("facebook");
 
       if (downloadResult.linkOnly) {
         throw new Error(downloadResult.failureReason || "FACEBOOK_UNVERIFIED_MEDIA");
@@ -602,6 +601,7 @@ async function processMediaMessage(message, lifecycle) {
           "No media files were downloaded."
         );
       }
+      recordSocialSuccess("facebook");
 
       const creator =
         downloadResult.creator ||
@@ -729,6 +729,7 @@ async function processMediaMessage(message, lifecycle) {
           force: true,
         }).catch(() => {});
         await lifecycle.markRetrieved();
+        recordSocialSuccess(platform);
         console.warn(
           "TikTok download had no audio stream; preserving the original TikTok player."
         );
@@ -745,6 +746,7 @@ async function processMediaMessage(message, lifecycle) {
           "No TikTok media files were downloaded."
         );
       }
+      recordSocialSuccess(platform);
 
       const creator =
         downloadResult.creator ||
@@ -848,6 +850,7 @@ async function processMediaMessage(message, lifecycle) {
             memberComment: preservation.comment,
           });
           await lifecycle.markRetrieved();
+          recordSocialSuccess(platform);
           const sent = await message.channel.send({
             content: textCard,
             allowedMentions: { parse: [] },
@@ -890,6 +893,7 @@ async function processMediaMessage(message, lifecycle) {
           "No X media files were downloaded."
         );
       }
+      recordSocialSuccess(platform);
 
       const creator =
         downloadResult.creator ||
@@ -996,11 +1000,10 @@ async function processMediaMessage(message, lifecycle) {
         downloadYouTubeMedia(originalUrl),
         getMediaInfo(originalUrl).catch(() => null),
       ]);
-      recordSocialSuccess("youtube");
-
       if (downloadResult.linkOnly) {
         if (shouldKeepOriginalYouTubePreview(downloadResult)) {
           await lifecycle.markRetrieved();
+          recordSocialSuccess("youtube");
           console.log(
             "YouTube long video left as its original streaming preview."
           );
@@ -1019,6 +1022,7 @@ async function processMediaMessage(message, lifecycle) {
           "No YouTube media files were downloaded."
         );
       }
+      recordSocialSuccess("youtube");
 
       const creator =
         downloadResult.creator ||
@@ -1127,8 +1131,6 @@ async function processMediaMessage(message, lifecycle) {
         }),
         getMediaInfo(originalUrl).catch(() => null),
       ]);
-      recordSocialSuccess("threads");
-
       const classification = classify(
         downloadResult.files,
         originalUrl
@@ -1139,6 +1141,7 @@ async function processMediaMessage(message, lifecycle) {
           "No Threads media files were downloaded."
         );
       }
+      recordSocialSuccess("threads");
 
       const creator =
         downloadResult.creator ||
