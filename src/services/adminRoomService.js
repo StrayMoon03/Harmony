@@ -41,6 +41,9 @@ const greetingsNavigationSessions = new Map();
 const GREETINGS_SESSION_TTL_MS = 15 * 60 * 1000;
 const memberCountNavigationSessions = new Map();
 const MEMBER_COUNT_SESSION_TTL_MS = 15 * 60 * 1000;
+const messageLogNavigationSessions = new Map();
+const MESSAGE_LOG_SESSION_TTL_MS = 15 * 60 * 1000;
+const MESSAGE_LOG_EXCLUSION_PAGE_SIZE = 15;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -537,10 +540,94 @@ function communityToolPage(guildId, area) {
     return pagePayload("💜 Collections", `Status: **${settings ? "Configured" : "Not configured"}**${settings ? `\nMilestones: **${settings.milestones_enabled ? "On" : "Off"}** · Weekly recap: **${settings.schedule_enabled ? "On" : "Off"}**\nChannel: <#${settings.channel_id}>` : ""}\n\n${commandHelp([["harmony-collection", "configure milestones, recaps, or check settings"]])}`);
   }
   if (area === "logs") {
-    const settings = messageLogStore.getLogSettings(guildId);
-    return pagePayload("🧾 Message Logs", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**${settings?.channel_id ? `\nLog channel: <#${settings.channel_id}>` : ""}\nRetention: **3 days**\n\n${commandHelp([["harmony-logs", "configure logging, exclusions, or status"]])}`);
+    return null;
   }
   return null;
+}
+
+function messageLogSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function setMessageLogNavigation(interaction) {
+  messageLogNavigationSessions.set(messageLogSessionKey(interaction), {
+    panelMessageId: interaction.message?.id,
+    channelId: interaction.channelId,
+    updatedAt: Date.now(),
+  });
+}
+
+function hasActiveMessageLogNavigation(interaction) {
+  const key = messageLogSessionKey(interaction);
+  const session = messageLogNavigationSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > MESSAGE_LOG_SESSION_TTL_MS) {
+    messageLogNavigationSessions.delete(key);
+    return false;
+  }
+  const panel = roomStore.getPanel(interaction.guildId);
+  if (!panel?.enabled || panel.message_id !== session.panelMessageId || panel.channel_id !== session.channelId) {
+    messageLogNavigationSessions.delete(key);
+    return false;
+  }
+  session.updatedAt = Date.now();
+  return true;
+}
+
+function messageLogManagerPayload(guildId, guild, requestedPage = 0, notice = null) {
+  const settings = messageLogStore.getLogSettings(guildId);
+  const excluded = messageLogStore.listExcludedChannels(guildId);
+  const pageCount = Math.max(1, Math.ceil(excluded.length / MESSAGE_LOG_EXCLUSION_PAGE_SIZE));
+  const page = Math.min(Math.max(0, Number(requestedPage) || 0), pageCount - 1);
+  const start = page * MESSAGE_LOG_EXCLUSION_PAGE_SIZE;
+  const visibleExcluded = excluded.slice(start, start + MESSAGE_LOG_EXCLUSION_PAGE_SIZE);
+  const excludedText = excluded.length
+    ? `${visibleExcluded.map((id) => `<#${id}>`).join(", ")}${pageCount > 1 ? `\nPage ${page + 1} of ${pageCount} · ${excluded.length} excluded channels` : ""}`
+    : "None";
+  const description = [
+    notice,
+    `**Status:** ${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}`,
+    `**Log channel:** ${settings?.channel_id ? `<#${settings.channel_id}>` : "Not selected"}`,
+    "**Retention:** 3 days",
+    `**Excluded channels:** ${excludedText}`,
+    "Choose a private log channel that only trusted admins can view.",
+  ].filter(Boolean).join("\n\n");
+  const components = [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:logs-channel-select")
+      .setPlaceholder(settings?.channel_id ? "Change the private log channel" : "Choose a private log channel")
+      .setChannelTypes(ChannelType.GuildText)
+      .setMinValues(1)
+      .setMaxValues(1)),
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:logs-exclude-channel-select")
+      .setPlaceholder("Exclude a text channel from logging")
+      .setChannelTypes(ChannelType.GuildText)
+      .setMinValues(1)
+      .setMaxValues(1)),
+  ];
+  if (visibleExcluded.length) {
+    components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
+      .setCustomId(`harmony-admin-room:logs-include-channel-select:${page}`)
+      .setPlaceholder("Choose an excluded channel to include")
+      .addOptions(visibleExcluded.map((id) => {
+        const channel = guild?.channels.cache.get(id);
+        const label = channel?.name ? `#${channel.name}` : `Channel ${id}`;
+        return { label: label.slice(0, 100), value: id, description: "Resume logging in this channel" };
+      }))));
+  }
+  const buttons = [];
+  if (pageCount > 1) {
+    buttons.push(
+      new ButtonBuilder().setCustomId(`harmony-admin-room:logs-exclusion-page:${page - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
+      new ButtonBuilder().setCustomId(`harmony-admin-room:logs-exclusion-page:${page + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(page >= pageCount - 1),
+    );
+  }
+  buttons.push(
+    new ButtonBuilder().setCustomId("harmony-admin-room:logs-toggle").setLabel(!settings ? "Not Configured" : settings.enabled ? "Turn Off" : "Turn On").setStyle(settings?.enabled ? ButtonStyle.Danger : ButtonStyle.Success).setDisabled(!settings),
+    new ButtonBuilder().setCustomId("harmony-admin-room:logs-close").setLabel("Close Manager").setStyle(ButtonStyle.Secondary),
+  );
+  components.push(new ActionRowBuilder().addComponents(...buttons));
+  return pagePayload("🧾 Message Logs Manager", description, components);
 }
 
 function memberCountSessionKey(interaction) {
@@ -1018,6 +1105,72 @@ async function handleAdminRoomInteraction(interaction) {
       return true;
     }
   }
+  if (action === "logs") {
+    setMessageLogNavigation(interaction);
+    await interaction.reply({ ...messageLogManagerPayload(interaction.guildId, interaction.guild), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action.startsWith("logs-")) {
+    if (!hasActiveMessageLogNavigation(interaction)) {
+      await interaction.reply({ content: "This Message Logs screen came from an Admin Controls panel that is no longer active. Open Message Logs from the current panel.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    const page = Number(parameter) || 0;
+    if (action === "logs-exclusion-page") {
+      await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, page));
+      return true;
+    }
+    if (action === "logs-channel-select" || action === "logs-exclude-channel-select") {
+      const channelId = interaction.values?.[0];
+      const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
+      if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
+        await interaction.reply({ content: "Choose a text channel in this server.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      if (action === "logs-channel-select") {
+        messageLogStore.saveLogSettings(interaction.guildId, channel.id);
+        await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, page, `Message logging is on in <#${channel.id}>.`));
+        return true;
+      }
+      const settings = messageLogStore.getLogSettings(interaction.guildId);
+      if (channel.id === settings?.channel_id) {
+        await interaction.reply({ content: "The configured log channel is already excluded from logging automatically; it does not need a separate exclusion.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      messageLogStore.addExcludedChannel(interaction.guildId, channel.id);
+      await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, page, `<#${channel.id}> was added to Excluded Channels.`));
+      return true;
+    }
+    if (action === "logs-include-channel-select") {
+      const channelId = interaction.values?.[0];
+      if (!channelId || !messageLogStore.listExcludedChannels(interaction.guildId).includes(channelId)) {
+        await interaction.reply({ content: "That channel is no longer excluded. Refresh the manager and choose an excluded channel.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      messageLogStore.removeExcludedChannel(interaction.guildId, channelId);
+      const remaining = messageLogStore.listExcludedChannels(interaction.guildId);
+      const lastPage = Math.max(0, Math.ceil(remaining.length / MESSAGE_LOG_EXCLUSION_PAGE_SIZE) - 1);
+      await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, Math.min(page, lastPage), `<#${channelId}> will be logged again.`));
+      return true;
+    }
+    if (action === "logs-toggle") {
+      const settings = messageLogStore.getLogSettings(interaction.guildId);
+      if (!settings) {
+        await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, page, "Choose a log channel before turning logging on."));
+        return true;
+      }
+      const nextEnabled = !settings.enabled;
+      if (nextEnabled) messageLogStore.enableLogSettings(interaction.guildId);
+      else messageLogStore.disableLogSettings(interaction.guildId);
+      await interaction.update(messageLogManagerPayload(interaction.guildId, interaction.guild, page, `Message logging is now **${nextEnabled ? "On" : "Off"}**. Saved exclusions were preserved; existing log entries will still expire after 3 days.`));
+      return true;
+    }
+    if (action === "logs-close") {
+      messageLogNavigationSessions.delete(messageLogSessionKey(interaction));
+      await interaction.update({ content: "Message Logs Manager closed.", embeds: [], components: [] });
+      return true;
+    }
+  }
   if (action === "greetings") {
     setGreetingsNavigation(interaction);
     await interaction.reply({ ...greetingsManagerPayload(interaction, interaction.guildId), flags: MessageFlags.Ephemeral });
@@ -1437,7 +1590,7 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (["collections", "logs"].includes(action)) {
+  if (["collections"].includes(action)) {
     const area = action;
     const payload = communityToolPage(interaction.guildId, area);
     if (payload) await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
