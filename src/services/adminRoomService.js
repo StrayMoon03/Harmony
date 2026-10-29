@@ -36,6 +36,8 @@ const guardManagerSessions = new Map();
 const GUARD_SESSION_TTL_MS = 15 * 60 * 1000;
 const welcomeManagerSessions = new Map();
 const welcomeNavigationSessions = new Map();
+const greetingsNavigationSessions = new Map();
+const GREETINGS_SESSION_TTL_MS = 15 * 60 * 1000;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -524,10 +526,6 @@ async function saveWelcomeManagerField(interaction, field, value, promptMessage 
 function communityToolPage(guildId, area) {
   if (area === "guard") return null;
   if (area === "welcome") return null;
-  if (area === "greetings") {
-    const settings = greetingStore.getGreetingSettings(guildId);
-    return pagePayload("👋 Greetings", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**${settings?.channel_id ? `\nChannel: <#${settings.channel_id}>` : ""}\n\n${commandHelp([["harmony-greetings", "setup, preview, test, or turn greetings off"]])}`);
-  }
   if (area === "members") {
     const settings = memberCountStore.getMemberCountSettings(guildId);
     return pagePayload("📊 Member Counts", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**\n\n${commandHelp([["harmony-member-counts", "setup, refresh, check, or turn counters off"]])}`);
@@ -541,6 +539,117 @@ function communityToolPage(guildId, area) {
     return pagePayload("🧾 Message Logs", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**${settings?.channel_id ? `\nLog channel: <#${settings.channel_id}>` : ""}\nRetention: **3 days**\n\n${commandHelp([["harmony-logs", "configure logging, exclusions, or status"]])}`);
   }
   return null;
+}
+
+function greetingsSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function setGreetingsNavigation(interaction) {
+  greetingsNavigationSessions.set(greetingsSessionKey(interaction), {
+    panelMessageId: interaction.message?.id,
+    channelId: interaction.channelId,
+    updatedAt: Date.now(),
+  });
+}
+
+function hasActiveGreetingsNavigation(interaction) {
+  const key = greetingsSessionKey(interaction);
+  const session = greetingsNavigationSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > GREETINGS_SESSION_TTL_MS) {
+    greetingsNavigationSessions.delete(key);
+    return false;
+  }
+  const panel = roomStore.getPanel(interaction.guildId);
+  if (!panel?.enabled || panel.message_id !== session.panelMessageId || panel.channel_id !== session.channelId) {
+    greetingsNavigationSessions.delete(key);
+    return false;
+  }
+  session.updatedAt = Date.now();
+  return true;
+}
+
+function isGreetingTestAuthorized(interaction) {
+  const isOwner = interaction.guild?.ownerId === interaction.user?.id;
+  return Boolean(isOwner || interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator));
+}
+
+function greetingsManagerPayload(interaction, guildId, notice = null) {
+  const settings = greetingStore.getGreetingSettings(guildId);
+  const configured = Boolean(settings);
+  const enabled = Boolean(settings?.enabled);
+  const testAuthorized = Boolean(interaction && isGreetingTestAuthorized(interaction));
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle("👋 Greetings Manager")
+    .setDescription([
+      notice,
+      `**Current Status:** ${configured ? (enabled ? "On" : "Off") : "Not configured"}`,
+      `**Greeting Channel:** ${settings?.channel_id ? `<#${settings.channel_id}>` : "Not selected"}`,
+      `**Current Entrance Message:**\n${settings?.entrance_message || "Not configured"}`,
+      `**Current Exit Message:**\n${settings?.exit_message || "Not configured"}`,
+    ].filter(Boolean).join("\n\n").slice(0, 4000));
+  const buttonRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("harmony-admin-room:greetings-entrance-edit").setLabel("Entrance Message").setStyle(ButtonStyle.Secondary).setDisabled(!configured),
+    new ButtonBuilder().setCustomId("harmony-admin-room:greetings-exit-edit").setLabel("Exit Message").setStyle(ButtonStyle.Secondary).setDisabled(!configured),
+    new ButtonBuilder().setCustomId("harmony-admin-room:greetings-preview").setLabel("Preview").setStyle(ButtonStyle.Secondary).setDisabled(!configured || !enabled),
+    ...(testAuthorized ? [new ButtonBuilder().setCustomId("harmony-admin-room:greetings-test").setLabel("Send Test").setStyle(ButtonStyle.Primary).setDisabled(!configured || !enabled)] : []),
+    new ButtonBuilder()
+      .setCustomId("harmony-admin-room:greetings-toggle")
+      .setLabel(!configured ? "Not Configured" : (enabled ? "Turn Greetings Off" : "Turn Greetings On"))
+      .setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success)
+      .setDisabled(!configured),
+  );
+  const rows = [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:greetings-channel-select")
+      .setPlaceholder(settings?.channel_id ? "Change the greeting channel" : "Choose a greeting channel")
+      .setChannelTypes(ChannelType.GuildText)
+      .setMinValues(1)
+      .setMaxValues(1)),
+    buttonRow,
+    new ActionRowBuilder().addComponents(new ButtonBuilder()
+      .setCustomId("harmony-admin-room:greetings-close")
+      .setLabel("Close Manager")
+      .setStyle(ButtonStyle.Secondary)),
+  ];
+  return { embeds: [embed], components: rows, allowedMentions: { parse: [] } };
+}
+
+function greetingMessageModal(kind, currentValue) {
+  const entrance = kind === "entrance";
+  const modal = new ModalBuilder()
+    .setCustomId(`harmony-admin-room:greetings-${kind}-submit`)
+    .setTitle(entrance ? "Edit Entrance Message" : "Edit Exit Message");
+  const input = new TextInputBuilder()
+    .setCustomId("message")
+    .setLabel(entrance ? "Entrance message" : "Exit message")
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder(entrance ? "Placeholders: {member}, {name}, {server}" : "Placeholders: {name}, {server}")
+    .setMaxLength(1000)
+    .setRequired(true)
+    .setValue(String(currentValue || "").slice(0, 1000));
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  return modal;
+}
+
+function greetingPreview(interaction, settings) {
+  const memberName = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+  const values = { memberMention: `<@${interaction.user.id}>`, memberName, serverName: interaction.guild.name };
+  return {
+    content: [
+      "💜 **Harmony Greetings Preview**",
+      "",
+      "**Entrance**",
+      greetingStore.renderGreetingMessage(settings.entrance_message, values),
+      "",
+      "**Exit**",
+      greetingStore.renderGreetingMessage(settings.exit_message, values),
+      "",
+      `Channel: <#${settings.channel_id}>`,
+    ].join("\n"),
+    allowedMentions: { parse: [] },
+  };
 }
 
 function historyEntry(row) {
@@ -781,6 +890,126 @@ async function handleAdminRoomInteraction(interaction) {
     welcomeDraft(interaction);
     await interaction.reply({ ...welcomePassPage(interaction.guild, interaction.user.id), flags: MessageFlags.Ephemeral });
     return true;
+  }
+  if (action === "greetings") {
+    setGreetingsNavigation(interaction);
+    await interaction.reply({ ...greetingsManagerPayload(interaction, interaction.guildId), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action.startsWith("greetings-")) {
+    if (!hasActiveGreetingsNavigation(interaction)) {
+      await interaction.reply({ content: "This Greetings screen came from an Admin Controls panel that is no longer active. Open Greetings from the current panel.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "greetings-channel-select") {
+      const channelId = interaction.values?.[0];
+      const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
+      if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
+        await interaction.reply({ content: "Choose a text channel in this server for Greetings.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      const existing = greetingStore.getGreetingSettings(interaction.guildId);
+      if (existing) {
+        greetingStore.updateGreetingSetting(interaction.guildId, "channelId", channel.id);
+      } else {
+        greetingStore.saveGreetingSettings({
+          guildId: interaction.guildId,
+          channelId: channel.id,
+          entranceMessage: greetingStore.DEFAULT_ENTRANCE_MESSAGE,
+          exitMessage: greetingStore.DEFAULT_EXIT_MESSAGE,
+        });
+      }
+      await interaction.update(greetingsManagerPayload(interaction, interaction.guildId, `Greeting Channel set to <#${channel.id}>.`));
+      return true;
+    }
+    if (["greetings-entrance-edit", "greetings-exit-edit"].includes(action)) {
+      const settings = greetingStore.getGreetingSettings(interaction.guildId);
+      if (!settings) {
+        await interaction.update(greetingsManagerPayload(interaction, interaction.guildId, "Choose a Greeting Channel before editing saved messages."));
+        return true;
+      }
+      const entrance = action === "greetings-entrance-edit";
+      await interaction.showModal(greetingMessageModal(
+        entrance ? "entrance" : "exit",
+        entrance ? settings.entrance_message : settings.exit_message
+      ));
+      return true;
+    }
+    if (action === "greetings-entrance-submit" || action === "greetings-exit-submit") {
+      const settings = greetingStore.getGreetingSettings(interaction.guildId);
+      if (!settings) {
+        await interaction.reply({ content: "Choose a Greeting Channel before editing saved messages.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      const field = action === "greetings-entrance-submit" ? "entranceMessage" : "exitMessage";
+      const message = interaction.fields.getTextInputValue("message");
+      try {
+        greetingStore.updateGreetingSetting(interaction.guildId, field, message);
+      } catch (error) {
+        await interaction.reply({ content: error.message || "Enter a message before saving.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.reply({ ...greetingsManagerPayload(interaction, interaction.guildId, `${field === "entranceMessage" ? "Entrance" : "Exit"} Message saved.`), flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "greetings-preview") {
+      const settings = greetingStore.getGreetingSettings(interaction.guildId);
+      if (!settings || !settings.enabled) {
+        await interaction.reply({ content: "Harmony’s greetings are currently off. Choose a Greeting Channel and turn Greetings on first.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.reply({ ...greetingPreview(interaction, settings), flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "greetings-test") {
+      if (!isGreetingTestAuthorized(interaction)) {
+        await interaction.reply({ content: "Only the server owner or an Administrator can send a Greetings test.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      const settings = greetingStore.getGreetingSettings(interaction.guildId);
+      if (!settings || !settings.enabled) {
+        await interaction.reply({ content: "Harmony’s greetings are currently off. Choose a Greeting Channel and turn Greetings on first.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const channel = interaction.guild.channels.cache.get(settings.channel_id)
+        || await interaction.guild.channels.fetch(settings.channel_id).catch(() => null);
+      if (!channel || !channel.isTextBased()) {
+        await interaction.editReply({ content: "The saved greeting channel is unavailable. Choose a text channel in the Greetings Manager." });
+        return true;
+      }
+      const memberName = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+      const content = greetingStore.renderGreetingMessage(settings.entrance_message, {
+        memberMention: `<@${interaction.user.id}>`,
+        memberName,
+        serverName: interaction.guild.name,
+      });
+      try {
+        await channel.send({ content, allowedMentions: { users: [interaction.user.id] } });
+        await interaction.editReply({ content: `Test delivered successfully in <#${channel.id}>. Harmony can post greetings there.` });
+      } catch (error) {
+        console.error("Harmony greeting delivery test failed:", error);
+        const code = error?.code ? " Discord error: " + error.code + "." : "";
+        await interaction.editReply({ content: `Harmony could not post in <#${channel.id}>. Check **View Channel** and **Send Messages** permissions.${code}` });
+      }
+      return true;
+    }
+    if (action === "greetings-toggle") {
+      const settings = greetingStore.getGreetingSettings(interaction.guildId);
+      if (!settings) {
+        await interaction.update(greetingsManagerPayload(interaction, interaction.guildId, "Choose a Greeting Channel before turning Greetings on."));
+        return true;
+      }
+      const nextEnabled = !settings.enabled;
+      greetingStore.setGreetingEnabled(interaction.guildId, nextEnabled);
+      await interaction.update(greetingsManagerPayload(interaction, interaction.guildId, `Greetings are now **${nextEnabled ? "On" : "Off"}**. Saved channel and messages were preserved.`));
+      return true;
+    }
+    if (action === "greetings-close") {
+      greetingsNavigationSessions.delete(greetingsSessionKey(interaction));
+      await interaction.update({ content: "Greetings Manager closed.", embeds: [], components: [] });
+      return true;
+    }
   }
   if (action.startsWith("welcome-") && !hasActiveWelcomeNavigation(interaction)) {
     await interaction.reply({ content: "This Welcome Pass screen came from an Admin Controls panel that is no longer active. Open Welcome Pass from the current panel.", flags: MessageFlags.Ephemeral });
@@ -1081,7 +1310,7 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (["greetings", "members", "collections", "logs"].includes(action)) {
+  if (["members", "collections", "logs"].includes(action)) {
     const area = action;
     const payload = communityToolPage(interaction.guildId, area);
     if (payload) await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });

@@ -53,6 +53,30 @@ function disableGreetingSettings(guildId) {
   return Number(result.changes) > 0;
 }
 
+function updateGreetingSetting(guildId, field, value) {
+  const columns = {
+    channelId: "channel_id",
+    entranceMessage: "entrance_message",
+    exitMessage: "exit_message",
+  };
+  const column = columns[field];
+  if (!column) throw new Error("Invalid greeting setting.");
+  const nextValue = String(value || "").trim();
+  if (!nextValue) throw new Error("Choose a valid greeting setting.");
+  return Number(getDb().prepare(`
+    UPDATE greeting_settings SET ${column} = ?, updated_at = ?
+    WHERE guild_id = ?
+  `).run(nextValue, new Date().toISOString(), guildId).changes) > 0;
+}
+
+function setGreetingEnabled(guildId, enabled) {
+  const result = getDb().prepare(`
+    UPDATE greeting_settings SET enabled = ?, updated_at = ?
+    WHERE guild_id = ?
+  `).run(enabled ? 1 : 0, new Date().toISOString(), guildId);
+  return Number(result.changes) > 0;
+}
+
 function renderGreetingMessage(
   template,
   { memberMention = "", memberName = "A member", serverName }
@@ -69,5 +93,7 @@ module.exports = {
   getGreetingSettings,
   saveGreetingSettings,
   disableGreetingSettings,
+  updateGreetingSetting,
+  setGreetingEnabled,
   renderGreetingMessage,
 };
