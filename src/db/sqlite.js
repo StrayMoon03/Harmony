@@ -701,6 +701,9 @@ function migrate(database) {
   if (!welcomePassSettingColumns.has("entry_channel_id")) {
     database.exec("ALTER TABLE welcome_pass_settings ADD COLUMN entry_channel_id TEXT");
   }
+  if (!welcomePassSettingColumns.has("entry_message")) {
+    database.exec("ALTER TABLE welcome_pass_settings ADD COLUMN entry_message TEXT");
+  }
 
   const birthdayProfileColumns = new Set(
     database.prepare("PRAGMA table_info(birthday_profiles)").all()

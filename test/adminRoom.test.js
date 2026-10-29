@@ -13,8 +13,10 @@ const roomStore = require("../src/stores/adminRoomStore");
 const guardStore = require("../src/stores/communityGuardStore");
 const welcomePassStore = require("../src/stores/welcomePassStore");
 const greetingStore = require("../src/stores/greetingStore");
+const { renderGreetingMessage } = greetingStore;
+const { renderWelcomePassReleaseMessage } = welcomePassStore;
 const room = require("../src/services/adminRoomService");
-const { resolveWelcomePassEntryChannelId } = require("../src/services/welcomePassService");
+const { resolveWelcomePassEntryChannelId, resolveWelcomePassEntryMessage } = require("../src/services/welcomePassService");
 const { managerPanelComponents } = require("../src/services/eventSchedulerService");
 
 getDb();
@@ -390,7 +392,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.doesNotMatch(open.response.embeds[0].data.description, /Private Alert Channel|Public\/Member Channel/);
   assert.match(open.response.embeds[0].data.description, /Grant Mode:\*\* manual/);
   const controls = open.response.components.flatMap((row) => row.components).map((component) => component.data.custom_id);
-  for (const id of ["welcome-role", "welcome-entry", "welcome-private", "welcome-member", "welcome-message", "welcome-mode"]) {
+  for (const id of ["welcome-role", "welcome-entry", "welcome-private", "welcome-member", "welcome-entry-message", "welcome-approved-message", "welcome-mode"]) {
     assert.ok(controls.includes(`harmony-admin-room:${id}`));
   }
 
@@ -407,8 +409,21 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   const entrySelect = guardInteraction(guild, "harmony-admin-room:welcome-entry-select", { values: ["new-entry-room"] });
   const newEntryRoom = addChannel("new-entry-room");
   await room.handleAdminRoomInteraction(entrySelect);
+  assert.match(entrySelect.response.embeds[0].data.title, /New-Member Entrance Message/);
+  assert.ok(entrySelect.response.embeds[0].data.description.includes("Everyone welcome {member}"));
+  const editEntry = guardInteraction(guild, "harmony-admin-room:welcome-entry-message-edit");
+  await room.handleAdminRoomInteraction(editEntry);
+  assert.match(editEntry.modal.data.title, /Edit Entrance Message/);
+  assert.match(editEntry.modal.toJSON().components[0].components[0].placeholder, /\{member\}/);
+  const submitEntry = guardInteraction(guild, "harmony-admin-room:welcome-entry-message-submit", {
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: () => "Welcome to the server, {member}!" },
+  });
+  await room.handleAdminRoomInteraction(submitEntry);
   let saved = welcomePassStore.getWelcomePassSettings(guild.id);
   assert.equal(saved.entry_channel_id, newEntryRoom.id);
+  assert.equal(saved.entry_message, "Welcome to the server, {member}!");
+  assert.equal(renderGreetingMessage(saved.entry_message, { memberMention: "<@new-member>", memberName: "Member", serverName: guild.name }), "Welcome to the server, <@new-member>!");
   assert.equal(saved.channel_id, alerts.id);
   assert.equal(saved.release_channel_id, memberRoom.id);
 
@@ -431,19 +446,28 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.equal(saved.grant_mode, "automatic");
   assert.equal(saved.channel_id, nextAlerts.id);
 
-  const message = guardInteraction(guild, "harmony-admin-room:welcome-message");
-  await room.handleAdminRoomInteraction(message);
-  assert.match(message.modal.data.title, /Edit Welcome Pass Message/);
-  const submit = guardInteraction(guild, "harmony-admin-room:welcome-message-submit", {
+  const approvedChannelPicker = guardInteraction(guild, "harmony-admin-room:welcome-member");
+  await room.handleAdminRoomInteraction(approvedChannelPicker);
+  const newMemberRoom = addChannel("new-member-room");
+  const approvedChannelSelect = guardInteraction(guild, "harmony-admin-room:welcome-member-select", { values: [newMemberRoom.id] });
+  await room.handleAdminRoomInteraction(approvedChannelSelect);
+  assert.match(approvedChannelSelect.response.embeds[0].data.title, /Approved Member Welcome Message/);
+  assert.ok(approvedChannelSelect.response.embeds[0].data.description.includes("Welcome {member} to {server}!"));
+  const editApproved = guardInteraction(guild, "harmony-admin-room:welcome-approved-message-edit");
+  await room.handleAdminRoomInteraction(editApproved);
+  assert.match(editApproved.modal.data.title, /Edit Approved Welcome Message/);
+  assert.match(editApproved.modal.toJSON().components[0].components[0].placeholder, /\{member\}/);
+  const submit = guardInteraction(guild, "harmony-admin-room:welcome-approved-message-submit", {
     isModalSubmit: () => true,
-    fields: { getTextInputValue: () => "Congratulations, {member}! Welcome to {server}." },
+    fields: { getTextInputValue: () => "Congratulations, {member}! Welcome to Main Chat." },
   });
   await room.handleAdminRoomInteraction(submit);
   saved = welcomePassStore.getWelcomePassSettings(guild.id);
-  assert.equal(saved.release_message, "Congratulations, {member}! Welcome to {server}.");
+  assert.equal(saved.release_message, "Congratulations, {member}! Welcome to Main Chat.");
+  assert.equal(renderWelcomePassReleaseMessage(saved.release_message, { memberMention: "<@new-member>", memberName: "Member", serverName: guild.name }), "Congratulations, <@new-member>! Welcome to Main Chat.");
   assert.equal(saved.role_id, role.id);
   assert.equal(saved.channel_id, nextAlerts.id);
-  assert.equal(saved.release_channel_id, memberRoom.id);
+  assert.equal(saved.release_channel_id, newMemberRoom.id);
   assert.equal(saved.entry_channel_id, newEntryRoom.id);
 
   const back = guardInteraction(guild, "harmony-admin-room:welcome:ephemeral");
@@ -463,6 +487,7 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panelChannel.id, message: { id: "setup-panel" } });
   await room.handleAdminRoomInteraction(open);
   assert.match(open.response.embeds[0].data.description, /Setup needed/);
+  assert.ok(open.response.embeds[0].data.description.includes(welcomePassStore.DEFAULT_RELEASE_MESSAGE));
 
   const rolePicker = guardInteraction(guild, "harmony-admin-room:welcome-role");
   await room.handleAdminRoomInteraction(rolePicker);
@@ -485,6 +510,7 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   await room.handleAdminRoomInteraction(entryPicker);
   const entrySelect = guardInteraction(guild, "harmony-admin-room:welcome-entry-select", { values: [entryRoom.id] });
   await room.handleAdminRoomInteraction(entrySelect);
+  assert.match(entrySelect.response.embeds[0].data.title, /New-Member Entrance Message/);
   const saved = welcomePassStore.getWelcomePassSettings(guild.id);
   assert.equal(saved.role_id, role.id);
   assert.equal(saved.channel_id, alerts.id);
@@ -522,6 +548,7 @@ test("legacy Welcome Pass installations keep using the existing Greetings entry 
   assert.match(summary, /Status:\*\* Configured/);
   assert.ok(summary.includes(`Welcome Pass Entry Channel:** <#${greetingEntry.id}> (following the current entrance greeting channel)`));
   assert.equal(resolveWelcomePassEntryChannelId(welcomePassStore.getWelcomePassSettings(guild.id), greetingStore.getGreetingSettings(guild.id)), greetingEntry.id);
+  assert.equal(resolveWelcomePassEntryMessage(welcomePassStore.getWelcomePassSettings(guild.id), greetingStore.getGreetingSettings(guild.id)), "Complete your Welcome Pass, {member}!");
 
   const picker = guardInteraction(guild, "harmony-admin-room:welcome-entry");
   await room.handleAdminRoomInteraction(picker);
@@ -532,6 +559,7 @@ test("legacy Welcome Pass installations keep using the existing Greetings entry 
   assert.equal(saved.release_channel_id, approved.id);
   assert.equal(greetingStore.getGreetingSettings(guild.id).channel_id, greetingEntry.id, "Welcome Pass override does not change Greetings or exit-message destination");
   assert.equal(resolveWelcomePassEntryChannelId(saved, greetingStore.getGreetingSettings(guild.id)), explicitEntry.id);
+  assert.equal(resolveWelcomePassEntryMessage(saved, greetingStore.getGreetingSettings(guild.id)), "Complete your Welcome Pass, {member}!");
 });
 
 test("slash-style Welcome Pass setup updates preserve an existing entry-channel override", () => {
@@ -542,16 +570,19 @@ test("slash-style Welcome Pass setup updates preserve an existing entry-channel 
     channelId: "preserve-staff",
     releaseChannelId: "preserve-approved",
     entryChannelId: "preserve-entry",
+    entryMessage: "Persisted entry text {member}",
     releaseMessage: "Original message",
   };
   welcomePassStore.saveWelcomePassSettings(original);
   welcomePassStore.saveWelcomePassSettings({
     ...original,
     entryChannelId: undefined,
+    entryMessage: undefined,
     releaseMessage: "Updated message",
   });
   const saved = welcomePassStore.getWelcomePassSettings(guildId);
   assert.equal(saved.entry_channel_id, "preserve-entry");
+  assert.equal(saved.entry_message, "Persisted entry text {member}");
   assert.equal(saved.release_message, "Updated message");
 });
 

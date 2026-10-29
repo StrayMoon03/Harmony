@@ -25,6 +25,7 @@ function saveWelcomePassSettings({
   channelId,
   releaseChannelId,
   entryChannelId,
+  entryMessage,
   releaseMessage,
 }) {
   getDb().prepare(`
@@ -34,14 +35,16 @@ function saveWelcomePassSettings({
       channel_id,
       release_channel_id,
       entry_channel_id,
+      entry_message,
       release_message,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(guild_id) DO UPDATE SET
       role_id = excluded.role_id,
       channel_id = excluded.channel_id,
       release_channel_id = excluded.release_channel_id,
       entry_channel_id = COALESCE(excluded.entry_channel_id, welcome_pass_settings.entry_channel_id),
+      entry_message = COALESCE(excluded.entry_message, welcome_pass_settings.entry_message),
       release_message = excluded.release_message,
       updated_at = excluded.updated_at
   `).run(
@@ -50,6 +53,7 @@ function saveWelcomePassSettings({
     channelId,
     releaseChannelId,
     entryChannelId || null,
+    entryMessage || null,
     releaseMessage || DEFAULT_RELEASE_MESSAGE,
     new Date().toISOString()
   );
@@ -67,14 +71,17 @@ function updateWelcomePassSetting(guildId, field, value) {
     channelId: "channel_id",
     releaseChannelId: "release_channel_id",
     entryChannelId: "entry_channel_id",
+    entryMessage: "entry_message",
     releaseMessage: "release_message",
   };
   const column = columns[field];
   if (!column) throw new Error("Invalid Welcome Pass setting.");
   const nextValue = field === "releaseMessage"
     ? (String(value || "").trim() || DEFAULT_RELEASE_MESSAGE)
-    : String(value || "").trim();
-  if (!nextValue) throw new Error("Choose a valid Welcome Pass setting.");
+    : field === "entryMessage"
+      ? (String(value || "").trim() || null)
+      : String(value || "").trim();
+  if (nextValue === null && field !== "entryMessage" || nextValue === "") throw new Error("Choose a valid Welcome Pass setting.");
   return Number(getDb().prepare(`
     UPDATE welcome_pass_settings SET ${column} = ?, updated_at = ?
     WHERE guild_id = ?

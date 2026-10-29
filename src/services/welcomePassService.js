@@ -48,6 +48,10 @@ function resolveWelcomePassEntryChannelId(welcomePassSettings, greetingSettings)
   return welcomePassSettings?.entry_channel_id || greetingSettings?.channel_id || null;
 }
 
+function resolveWelcomePassEntryMessage(welcomePassSettings, greetingSettings) {
+  return welcomePassSettings?.entry_message || greetingSettings?.entrance_message || null;
+}
+
 async function configureWelcomePass(client, settings) {
   const guild = client.guilds.cache.get(settings.guildId) ||
     await client.guilds.fetch(settings.guildId).catch(() => null);
@@ -67,7 +71,7 @@ async function configureWelcomePass(client, settings) {
 }
 
 async function updateWelcomePassSetting(client, guildId, field, value) {
-  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", entryChannelId: "entry_channel_id", releaseMessage: "release_message" }[field];
+  const property = { roleId: "role_id", channelId: "channel_id", releaseChannelId: "release_channel_id", entryChannelId: "entry_channel_id", entryMessage: "entry_message", releaseMessage: "release_message" }[field];
   if (!property) throw new Error("Invalid Welcome Pass setting.");
   const settings = getWelcomePassSettings(guildId);
   if (!settings) throw new Error("Complete Welcome Pass setup before changing individual settings.");
@@ -358,6 +362,7 @@ module.exports = {
   autoLinkWelcomePassByDiscordUsername,
   validateWelcomePassRole,
   resolveWelcomePassEntryChannelId,
+  resolveWelcomePassEntryMessage,
   configureWelcomePass,
   updateWelcomePassSetting,
   assignApprovedWelcomePass,
