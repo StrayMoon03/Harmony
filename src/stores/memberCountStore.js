@@ -51,9 +51,17 @@ function disableMemberCountSettings(guildId) {
   return Number(result.changes) > 0;
 }
 
+function setMemberCountEnabled(guildId, enabled) {
+  const result = getDb().prepare(
+    "UPDATE member_count_settings SET enabled = ?, updated_at = ? WHERE guild_id = ?"
+  ).run(enabled ? 1 : 0, new Date().toISOString(), guildId);
+  return Number(result.changes) > 0;
+}
+
 module.exports = {
   getMemberCountSettings,
   listEnabledMemberCountSettings,
   saveMemberCountSettings,
   disableMemberCountSettings,
+  setMemberCountEnabled,
 };
