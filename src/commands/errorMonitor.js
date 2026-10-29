@@ -3,10 +3,8 @@ const {
   PermissionFlagsBits,
   MessageFlags,
 } = require("discord.js");
-const {
-  getErrorMonitorSettings,
-  setErrorMonitorEnabled,
-} = require("../stores/errorMonitorStore");
+const { getErrorMonitorSettings } = require("../stores/errorMonitorStore");
+const { isErrorMonitorConfigured, enableErrorMonitor, disableErrorMonitor } = require("../services/errorMonitorService");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-monitor")
@@ -28,22 +26,19 @@ async function execute(interaction) {
 
   const action = interaction.options.getSubcommand();
   if (action === "on") {
-    if (
-      !String(process.env.HARMONY_ERROR_GITHUB_TOKEN || "").trim() ||
-      !/^[-A-Za-z0-9_.]+\/[-A-Za-z0-9_.]+$/.test(String(process.env.HARMONY_ERROR_GITHUB_REPO || "").trim())
-    ) {
+    if (!isErrorMonitorConfigured()) {
       return interaction.editReply(
         "I can’t turn monitoring on because the private GitHub repository variables are missing or invalid in Railway."
       );
     }
-    setErrorMonitorEnabled(true);
+    enableErrorMonitor();
     return interaction.editReply(
       "✅ Harmony’s private error monitor is **on**. Sanitized media failures will be filed in the private Harmony-Errors repository. Nothing will merge or deploy automatically."
     );
   }
 
   if (action === "off") {
-    setErrorMonitorEnabled(false);
+    disableErrorMonitor();
     return interaction.editReply(
       "Harmony’s private error monitor is **off**. The existing private reports were left in place."
     );
@@ -58,4 +53,4 @@ async function execute(interaction) {
   ].join("\n"));
 }
 
-module.exports = { data, execute };
+module.exports = { data, execute, isErrorMonitorConfigured };

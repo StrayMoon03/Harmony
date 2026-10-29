@@ -26,6 +26,9 @@ const collectionStore = require("../stores/collectionStore");
 const messageLogStore = require("../stores/messageLogStore");
 const errorInboxStore = require("../stores/errorInboxStore");
 const errorMonitorStore = require("../stores/errorMonitorStore");
+const errorInboxService = require("./errorInboxService");
+const errorMonitorService = require("./errorMonitorService");
+const forgetShareCommand = require("../commands/forgetShare");
 const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const statusCommand = require("../commands/status");
 
@@ -44,6 +47,8 @@ const MEMBER_COUNT_SESSION_TTL_MS = 15 * 60 * 1000;
 const messageLogNavigationSessions = new Map();
 const MESSAGE_LOG_SESSION_TTL_MS = 15 * 60 * 1000;
 const MESSAGE_LOG_EXCLUSION_PAGE_SIZE = 15;
+const mediaNavigationSessions = new Map();
+const MEDIA_SESSION_TTL_MS = 15 * 60 * 1000;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -89,21 +94,103 @@ function commandHelp(names) {
   return names.map(([command, purpose]) => `• \`/${command}\` — ${purpose}`).join("\n");
 }
 
-function mediaPage(guildId) {
-  const commands = commandHelp([
-    ["harmony-errors", "Configure or check the media error inbox"],
-    ["harmony-monitor", "Control sanitized automatic error reporting"],
-    ["harmony-forget", "Reset duplicate tracking for a specific shared post"],
-  ]);
+function mediaSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function setMediaNavigation(interaction) {
+  mediaNavigationSessions.set(mediaSessionKey(interaction), {
+    panelMessageId: interaction.message?.id,
+    channelId: interaction.channelId,
+    updatedAt: Date.now(),
+  });
+}
+
+function hasActiveMediaNavigation(interaction) {
+  const key = mediaSessionKey(interaction);
+  const session = mediaNavigationSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > MEDIA_SESSION_TTL_MS) {
+    mediaNavigationSessions.delete(key);
+    return false;
+  }
+  const panel = roomStore.getPanel(interaction.guildId);
+  if (!panel?.enabled || panel.message_id !== session.panelMessageId || panel.channel_id !== session.channelId) {
+    mediaNavigationSessions.delete(key);
+    return false;
+  }
+  session.updatedAt = Date.now();
+  return true;
+}
+
+async function mediaManagerPayload(guild, client, notice = null) {
   const inbox = errorInboxStore.getErrorInboxSettings();
+  const destinationGuild = inbox?.destination_guild_id
+    ? (client.guilds.cache.get(inbox.destination_guild_id) || await client.guilds.fetch(inbox.destination_guild_id).catch(() => null))
+    : null;
+  const destinationChannel = destinationGuild && inbox?.destination_channel_id
+    ? (destinationGuild.channels.cache.get(inbox.destination_channel_id) || await destinationGuild.channels.fetch(inbox.destination_channel_id).catch(() => null))
+    : null;
+  const destination = inbox
+    ? `${destinationGuild?.name || `Server ${inbox.destination_guild_id}`} · ${destinationChannel?.name ? `#${destinationChannel.name}` : `Channel ${inbox.destination_channel_id}`}`
+    : "Not configured";
   const monitor = errorMonitorStore.getErrorMonitorSettings();
-  const inboxState = !inbox?.enabled ? "Off or not configured" : inbox.destination_guild_id === guildId
-    ? `On${inbox.destination_channel_id ? ` · <#${inbox.destination_channel_id}>` : ""}`
-    : "On for the configured central server";
-  const text = `Media error inbox: **${inboxState}**\nAutomatic error reporting: **${monitor.enabled ? "On" : "Off"}**\n\n${commands}\n\nSocial media retrieval runs through Harmony’s existing message pipeline. Session state is not actively tested here; use Status / Health for the current signals. Refresh Session appears only for explicit expiry evidence and authorized credential managers.`;
-  return pagePayload("🎞️ Media & System", text, [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("harmony-status:open").setLabel("Status / Health").setStyle(ButtonStyle.Primary),
-  )]);
+  const monitorConfigured = errorMonitorService.isErrorMonitorConfigured();
+  const inboxStatus = inbox ? (inbox.enabled ? "On" : "Off") : "Not configured";
+  const monitorStatus = monitor.enabled ? "On" : "Off";
+  const description = [
+    notice,
+    "**MEDIA ERROR INBOX**",
+    `**Status:** ${inboxStatus}`,
+    `**Destination:** ${destination}`,
+    "**Scope:** Media failures from every server Harmony serves.",
+    "Use a private troubleshooting channel that trusted admins can access.",
+    "",
+    "**AUTOMATIC ERROR MONITOR**",
+    `**Status:** ${monitorStatus}`,
+    `**Private repository:** ${monitorConfigured ? "Configured" : "Not configured"}`,
+    "Sanitized media failures only. Automatic merging/deployment: **Off**.",
+    "",
+    "**FORGET SHARED POST**",
+    "Reset duplicate tracking for one post so that exact post can be shared again. This does not delete a member or media.",
+  ].filter(Boolean).join("\n\n");
+  const inboxToggle = inbox?.enabled
+    ? new ButtonBuilder().setCustomId("harmony-admin-room:media-inbox-toggle").setLabel("Turn Inbox Off").setStyle(ButtonStyle.Danger)
+    : new ButtonBuilder().setCustomId("harmony-admin-room:media-inbox-toggle").setLabel("Turn Inbox On").setStyle(ButtonStyle.Success).setDisabled(!inbox);
+  const monitorToggle = new ButtonBuilder().setCustomId("harmony-admin-room:media-monitor-toggle")
+    .setLabel(monitor.enabled ? "Turn Monitor Off" : "Turn Monitor On")
+    .setStyle(monitor.enabled ? ButtonStyle.Danger : ButtonStyle.Success);
+  const components = [
+    new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:media-error-inbox-select")
+      .setPlaceholder(inbox ? "Change Error Inbox" : "Choose Error Inbox")
+      .setChannelTypes(ChannelType.GuildText)
+      .setMinValues(1)
+      .setMaxValues(1)),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-admin-room:media-inbox-test").setLabel("Send Test").setStyle(ButtonStyle.Primary).setDisabled(!inbox?.enabled),
+      inboxToggle,
+      monitorToggle,
+      new ButtonBuilder().setCustomId("harmony-admin-room:media-forget").setLabel("Forget Shared Post").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-admin-room:media-refresh").setLabel("Refresh").setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(new ButtonBuilder()
+      .setCustomId("harmony-admin-room:media-close").setLabel("Close").setStyle(ButtonStyle.Secondary)),
+  ];
+  return pagePayload("🎞️ Media & Errors Manager", description, components);
+}
+
+function forgetSharedPostModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("harmony-admin-room:media-forget-submit")
+    .setTitle("Forget Shared Post");
+  modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder()
+    .setCustomId("link")
+    .setLabel("Social Post Link")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("Instagram, Facebook, TikTok, X, YouTube, or Threads")
+    .setMaxLength(2000)
+    .setRequired(true)));
+  return modal;
 }
 
 async function guardPage(guild, notice = null) {
@@ -1597,7 +1684,116 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   if (action === "media") {
-    await interaction.reply({ ...mediaPage(interaction.guildId), flags: MessageFlags.Ephemeral });
+    setMediaNavigation(interaction);
+    await interaction.reply({ ...await mediaManagerPayload(interaction.guild, interaction.client), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action.startsWith("media-")) {
+    if (!hasActiveMediaNavigation(interaction)) {
+      await interaction.reply({ content: "This Media & Errors screen came from an Admin Controls panel that is no longer active. Open Media & Errors from the current panel.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "media-refresh") {
+      await interaction.update(await mediaManagerPayload(interaction.guild, interaction.client));
+      return true;
+    }
+    if (action === "media-close") {
+      mediaNavigationSessions.delete(mediaSessionKey(interaction));
+      await interaction.update({ content: "Media & Errors Manager closed.", embeds: [], components: [] });
+      return true;
+    }
+    if (action === "media-forget") {
+      await interaction.showModal(forgetSharedPostModal());
+      return true;
+    }
+    if (action === "media-forget-submit" && interaction.isModalSubmit?.()) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const link = String(interaction.fields?.getTextInputValue?.("link") || "").trim();
+        if (!link || link.length > 2000) {
+          await interaction.editReply({ content: forgetShareCommand.INVALID_LINK_MESSAGE });
+          return true;
+        }
+        const result = await forgetShareCommand.forgetSharedPost(link, interaction.guildId);
+        const content = result.status === "removed"
+          ? "That post has been removed from Harmony’s memory and can be shared again."
+          : result.status === "not_found"
+            ? "Harmony doesn’t currently have that post saved in her memory."
+            : forgetShareCommand.INVALID_LINK_MESSAGE;
+        await interaction.editReply({ content });
+      } catch {
+        await interaction.editReply({ content: "Harmony couldn’t check that post link right now. Please try again later." });
+      }
+      return true;
+    }
+    if (action === "media-error-inbox-select") {
+      const channelId = interaction.values?.[0];
+      const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
+      if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
+        await interaction.reply({ content: "Choose a text channel in this server for the central Error Inbox.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      const botMember = interaction.guild.members?.me;
+      const permissions = botMember && channel.permissionsFor?.(botMember);
+      const required = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+      if (!permissions || required.some((permission) => !permissions.has(permission))) {
+        await interaction.reply({ content: `Harmony needs **View Channel**, **Send Messages**, and **Embed Links** in <#${channel.id}>. The saved Error Inbox was not changed.`, flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.deferUpdate();
+      try {
+        const tested = await errorInboxService.sendErrorInboxTestToChannel(channel, interaction);
+        if (!tested) {
+          await interaction.editReply(await mediaManagerPayload(interaction.guild, interaction.client, "Harmony could not test that channel. The saved Error Inbox was not changed."));
+          return true;
+        }
+        errorInboxStore.saveErrorInboxSettings(interaction.guildId, channel.id);
+        await interaction.editReply(await mediaManagerPayload(interaction.guild, interaction.client, `The central Error Inbox was tested and saved to <#${channel.id}>. Media failures from every server Harmony serves will go there.`));
+      } catch {
+        await interaction.editReply(await mediaManagerPayload(interaction.guild, interaction.client, "Harmony could not post its test report there. The saved Error Inbox was not changed. Check the channel permissions and try again."));
+      }
+      return true;
+    }
+    if (action === "media-inbox-toggle") {
+      const settings = errorInboxStore.getErrorInboxSettings();
+      if (!settings) {
+        await interaction.update(await mediaManagerPayload(interaction.guild, interaction.client, "Choose and test an Error Inbox channel before turning the inbox on."));
+        return true;
+      }
+      const nextEnabled = !settings.enabled;
+      if (nextEnabled) errorInboxStore.enableErrorInbox();
+      else errorInboxStore.disableErrorInbox();
+      await interaction.update(await mediaManagerPayload(interaction.guild, interaction.client, `The central Error Inbox is now **${nextEnabled ? "On" : "Off"}**. Its saved destination was preserved.`));
+      return true;
+    }
+    if (action === "media-inbox-test") {
+      await interaction.deferUpdate();
+      try {
+        const delivered = await errorInboxService.sendErrorInboxTest(interaction.client, interaction);
+        const notice = delivered
+          ? "Test delivered to the central Error Inbox."
+          : "The saved Error Inbox is unavailable or off. Choose and test a destination channel.";
+        await interaction.editReply(await mediaManagerPayload(interaction.guild, interaction.client, notice));
+      } catch {
+        await interaction.editReply(await mediaManagerPayload(interaction.guild, interaction.client, "Harmony could not send the Error Inbox test. Check the saved channel permissions and try again."));
+      }
+      return true;
+    }
+    if (action === "media-monitor-toggle") {
+      const result = errorMonitorService.toggleErrorMonitor();
+      const notice = result.ok
+        ? result.enabled
+          ? "Automatic Error Monitor is on. Only sanitized media failures are filed; nothing merges or deploys automatically."
+          : "Automatic Error Monitor is off. Existing reports were left in place."
+        : "Automatic Error Monitor could not be turned on because its private GitHub setup is missing or invalid. Ask the owner to complete setup.";
+      await interaction.update(await mediaManagerPayload(interaction.guild, interaction.client, notice));
+      return true;
+    }
+    if (action === "media-forget-submit") {
+      await interaction.reply({ content: "That Forget Shared Post form is no longer available. Reopen it from the current Media & Errors Manager.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    await interaction.reply({ content: "That Media & Errors control is not available. Refresh the manager and try again.", flags: MessageFlags.Ephemeral });
     return true;
   }
   if (action === "guard-history") {
@@ -1623,7 +1819,8 @@ module.exports = {
   execute: setupAdminRoom,
   buildHomePayload,
   buildHomeComponents,
-  mediaPage,
+  mediaManagerPayload,
+  forgetSharedPostModal,
   guardPage,
   guardHistoryPayload,
   ruleListPayload,
