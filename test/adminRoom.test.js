@@ -387,7 +387,8 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.match(open.response.embeds[0].data.description, /Status:\*\* Configured/);
   assert.match(open.response.embeds[0].data.description, /Approved Role:\*\* @STAY/);
   assert.ok(open.response.embeds[0].data.description.includes(`Welcome Pass Entry Channel:** <#${entryRoom.id}>`));
-  assert.ok(open.response.embeds[0].data.description.includes(`Staff Approval Alerts:** <#${alerts.id}>`));
+  assert.ok(open.response.embeds[0].data.description.includes(`Pass Submission Alerts:** <#${alerts.id}>`));
+  assert.match(open.response.embeds[0].data.description, /primary purpose is to alert staff when a new pass is waiting for review/i);
   assert.ok(open.response.embeds[0].data.description.includes(`Approved Member Welcome Channel:** <#${memberRoom.id}>`));
   assert.doesNotMatch(open.response.embeds[0].data.description, /Private Alert Channel|Public\/Member Channel/);
   assert.match(open.response.embeds[0].data.description, /Grant Mode:\*\* manual/);
@@ -429,6 +430,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
 
   const openChannel = guardInteraction(guild, "harmony-admin-room:welcome-private");
   await room.handleAdminRoomInteraction(openChannel);
+  assert.match(openChannel.response.embeds[0].data.description, /new Welcome Pass is submitted and waiting for review/i);
   assert.equal(openChannel.response.components[0].components[0].data.channel_types[0], ChannelType.GuildText);
   const selectChannel = guardInteraction(guild, "harmony-admin-room:welcome-private-select", { values: [nextAlerts.id] });
   await room.handleAdminRoomInteraction(selectChannel);
@@ -493,7 +495,7 @@ test("Welcome Pass can be set up through selectors without partially saving or c
   await room.handleAdminRoomInteraction(rolePicker);
   const roleSelect = guardInteraction(guild, "harmony-admin-room:welcome-role-select", { values: [role.id] });
   await room.handleAdminRoomInteraction(roleSelect);
-  assert.match(roleSelect.response.embeds[0].data.description, /Welcome Pass Entry Channel, Staff Approval Alerts, Approved Member Welcome Channel/);
+  assert.match(roleSelect.response.embeds[0].data.description, /Welcome Pass Entry Channel, Pass Submission Alerts, Approved Member Welcome Channel/);
   assert.equal(welcomePassStore.getWelcomePassSettings(guild.id), null, "incomplete setup remains session-only");
 
   const privatePicker = guardInteraction(guild, "harmony-admin-room:welcome-private");
@@ -541,7 +543,7 @@ test("legacy Welcome Pass settings are retained but show Setup needed when the n
   await room.handleAdminRoomInteraction(open);
   assert.match(open.response.embeds[0].data.description, /Status:\*\* Setup needed/);
   assert.ok(open.response.embeds[0].data.description.includes(`Approved Role:** @${role.name}`));
-  assert.ok(open.response.embeds[0].data.description.includes(`Staff Approval Alerts:** <#${alerts.id}>`));
+  assert.ok(open.response.embeds[0].data.description.includes(`Pass Submission Alerts:** <#${alerts.id}>`));
   assert.match(open.response.embeds[0].data.description, /Approved Member Welcome Channel:\*\* Not selected/);
   const after = welcomePassStore.getWelcomePassSettings(guild.id);
   assert.equal(after.role_id, before.role_id);

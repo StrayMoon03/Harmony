@@ -12,6 +12,7 @@ const {
   autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
 } = require("./welcomePassService");
+const { sendWelcomePassSubmissionAlert } = require("./welcomePassSubmissionService");
 const { startSessionRefreshWebService } = require("./sessionRefreshWebService");
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -34,15 +35,21 @@ function sendJson(response, statusCode, payload) {
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let tooLarge = false;
     request.setEncoding("utf8");
     request.on("data", (chunk) => {
+      if (tooLarge) return;
       body += chunk;
       if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
-        reject(new Error("body_too_large"));
-        request.destroy();
+        tooLarge = true;
+        body = "";
       }
     });
     request.on("end", () => {
+      if (tooLarge) {
+        reject(new Error("body_too_large"));
+        return;
+      }
       try {
         resolve(JSON.parse(body || "{}"));
       } catch {
@@ -66,10 +73,7 @@ function startWelcomePassServer(client) {
       return;
     }
 
-    if (
-      request.method !== "POST" ||
-      url.pathname !== "/welcome-pass/approved"
-    ) {
+    if (request.method !== "POST" || !["/welcome-pass/approved", "/welcome-pass/submitted"].includes(url.pathname)) {
       sendJson(response, 404, { error: "not_found" });
       return;
     }
@@ -92,6 +96,43 @@ function startWelcomePassServer(client) {
 
     try {
       const body = await readJsonBody(request);
+      if (url.pathname === "/welcome-pass/submitted") {
+        const reference = normalizeWelcomePassCode(body.reference);
+        const discordUsername = typeof body.discordUsername === "string" ? body.discordUsername.trim() : "";
+        const facebookName = typeof body.facebookName === "string" ? body.facebookName.trim() : "";
+        const submittedAt = typeof body.submittedAt === "string" ? body.submittedAt.trim() : "";
+        const isoTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+        if (!isValidWelcomePassCode(reference)) {
+          sendJson(response, 400, { error: "invalid_reference" });
+          return;
+        }
+        if (!discordUsername || discordUsername.length > 80 || !facebookName || facebookName.length > 100) {
+          sendJson(response, 400, { error: "invalid_submission_fields" });
+          return;
+        }
+        if (!isoTimestamp.test(submittedAt) || !Number.isFinite(Date.parse(submittedAt)) || new Date(submittedAt).toISOString() !== submittedAt) {
+          sendJson(response, 400, { error: "invalid_submitted_at" });
+          return;
+        }
+
+        const result = await sendWelcomePassSubmissionAlert(client, {
+          reference,
+          discordUsername,
+          facebookName,
+          submittedAt,
+        });
+        if (result.status === "notified" || result.status === "already_notified" || result.status === "already_attempted") {
+          sendJson(response, 200, { ok: true, status: result.status });
+          return;
+        }
+        if (result.status === "delivery_failed") {
+          sendJson(response, 502, { error: "notification_delivery_failed" });
+          return;
+        }
+        sendJson(response, 503, { error: result.status });
+        return;
+      }
+
       const code = normalizeWelcomePassCode(body.code);
       if (!isValidWelcomePassCode(code)) {
         sendJson(response, 400, { error: "invalid_confirmation_code" });

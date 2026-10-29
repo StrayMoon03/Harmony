@@ -381,7 +381,8 @@ function welcomePassPage(guild, userId, notice = null) {
     `**Approved Role:** ${role?.name ? `@${role.name}` : (roleId ? `<@&${roleId}>` : "Not selected")}`,
     `**Welcome Pass Entry Channel:** ${entryChannelId ? `<#${entryChannelId}>` : "Not selected"}${!settings?.entry_channel_id && greetingSettings?.channel_id ? " (following the current entrance greeting channel)" : ""}`,
     `**New-member entrance greeting:** ${!greetingSettings ? "Not configured" : greetingSettings.enabled ? "On" : "Off"}`,
-    `**Staff Approval Alerts:** ${privateChannelId ? `<#${privateChannelId}>` : "Not selected"}`,
+    `**Pass Submission Alerts:** ${privateChannelId ? `<#${privateChannelId}>` : "Not selected"}`,
+    "This room’s primary purpose is to alert staff when a new pass is waiting for review. A separate STAY-role confirmation may also be posted after admission.",
     `**Approved Member Welcome Channel:** ${memberChannelId ? `<#${memberChannelId}>` : "Not selected"}`,
     `**Grant Mode:** ${baseConfigured ? (settings.grant_mode || "automatic") : "Set after setup"}`,
     `**New-Member Entrance Message:**\n${entryMessage.slice(0, 500)}`,
@@ -390,7 +391,7 @@ function welcomePassPage(guild, userId, notice = null) {
       ? (settings.grant_mode === "manual"
         ? "Manual mode: an admin grants the configured role; Harmony then sends the member message and private confirmation. Approvals and member linking remain available. A separate Disable control is not provided because the current backend has no non-destructive disabled state."
         : "Automatic mode: after approval and an exact Discord account match, Harmony grants the role and sends the configured messages.")
-      : "Select the role, Entry Channel, Staff Approval Alerts, and Approved Member Welcome Channel to finish setup. Selections stay in this private setup session until saved; existing configuration is not cleared.",
+      : "Select the role, Entry Channel, Pass Submission Alerts, and Approved Member Welcome Channel to finish setup. Selections stay in this private setup session until saved; existing configuration is not cleared.",
     !greetingSettings || !greetingSettings.enabled
       ? "The Entry Channel routes the existing entrance greeting. Greetings must be configured and On for Harmony to send that message; this screen does not change Greetings settings."
       : null,
@@ -399,7 +400,7 @@ function welcomePassPage(guild, userId, notice = null) {
   const components = [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome-role").setLabel("Approved Role").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome-entry").setLabel("Welcome Pass Entry Channel").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-private").setLabel("Staff Approval Alerts").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("harmony-admin-room:welcome-private").setLabel("Pass Submission Alerts").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome-member").setLabel("Approved Member Welcome Channel").setStyle(ButtonStyle.Secondary),
   )];
   components.push(new ActionRowBuilder().addComponents(
@@ -425,7 +426,7 @@ function welcomePickerPayload(field) {
   }
   const labels = {
     entry: ["Choose the Welcome Pass Entry Channel", "Choose where Harmony sends new arrivals to complete the Welcome Pass."],
-    private: ["Choose Staff Approval Alerts", "Choose where Harmony sends staff notifications after Welcome Pass completion/approval."],
+    private: ["Choose Pass Submission Alerts", "Choose where Harmony notifies staff when a new Welcome Pass is submitted and waiting for review."],
     member: ["Choose the Approved Member Welcome Channel", "Choose where Harmony posts the member’s existing approved Welcome Pass message."],
   };
   return pagePayload(labels[field][0], labels[field][1], [
@@ -482,7 +483,7 @@ async function saveWelcomeManagerField(interaction, field, value, promptMessage 
     }
     clearWelcomeDraft(interaction);
     notice = field === "roleId" ? `Approved role updated to <@&${value}>.`
-      : field === "channelId" ? `Staff Approval Alerts updated to <#${value}>.`
+      : field === "channelId" ? `Pass Submission Alerts updated to <#${value}>.`
         : field === "releaseChannelId" ? `Approved Member Welcome Channel updated to <#${value}>.`
           : field === "entryChannelId" ? `Welcome Pass Entry Channel updated to <#${value}>.`
             : field === "entryMessage" ? "New-member entrance message updated."
@@ -507,7 +508,7 @@ async function saveWelcomeManagerField(interaction, field, value, promptMessage 
       const missing = [
         !draft.roleId && "Approved Role",
         !draft.entryChannelId && "Welcome Pass Entry Channel",
-        !draft.channelId && "Staff Approval Alerts",
+        !draft.channelId && "Pass Submission Alerts",
         !draft.releaseChannelId && "Approved Member Welcome Channel",
       ].filter(Boolean);
       notice = `Selection held for this setup session only. Still needed: ${missing.join(", ")}. Select the remaining controls to save setup.`;

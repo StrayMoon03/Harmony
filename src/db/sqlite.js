@@ -80,6 +80,13 @@ function migrate(database) {
       approved_at    TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS welcome_pass_submission_alerts (
+      code         TEXT PRIMARY KEY,
+      claimed_at   TEXT NOT NULL,
+      delivered_at TEXT,
+      message_id   TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
       ON welcome_pass_links (guild_id, user_id);
 

@@ -160,6 +160,29 @@ function recordWelcomePassApproval({ code, approverName }) {
   return normalizedCode;
 }
 
+function claimWelcomePassSubmissionAlert(code) {
+  const result = getDb().prepare(`
+    INSERT OR IGNORE INTO welcome_pass_submission_alerts (code, claimed_at)
+    VALUES (?, ?)
+  `).run(normalizeWelcomePassCode(code), new Date().toISOString());
+  return Number(result.changes) === 1;
+}
+
+function markWelcomePassSubmissionAlertDelivered(code, messageId = null) {
+  return Number(getDb().prepare(`
+    UPDATE welcome_pass_submission_alerts
+    SET delivered_at = ?, message_id = ?
+    WHERE code = ? AND delivered_at IS NULL
+  `).run(new Date().toISOString(), messageId || null, normalizeWelcomePassCode(code)).changes) === 1;
+}
+
+function getWelcomePassSubmissionAlert(code) {
+  return getDb().prepare(`
+    SELECT code, claimed_at, delivered_at, message_id
+    FROM welcome_pass_submission_alerts WHERE code = ?
+  `).get(normalizeWelcomePassCode(code)) || null;
+}
+
 function getWelcomePassAssignment(code) {
   return getDb().prepare(`
     SELECT
@@ -215,6 +238,9 @@ module.exports = {
   setWelcomePassGrantMode,
   linkWelcomePassCode,
   recordWelcomePassApproval,
+  claimWelcomePassSubmissionAlert,
+  markWelcomePassSubmissionAlertDelivered,
+  getWelcomePassSubmissionAlert,
   getWelcomePassAssignment,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
