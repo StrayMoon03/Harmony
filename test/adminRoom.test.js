@@ -35,6 +35,7 @@ function createGuild(guildId = "admin-room-guild") {
     const sent = [];
     const channel = {
       id,
+      guildId: guild.id,
       type: ChannelType.GuildText,
       isTextBased: () => true,
       permissionsFor: () => ({ has: () => true }),
@@ -189,6 +190,160 @@ test("authorized controls open the existing Guard, history, Birthday, and commun
     await room.handleAdminRoomInteraction({ ...base, customId: `harmony-admin-room:${action}` });
     assert.match(base.response.embeds[0].data.title, new RegExp(title));
   }
+});
+
+function guardInteraction(guild, customId, extra = {}) {
+  const interaction = {
+    guild,
+    guildId: guild.id,
+    channelId: "ephemeral-channel",
+    user: { id: "guard-admin" },
+    memberPermissions: permissionSet(true),
+    client: client(),
+    customId,
+    values: [],
+    response: null,
+    update: async (payload) => { interaction.response = payload; return payload; },
+    reply: async (payload) => { interaction.response = payload; return payload; },
+    deferReply: async () => { interaction.deferred = true; },
+    editReply: async (payload) => { interaction.response = payload; return payload; },
+    showModal: async (modal) => { interaction.modal = modal; },
+    ...extra,
+  };
+  return interaction;
+}
+
+test("Guard Manager exposes direct room, monitoring, rules, add/edit/remove, and history controls", async () => {
+  const { guild } = createGuild("interactive-guard-controls");
+  const payload = await room.guardPage(guild);
+  const ids = payload.components.flatMap((row) => row.components).map((component) => component.data.custom_id);
+  assert.match(payload.embeds[0].data.description, /Monitoring:\*\* Off/);
+  assert.match(payload.embeds[0].data.description, /Review Room:\*\* Not configured/);
+  assert.match(payload.embeds[0].data.description, /Active rules:\*\* 0/);
+  for (const action of ["guard-room", "guard-toggle", "guard-rules:0", "guard-add", "guard-edit", "guard-remove", "guard-history:0"]) {
+    assert.ok(ids.includes(`harmony-admin-room:${action}`), `missing ${action}`);
+  }
+});
+
+test("Rules control displays configured rules using shared Guard formatting", async () => {
+  const { guild } = createGuild("guard-rules-view");
+  const id = guardStore.addRule({ guildId: guild.id, type: "phrase", pattern: "Bubble", action: "flag", category: "paid", name: "Paid Bubble sharing" });
+  const view = guardInteraction(guild, "harmony-admin-room:guard-rules:0");
+  await room.handleAdminRoomInteraction(view);
+  assert.match(view.response.embeds[0].data.title, /Guard Rules/);
+  assert.match(view.response.embeds[0].data.description, new RegExp(`#${id}.*Paid Bubble sharing`));
+  assert.match(view.response.embeds[0].data.description, /Paid content · Admin Review/);
+  assert.ok(view.response.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:guard:ephemeral"));
+});
+
+test("Guard Review Room selector saves a same-guild text channel and preserves monitoring", async () => {
+  const { guild, addChannel } = createGuild("guard-room-select");
+  const chosen = addChannel("moderation-review-room");
+  guardStore.saveSettings(guild.id, "old-room");
+  const open = guardInteraction(guild, "harmony-admin-room:guard-room");
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.title, /Review Room/);
+  assert.equal(open.response.components[0].components[0].data.channel_types[0], ChannelType.GuildText);
+
+  const select = guardInteraction(guild, "harmony-admin-room:guard-room-select", { values: [chosen.id] });
+  await room.handleAdminRoomInteraction(select);
+  assert.equal(guardStore.getSettings(guild.id).channel_id, chosen.id);
+  assert.equal(guardStore.getSettings(guild.id).enabled, 1);
+  assert.match(select.response.embeds[0].data.description, /Review Room set/);
+});
+
+test("Guard monitoring toggles from the manager and cannot turn on without a Review Room", async () => {
+  const { guild } = createGuild("guard-toggle");
+  const missingRoom = guardInteraction(guild, "harmony-admin-room:guard-toggle");
+  await room.handleAdminRoomInteraction(missingRoom);
+  assert.match(missingRoom.response.content, /Choose a Guard Review Room/);
+  assert.equal(guardStore.getSettings(guild.id), null);
+
+  guardStore.saveSettings(guild.id, "review-room");
+  const off = guardInteraction(guild, "harmony-admin-room:guard-toggle");
+  await room.handleAdminRoomInteraction(off);
+  assert.equal(guardStore.getSettings(guild.id).enabled, 0);
+  assert.match(off.response.embeds[0].data.description, /Automatic monitoring is now \*\*Off/);
+  const on = guardInteraction(guild, "harmony-admin-room:guard-toggle");
+  await room.handleAdminRoomInteraction(on);
+  assert.equal(guardStore.getSettings(guild.id).enabled, 1);
+});
+
+test("Add Rule wizard uses existing Guard rule service and defaults to Admin Review", async () => {
+  const { guild } = createGuild("guard-add-wizard");
+  const start = guardInteraction(guild, "harmony-admin-room:guard-add");
+  await room.handleAdminRoomInteraction(start);
+  assert.match(start.response.embeds[0].data.title, /Add a Rule Condition/);
+
+  const choose = guardInteraction(guild, "harmony-admin-room:guard-condition-type", { values: ["phrase"] });
+  await room.handleAdminRoomInteraction(choose);
+  assert.match(choose.modal.data.title, /Condition Value/);
+
+  const submitValue = guardInteraction(guild, "harmony-admin-room:guard-condition-value", {
+    isModalSubmit: () => true,
+    fields: { getTextInputValue: () => "Bubble" },
+  });
+  await room.handleAdminRoomInteraction(submitValue);
+  assert.match(submitValue.response.embeds[0].data.title, /Rule Conditions/);
+
+  const done = guardInteraction(guild, "harmony-admin-room:guard-condition-done");
+  await room.handleAdminRoomInteraction(done);
+  for (const [action, value] of [["guard-detail-reason", "paid"], ["guard-detail-mode", "all"]]) {
+    const select = guardInteraction(guild, `harmony-admin-room:${action}`, { values: [value] });
+    await room.handleAdminRoomInteraction(select);
+  }
+  const save = guardInteraction(guild, "harmony-admin-room:guard-detail-save");
+  await room.handleAdminRoomInteraction(save);
+  const [rule] = guardStore.listRules(guild.id);
+  assert.equal(rule.rule_type, "phrase");
+  assert.equal(rule.pattern, "bubble");
+  assert.equal(rule.category, "paid");
+  assert.equal(rule.action, "flag");
+  assert.match(save.response.embeds[0].data.description, /Rule #\d+ was added/);
+});
+
+test("Edit Rule preserves identity and Remove Rule waits for confirmation", async () => {
+  const { guild } = createGuild("guard-edit-remove");
+  const id = guardStore.addRule({ guildId: guild.id, type: "phrase", pattern: "bubble", action: "flag", category: "paid", name: "Paid media" });
+
+  const edit = guardInteraction(guild, "harmony-admin-room:guard-edit");
+  await room.handleAdminRoomInteraction(edit);
+  assert.match(edit.response.embeds[0].data.title, /Edit a Guard Rule/);
+  const select = guardInteraction(guild, "harmony-admin-room:guard-edit-select", { values: [String(id)] });
+  await room.handleAdminRoomInteraction(select);
+  const category = guardInteraction(guild, "harmony-admin-room:guard-detail-reason", { values: ["other"] });
+  await room.handleAdminRoomInteraction(category);
+  const save = guardInteraction(guild, "harmony-admin-room:guard-detail-save");
+  await room.handleAdminRoomInteraction(save);
+  assert.equal(guardStore.getRule(guild.id, id).category, "other");
+  assert.equal(guardStore.getRule(guild.id, id).id, id);
+
+  const remove = guardInteraction(guild, "harmony-admin-room:guard-remove");
+  await room.handleAdminRoomInteraction(remove);
+  const chooseRemove = guardInteraction(guild, "harmony-admin-room:guard-remove-select", { values: [String(id)] });
+  await room.handleAdminRoomInteraction(chooseRemove);
+  assert.match(chooseRemove.response.embeds[0].data.title, /Remove Guard Rule/);
+  assert.ok(guardStore.getRule(guild.id, id), "rule remains before confirmation");
+  const confirm = guardInteraction(guild, "harmony-admin-room:guard-remove-confirm");
+  await room.handleAdminRoomInteraction(confirm);
+  assert.equal(guardStore.getRule(guild.id, id), null);
+});
+
+test("requested Guard Review Room is seeded only when no room exists and never overrides an admin selection", async () => {
+  const guildId = "guard-bootstrap";
+  const { guild, addChannel } = createGuild(guildId);
+  const requested = addChannel("1554747061252005938");
+  const bootstrap = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const initial = await room.configureRequestedGuardReviewRoom(bootstrap);
+  assert.deepEqual(initial, { guildId, channelId: requested.id, changed: true });
+  assert.equal(guardStore.getSettings(guildId).channel_id, requested.id);
+  assert.equal(guardStore.getSettings(guildId).enabled, 0);
+
+  guardStore.setReviewRoom(guildId, "admin-selected-room");
+  const next = await room.configureRequestedGuardReviewRoom(bootstrap);
+  assert.equal(next.channelId, "admin-selected-room");
+  assert.equal(next.changed, false);
+  assert.equal(guardStore.getSettings(guildId).channel_id, "admin-selected-room");
 });
 
 test("a moved or disabled panel cannot launch Admin Room workflows", async () => {

@@ -161,6 +161,13 @@ client.once("clientReady", async () => {
   }
 
   await adminRoomCommand.refreshConfiguredAdminRooms(client);
+  const configuredGuardRoom = await adminRoomCommand.configureRequestedGuardReviewRoom(client);
+  if (configuredGuardRoom?.changed) {
+    console.log("Harmony Guard Review Room configured", {
+      guildId: configuredGuardRoom.guildId,
+      channelId: configuredGuardRoom.channelId,
+    });
+  }
 
   // Refresh only manager panels that already have persisted references. This
   // keeps deployed component changes visible without creating new setup or
@@ -195,6 +202,7 @@ client.on("guildCreate", async (guild) => {
   try {
     await registerGuildCommands(guild);
     await adminRoomCommand.refreshConfiguredAdminRooms(client);
+    await adminRoomCommand.configureRequestedGuardReviewRoom(client);
   } catch (error) {
     console.error(
       `Could not register Harmony commands in ${guild.name}:`,
