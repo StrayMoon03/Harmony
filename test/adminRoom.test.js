@@ -14,6 +14,7 @@ const guardStore = require("../src/stores/communityGuardStore");
 const welcomePassStore = require("../src/stores/welcomePassStore");
 const greetingStore = require("../src/stores/greetingStore");
 const memberCountStore = require("../src/stores/memberCountStore");
+const messageLogStore = require("../src/stores/messageLogStore");
 const { renderGreetingMessage } = greetingStore;
 const { renderWelcomePassReleaseMessage } = welcomePassStore;
 const room = require("../src/services/adminRoomService");
@@ -505,6 +506,140 @@ test("/harmony-member-counts slash command remains registered with its existing 
   assert.equal(schema.name, "harmony-member-counts");
   assert.deepEqual(schema.options.map((option) => option.name), ["setup", "refresh", "status", "off"]);
   assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
+});
+
+test("Message Logs Manager opens read-only and displays configured status, channel, retention, and exclusions", async () => {
+  const { guild, addChannel } = createGuild("message-logs-manager-read-only");
+  const panel = addChannel("message-logs-admin-panel");
+  const logChannel = addChannel("trusted-log-room");
+  const excluded = addChannel("excluded-chat");
+  messageLogStore.saveLogSettings(guild.id, logChannel.id);
+  messageLogStore.addExcludedChannel(guild.id, excluded.id);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "message-logs-panel-message", enabled: true });
+  const before = { settings: messageLogStore.getLogSettings(guild.id), excluded: messageLogStore.listExcludedChannels(guild.id), channelCount: guild.channels.cache.size };
+
+  const open = guardInteraction(guild, "harmony-admin-room:logs", { channelId: panel.id, message: { id: "message-logs-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const description = open.response.embeds[0].data.description;
+  assert.equal(open.response.flags, 64);
+  assert.match(open.response.embeds[0].data.title, /Message Logs Manager/);
+  assert.match(description, /Status:\*\* On/);
+  assert.ok(description.includes(`Log channel:** <#${logChannel.id}>`));
+  assert.match(description, /Retention:\*\* 3 days/);
+  assert.ok(description.includes(`<#${excluded.id}>`));
+  assert.match(description, /private log channel.*trusted admins/i);
+  assert.equal(messageLogStore.getLogSettings(guild.id).channel_id, before.settings.channel_id);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), before.excluded);
+  assert.equal(guild.channels.cache.size, before.channelCount);
+  const controls = open.response.components.flatMap((row) => row.components);
+  assert.ok(controls.some((item) => item.data.custom_id === "harmony-admin-room:logs-channel-select"));
+  assert.ok(controls.some((item) => item.data.custom_id === "harmony-admin-room:logs-exclude-channel-select"));
+  assert.ok(controls.some((item) => item.data.custom_id === "harmony-admin-room:logs-include-channel-select:0"));
+});
+
+test("Message Logs channel selector configures or changes the channel without touching exclusions", async () => {
+  const { guild, addChannel } = createGuild("message-logs-manager-setup");
+  const panel = addChannel("message-logs-setup-panel");
+  const first = addChannel("first-log-room");
+  const next = addChannel("next-log-room");
+  const excluded = addChannel("preserved-exclusion");
+  messageLogStore.addExcludedChannel(guild.id, excluded.id);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "message-logs-setup-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:logs", { channelId: panel.id, message: { id: "message-logs-setup-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  assert.match(open.response.embeds[0].data.description, /Status:\*\* Not configured/);
+
+  const configure = guardInteraction(guild, "harmony-admin-room:logs-channel-select", { values: [first.id] });
+  await room.handleAdminRoomInteraction(configure);
+  assert.equal(messageLogStore.getLogSettings(guild.id).channel_id, first.id);
+  assert.equal(messageLogStore.getLogSettings(guild.id).enabled, 1);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [excluded.id]);
+
+  const change = guardInteraction(guild, "harmony-admin-room:logs-channel-select", { values: [next.id] });
+  await room.handleAdminRoomInteraction(change);
+  assert.equal(messageLogStore.getLogSettings(guild.id).channel_id, next.id);
+  assert.equal(messageLogStore.getLogSettings(guild.id).enabled, 1);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [excluded.id]);
+  assert.ok(change.response.embeds[0].data.description.includes(`<#${next.id}>`));
+});
+
+test("Message Logs can exclude and include only explicitly selected channels, never the current log channel", async () => {
+  const { guild, addChannel } = createGuild("message-logs-manager-exclusions");
+  const panel = addChannel("message-logs-exclusion-panel");
+  const logChannel = addChannel("message-logs-target");
+  const another = addChannel("another-channel");
+  const alreadyExcluded = addChannel("already-excluded");
+  messageLogStore.saveLogSettings(guild.id, logChannel.id);
+  messageLogStore.addExcludedChannel(guild.id, alreadyExcluded.id);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "message-logs-exclusion-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:logs", { channelId: panel.id, message: { id: "message-logs-exclusion-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+
+  const denyLogRoom = guardInteraction(guild, "harmony-admin-room:logs-exclude-channel-select", { values: [logChannel.id] });
+  await room.handleAdminRoomInteraction(denyLogRoom);
+  assert.match(denyLogRoom.response.content, /already excluded from logging automatically/);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [alreadyExcluded.id]);
+
+  const exclude = guardInteraction(guild, "harmony-admin-room:logs-exclude-channel-select", { values: [another.id] });
+  await room.handleAdminRoomInteraction(exclude);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [alreadyExcluded.id, another.id].sort());
+  assert.ok(exclude.response.embeds[0].data.description.includes(`<#${another.id}>`));
+
+  const include = guardInteraction(guild, "harmony-admin-room:logs-include-channel-select:0", { values: [alreadyExcluded.id] });
+  await room.handleAdminRoomInteraction(include);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [another.id]);
+  assert.match(include.response.embeds[0].data.description, /Excluded channels/i);
+});
+
+test("Message Logs Off preserves channel and exclusions, On reuses them, and existing log posts still expire", async () => {
+  const { guild, addChannel } = createGuild("message-logs-manager-toggle");
+  const panel = addChannel("message-logs-toggle-panel");
+  const logChannel = addChannel("saved-log-channel");
+  const excluded = addChannel("saved-excluded-channel");
+  messageLogStore.saveLogSettings(guild.id, logChannel.id);
+  messageLogStore.addExcludedChannel(guild.id, excluded.id);
+  messageLogStore.addLogPost("existing-log-post", guild.id, logChannel.id, "2026-10-30T00:00:00.000Z");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "message-logs-toggle-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:logs", { channelId: panel.id, message: { id: "message-logs-toggle-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const channelsBefore = guild.channels.cache.size;
+
+  const off = guardInteraction(guild, "harmony-admin-room:logs-toggle");
+  await room.handleAdminRoomInteraction(off);
+  assert.equal(messageLogStore.getLogSettings(guild.id).enabled, 0);
+  assert.equal(messageLogStore.getLogSettings(guild.id).channel_id, logChannel.id);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [excluded.id]);
+  assert.equal(messageLogStore.listExpiredLogPosts("2026-10-31T00:00:00.000Z").some((post) => post.message_id === "existing-log-post"), true);
+
+  const on = guardInteraction(guild, "harmony-admin-room:logs-toggle");
+  await room.handleAdminRoomInteraction(on);
+  assert.equal(messageLogStore.getLogSettings(guild.id).enabled, 1);
+  assert.equal(messageLogStore.getLogSettings(guild.id).channel_id, logChannel.id);
+  assert.deepEqual(messageLogStore.listExcludedChannels(guild.id), [excluded.id]);
+  assert.equal(guild.channels.cache.size, channelsBefore, "Off/On toggles never recreate channels");
+});
+
+test("Message Logs screens reject interactions after the originating Admin Controls panel is replaced", async () => {
+  const { guild, addChannel } = createGuild("message-logs-manager-stale");
+  const panel = addChannel("message-logs-stale-panel");
+  messageLogStore.saveLogSettings(guild.id, "log-room");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "active-message-logs-panel", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:logs", { channelId: panel.id, message: { id: "active-message-logs-panel" } });
+  await room.handleAdminRoomInteraction(open);
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "replacement-message-logs-panel", enabled: true });
+  const stale = guardInteraction(guild, "harmony-admin-room:logs-toggle");
+  await room.handleAdminRoomInteraction(stale);
+  assert.match(stale.response.content, /panel that is no longer active/i);
+  assert.equal(messageLogStore.getLogSettings(guild.id).enabled, 1);
+});
+
+test("/harmony-logs keeps setup/status/off/exclude/include and the three-day retention", () => {
+  const command = require("../src/commands/messageLogs");
+  const schema = command.data.toJSON();
+  assert.equal(schema.name, "harmony-logs");
+  assert.deepEqual(schema.options.map((option) => option.name), ["setup", "status", "off", "exclude", "include"]);
+  assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
+  assert.equal(require("../src/services/messageLogService").RETENTION_MS, 72 * 60 * 60 * 1000);
 });
 
 function guardInteraction(guild, customId, extra = {}) {
