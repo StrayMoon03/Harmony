@@ -21,6 +21,7 @@ const welcomePassStore = require("../stores/welcomePassStore");
 const welcomePassService = require("./welcomePassService");
 const greetingStore = require("../stores/greetingStore");
 const memberCountStore = require("../stores/memberCountStore");
+const memberCountService = require("./memberCountService");
 const collectionStore = require("../stores/collectionStore");
 const messageLogStore = require("../stores/messageLogStore");
 const errorInboxStore = require("../stores/errorInboxStore");
@@ -38,6 +39,8 @@ const welcomeManagerSessions = new Map();
 const welcomeNavigationSessions = new Map();
 const greetingsNavigationSessions = new Map();
 const GREETINGS_SESSION_TTL_MS = 15 * 60 * 1000;
+const memberCountNavigationSessions = new Map();
+const MEMBER_COUNT_SESSION_TTL_MS = 15 * 60 * 1000;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
   ["guard-history-open", "Guard History", ButtonStyle.Secondary],
@@ -527,8 +530,7 @@ function communityToolPage(guildId, area) {
   if (area === "guard") return null;
   if (area === "welcome") return null;
   if (area === "members") {
-    const settings = memberCountStore.getMemberCountSettings(guildId);
-    return pagePayload("📊 Member Counts", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**\n\n${commandHelp([["harmony-member-counts", "setup, refresh, check, or turn counters off"]])}`);
+    return null;
   }
   if (area === "collections") {
     const settings = collectionStore.getCollectionSettings(guildId);
@@ -539,6 +541,64 @@ function communityToolPage(guildId, area) {
     return pagePayload("🧾 Message Logs", `Status: **${settings ? (settings.enabled ? "On" : "Off") : "Not configured"}**${settings?.channel_id ? `\nLog channel: <#${settings.channel_id}>` : ""}\nRetention: **3 days**\n\n${commandHelp([["harmony-logs", "configure logging, exclusions, or status"]])}`);
   }
   return null;
+}
+
+function memberCountSessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function setMemberCountNavigation(interaction) {
+  memberCountNavigationSessions.set(memberCountSessionKey(interaction), {
+    panelMessageId: interaction.message?.id,
+    channelId: interaction.channelId,
+    updatedAt: Date.now(),
+  });
+}
+
+function hasActiveMemberCountNavigation(interaction) {
+  const key = memberCountSessionKey(interaction);
+  const session = memberCountNavigationSessions.get(key);
+  if (!session || Date.now() - session.updatedAt > MEMBER_COUNT_SESSION_TTL_MS) {
+    memberCountNavigationSessions.delete(key);
+    return false;
+  }
+  const panel = roomStore.getPanel(interaction.guildId);
+  if (!panel?.enabled || panel.message_id !== session.panelMessageId || panel.channel_id !== session.channelId) {
+    memberCountNavigationSessions.delete(key);
+    return false;
+  }
+  session.updatedAt = Date.now();
+  return true;
+}
+
+function memberCountManagerPayload(guildId, notice = null) {
+  const settings = memberCountStore.getMemberCountSettings(guildId);
+  const configured = Boolean(settings);
+  const value = (channelId) => channelId ? `<#${channelId}>` : "Not configured";
+  const description = [
+    notice,
+    `**Current Status:** ${configured ? (settings.enabled ? "On" : "Off") : "Not configured"}`,
+    `**Configured STAY role:** ${settings?.role_id ? `<@&${settings.role_id}>` : "Not selected"}`,
+    `**Counter category:** ${value(settings?.category_id)}`,
+    `**Total Members counter:** ${value(settings?.total_channel_id)}`,
+    `**STAY Members counter:** ${value(settings?.stay_channel_id)}`,
+    `**No STAY Role counter:** ${value(settings?.no_role_channel_id)}`,
+    "",
+    "Choose a role below to set up the counters or change which role counts as STAY. Existing counters are reused when available.",
+  ].filter(Boolean).join("\n\n");
+  const enabled = Boolean(settings?.enabled);
+  return pagePayload("📊 Member Counts Manager", description, [
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:members-role-select")
+      .setPlaceholder(configured ? "Setup / change the STAY role" : "Set up counters with the STAY role")
+      .setMinValues(1)
+      .setMaxValues(1)),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-refresh").setLabel("Refresh Now").setStyle(ButtonStyle.Primary).setDisabled(!configured || !enabled),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-toggle").setLabel(!configured ? "Not Configured" : enabled ? "Turn Off" : "Turn On").setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success).setDisabled(!configured),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-close").setLabel("Close Manager").setStyle(ButtonStyle.Secondary),
+    ),
+  ]);
 }
 
 function greetingsSessionKey(interaction) {
@@ -890,6 +950,73 @@ async function handleAdminRoomInteraction(interaction) {
     welcomeDraft(interaction);
     await interaction.reply({ ...welcomePassPage(interaction.guild, interaction.user.id), flags: MessageFlags.Ephemeral });
     return true;
+  }
+  if (action === "members") {
+    setMemberCountNavigation(interaction);
+    await interaction.reply({ ...memberCountManagerPayload(interaction.guildId), flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action.startsWith("members-")) {
+    if (!hasActiveMemberCountNavigation(interaction)) {
+      await interaction.reply({ content: "This Member Counts screen came from an Admin Controls panel that is no longer active. Open Member Counts from the current panel.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (action === "members-role-select") {
+      const roleId = interaction.values?.[0];
+      const role = roleId && (interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null));
+      if (!role || role.id === interaction.guildId || (role.guild?.id && role.guild.id !== interaction.guildId)) {
+        await interaction.reply({ content: "Select a server role other than @everyone.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      const botPermissions = interaction.guild.members.me?.permissions;
+      if (!botPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+        await interaction.reply({ content: "Harmony needs **Manage Channels** before she can create and update the live counters.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      await interaction.deferUpdate();
+      try {
+        const { category, counts } = await memberCountService.setupMemberCounts(interaction.guild, role);
+        await interaction.editReply({ ...memberCountManagerPayload(interaction.guildId, [
+          "Member counters are ready.",
+          `Category: **${category.name}**`,
+          `Total members: **${counts.total}** · STAY members: **${counts.stay}** · No STAY role: **${counts.noRole}**`,
+        ].join("\n")) });
+      } catch (error) {
+        console.error("Harmony Admin Room member-count setup failed:", error);
+        await interaction.editReply(memberCountManagerPayload(interaction.guildId, "Harmony couldn’t set up the live counters. Check that she has **Manage Channels** and try again."));
+      }
+      return true;
+    }
+    if (action === "members-refresh") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const counts = await memberCountService.refreshMemberCounts(interaction.guild);
+        await interaction.editReply(counts
+          ? `Updated counters: **${counts.total}** total members, **${counts.stay}** with the STAY role, and **${counts.noRole}** without it.`
+          : "Automatic member-count updates are off. Turn them on before refreshing.");
+      } catch (error) {
+        console.error("Harmony Admin Room member-count refresh failed:", error);
+        await interaction.editReply("Harmony couldn’t refresh the live counters. Check that she has **Manage Channels** and that the saved counter channels still exist.");
+      }
+      return true;
+    }
+    if (action === "members-toggle") {
+      const settings = memberCountStore.getMemberCountSettings(interaction.guildId);
+      if (!settings) {
+        await interaction.update(memberCountManagerPayload(interaction.guildId, "Set up Member Counts before turning automatic updates on."));
+        return true;
+      }
+      const nextEnabled = !settings.enabled;
+      if (nextEnabled) memberCountStore.setMemberCountEnabled(interaction.guildId, true);
+      else memberCountStore.disableMemberCountSettings(interaction.guildId);
+      await interaction.update(memberCountManagerPayload(interaction.guildId, `Automatic member-count updates are now **${nextEnabled ? "On" : "Off"}**. The saved category and counter channels were preserved.`));
+      return true;
+    }
+    if (action === "members-close") {
+      memberCountNavigationSessions.delete(memberCountSessionKey(interaction));
+      await interaction.update({ content: "Member Counts Manager closed.", embeds: [], components: [] });
+      return true;
+    }
   }
   if (action === "greetings") {
     setGreetingsNavigation(interaction);
@@ -1310,7 +1437,7 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (["members", "collections", "logs"].includes(action)) {
+  if (["collections", "logs"].includes(action)) {
     const area = action;
     const payload = communityToolPage(interaction.guildId, area);
     if (payload) await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
