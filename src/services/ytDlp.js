@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile);
  * @param {string} url
  * @returns {Promise<object>}
  */
-async function getMediaInfo(url) {
+async function getMediaInfo(url, options = {}) {
   const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
 
   let stdout;
@@ -30,6 +30,7 @@ async function getMediaInfo(url) {
         timeout: 18000,
         killSignal: "SIGKILL",
         maxBuffer: 10 * 1024 * 1024,
+        ...(options.signal ? { signal: options.signal } : {}),
       }
     ));
   } catch (err) {

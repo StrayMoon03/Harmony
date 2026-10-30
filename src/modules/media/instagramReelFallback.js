@@ -49,7 +49,10 @@ async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}) {
   const file = path.join(jobDir, "instagram-verified-reel.mp4");
   let response;
   try {
-    response = await request(result.video, { redirect: "error", signal: AbortSignal.timeout(30000) });
+    const requestSignal = deps.signal
+      ? AbortSignal.any([deps.signal, AbortSignal.timeout(30000)])
+      : AbortSignal.timeout(30000);
+    response = await request(result.video, { redirect: "error", signal: requestSignal });
     if (!response.ok || !/^video\//i.test(response.headers.get("content-type") || "")) throw new Error("Instagram reel response was not a video");
     if (Number(response.headers.get("content-length")) > MAX_BYTES) throw new Error("Instagram reel exceeds recovery size limit");
     const chunks = [];
@@ -61,12 +64,13 @@ async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}) {
     }
     if (size < 1024) throw new Error("Instagram reel file was incomplete");
     await fs.writeFile(file, Buffer.concat(chunks));
-    const { stdout } = await run(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "stream=codec_type", "-of", "json", file], { timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true });
+    const { stdout } = await run(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "stream=codec_type", "-of", "json", file], { timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true, ...(deps.signal ? { signal: deps.signal } : {}) });
     const streams = JSON.parse(stdout).streams || [];
     if (!streams.some(s => s.codec_type === "video") || !streams.some(s => s.codec_type === "audio")) throw new Error("Instagram reel recovery needs verified video and audio");
     return [file];
   } catch {
     await fs.rm(file, { force: true });
+    if (deps.signal?.aborted) throw deps.signal.reason || new Error("Instagram retrieval cancelled");
     // Network/probe exceptions may contain signed URLs; never propagate them.
     throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
   }
@@ -83,17 +87,21 @@ async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
     if (typeof value !== "string" || url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram reel URL rejected");
   }
   for (const video of new Set(videos)) {
+    deps.signal?.throwIfAborted();
     try { return await saveOneVerifiedReel({ ...result, video }, expectedCode, jobDir, deps); }
-    catch { /* Failed candidates are removed before trying the next owned URL. */ }
+    catch (error) {
+      if (deps.signal?.aborted) throw deps.signal.reason || error;
+      /* Failed candidates are removed before trying the next owned URL. */
+    }
   }
   throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
 }
 
-async function downloadInstagramReel(url, jobDir) {
+async function downloadInstagramReel(url, jobDir, options = {}) {
   const code = exactReelCode(url);
   let stdout;
   try {
-    const output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+    const output = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramReelBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}) }), { signal: options.signal });
     stdout = output.stdout;
     logBrowserDiagnostics(output.stderr);
   } catch (error) {
@@ -105,7 +113,8 @@ async function downloadInstagramReel(url, jobDir) {
   let result;
   try { result = JSON.parse(line.slice("HARMONY_INSTAGRAM_REEL:".length)); }
   catch { throw new Error("Instagram browser returned invalid reel metadata"); }
-  const files = await saveVerifiedReel(result, code, jobDir);
+  options.signal?.throwIfAborted();
+  const files = await saveVerifiedReel(result, code, jobDir, { signal: options.signal });
   return { files, creator: result.creator };
 }
 

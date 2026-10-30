@@ -23,15 +23,18 @@ test("failed browser execution logs only sanitized stage booleans", async () => 
   const source = await fs.readFile(path.join(__dirname, "instagramReelFallback.js"), "utf8");
   const warnings = [];
   const module = { exports: {} };
+  const controller = new AbortController();
+  let lockSignal;
   const error = new Error("PRIVATE SIGNED URL");
   error.stderr = 'PRIVATE COOKIE\nHARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"browserLaunched":false,"url":"SIGNED"}';
   const sandboxRequire = name => {
     if (name === "node:util") return { promisify: () => async () => { throw error; } };
-    if (name === "./browserLock") return { withBrowserLock: work => work() };
+    if (name === "./browserLock") return { withBrowserLock: (work, options) => { lockSignal = options.signal; return work(); } };
     return require(name);
   };
   vm.runInNewContext(source, { require: sandboxRequire, module, __dirname, process, console: { warn: value => warnings.push(value) }, URL });
-  await assert.rejects(module.exports.downloadInstagramReel("https://www.instagram.com/reel/EXACT/", "/unused"), error => error.message === "Instagram browser could not verify the requested reel");
+  await assert.rejects(module.exports.downloadInstagramReel("https://www.instagram.com/reel/EXACT/", "/unused", { signal: controller.signal }), error => error.message === "Instagram browser could not verify the requested reel");
+  assert.equal(lockSignal, controller.signal);
   assert.deepEqual(warnings, ['HARMONY_INSTAGRAM_DIAGNOSTICS:{"helperStarted":true,"browserLaunched":false}']);
 });
 
@@ -77,20 +80,53 @@ test("signed URLs in request failure never propagated", () => runSave(owned, { d
 async function routedDownload(url, expected) {
   const source = await fs.readFile(path.join(__dirname, "downloader.js"), "utf8");
   const routes = [];
+  const controller = new AbortController();
+  let receivedSignal = null;
+  const commandOptions = [];
   const module = { exports: {} };
   const sandboxRequire = name => {
-    if (name === "node:util") return { promisify: () => async () => { throw new Error("simulated downloader failure"); } };
-    if (name === "./instagramReelFallback") return { downloadInstagramReel: async () => { routes.push("reel"); return { files: ["owned.mp4"] }; } };
-    if (name === "./instagramPhotoFallback") return { downloadInstagramPhotos: async () => { routes.push("photo"); return { files: ["owned.jpg"] }; } };
+    if (name === "node:util") return { promisify: () => async (...args) => { commandOptions.push(args[2]); throw new Error("simulated downloader failure"); } };
+    if (name === "./instagramReelFallback") return { downloadInstagramReel: async (_url, _jobDir, options) => { routes.push("reel"); receivedSignal = options.signal; return { files: ["owned.mp4"] }; } };
+    if (name === "./instagramPhotoFallback") return { downloadInstagramPhotos: async (_url, _jobDir, options) => { routes.push("photo"); receivedSignal = options.signal; return { files: ["owned.jpg"] }; } };
     return require(name);
   };
   vm.runInNewContext(source, { require: sandboxRequire, module, __dirname, process, console: { warn() {}, log() {} }, setTimeout, URL });
-  const result = await module.exports.downloadMedia(url);
-  try { assert.deepEqual(routes, [expected]); assert.equal(result.files.length, 1); }
+  const result = await module.exports.downloadMedia(url, { signal: controller.signal });
+  try {
+    assert.deepEqual(routes, [expected]);
+    assert.equal(result.files.length, 1);
+    assert.equal(receivedSignal, controller.signal);
+    assert.deepEqual(commandOptions.map(options => options.timeout), [120000, 120000, 45000]);
+    assert.ok(commandOptions.every(options => options.signal === controller.signal));
+  }
   finally { await fs.rm(result.rawDir, { recursive: true, force: true }); }
 }
 test("exhausted incident reel methods reach reel recovery", () => routedDownload("https://www.instagram.com/reel/DdXwaqyN-RA/", "reel"));
 test("photo recovery routing remains unchanged", () => routedDownload("https://www.instagram.com/p/EXACT/", "photo"));
+
+test("Instagram timeout aborts yt-dlp before starting later fallback methods", async () => {
+  const source = await fs.readFile(path.join(__dirname, "downloader.js"), "utf8");
+  const module = { exports: {} };
+  const controller = new AbortController();
+  const timeout = new Error("retrieval deadline");
+  let commands = 0;
+  const sandboxRequire = name => {
+    if (name === "node:util") return {
+      promisify: () => async () => {
+        commands += 1;
+        controller.abort(timeout);
+        throw timeout;
+      },
+    };
+    if (name === "./instagramReelFallback" || name === "./instagramPhotoFallback") {
+      return { downloadInstagramReel: async () => assert.fail("browser fallback should not start"), downloadInstagramPhotos: async () => assert.fail("photo fallback should not start") };
+    }
+    return require(name);
+  };
+  vm.runInNewContext(source, { require: sandboxRequire, module, __dirname, process, console: { warn() {}, log() {} }, setTimeout, URL });
+  await assert.rejects(module.exports.downloadMedia("https://www.instagram.com/reel/EXACT/", { signal: controller.signal }), error => error === timeout);
+  assert.equal(commands, 1);
+});
 
 test("silent large rendition is deleted before smaller muxed rendition is kept", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-candidates-"));
