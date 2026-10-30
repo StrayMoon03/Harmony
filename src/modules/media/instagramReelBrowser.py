@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from urllib.parse import urlparse
 
 DIAGNOSTIC_KEYS = (
@@ -104,12 +105,16 @@ def extract_reel(payload, code):
 
 def load_cookies(filename):
     jar = http.cookiejar.MozillaCookieJar(filename)
-    jar.load(ignore_discard=True, ignore_expires=False)
+    # Browser exports use expiry 0 for session cookies; keep those while
+    # excluding positive expiry timestamps that have actually passed.
+    jar.load(ignore_discard=True, ignore_expires=True)
+    now = int(time.time())
     return [{"name": c.name, "value": c.value, "domain": c.domain,
              "path": c.path or "/", "secure": c.secure,
              **({"expires": c.expires} if c.expires else {})}
-            for c in jar if c.domain.lstrip(".") == "instagram.com"
-            or c.domain.endswith(".instagram.com")]
+            for c in jar if (c.domain.lstrip(".") == "instagram.com"
+            or c.domain.endswith(".instagram.com"))
+            and (not c.expires or c.expires > now)]
 
 
 def main(signals):

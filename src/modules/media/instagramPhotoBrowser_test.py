@@ -1,6 +1,12 @@
 import copy
 import unittest
-from instagramPhotoBrowser import exact_code, extract_photos
+from instagramPhotoBrowser import (
+    exact_code,
+    extract_photos,
+    is_checkpoint_route,
+    is_login_route,
+    load_instagram_cookies,
+)
 
 
 class PhotoExtractionTests(unittest.TestCase):
@@ -30,6 +36,34 @@ class PhotoExtractionTests(unittest.TestCase):
         for url in ("https://example.com/p/target/", "https://www.instagram.com/reel/target/"):
             with self.assertRaises(ValueError):
                 exact_code(url)
+
+    def test_login_route_is_explicit_authentication_signal(self):
+        self.assertTrue(is_login_route("https://www.instagram.com/accounts/login/"))
+        self.assertTrue(is_login_route("https://www.instagram.com/login/"))
+        self.assertFalse(is_login_route("https://www.instagram.com/p/target/"))
+        self.assertFalse(is_login_route("https://www.instagram.com/challenge/"))
+
+    def test_checkpoint_routes_are_separate_from_login_routes(self):
+        self.assertTrue(is_checkpoint_route("https://www.instagram.com/challenge/"))
+        self.assertTrue(is_checkpoint_route("https://www.instagram.com/accounts/suspended/"))
+        self.assertFalse(is_checkpoint_route("https://www.instagram.com/accounts/login/"))
+
+    def test_cookie_jar_loader_preserves_instagram_domain_cookies_only(self):
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as file:
+            file.write("# Netscape HTTP Cookie File\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tdummy-session\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t0\tcsrftoken\tdummy-csrf\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t1\texpired\tdummy-expired\n")
+            file.write(".example.test\tTRUE\t/\tTRUE\t0\tunrelated\tdummy-value\n")
+            filename = file.name
+        try:
+            cookies = load_instagram_cookies(filename)
+            self.assertEqual({cookie["name"] for cookie in cookies}, {"sessionid", "csrftoken"})
+        finally:
+            os.unlink(filename)
 
 
 if __name__ == "__main__":
