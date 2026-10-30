@@ -2,6 +2,7 @@ import importlib.util
 import unittest
 import io
 import json
+import tempfile
 from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,17 @@ spec.loader.exec_module(reel)
 
 
 class ExactReelTests(unittest.TestCase):
+    def test_cookie_loader_keeps_session_cookies_and_drops_expired_or_other_domains(self):
+        with tempfile.NamedTemporaryFile(mode="w") as file:
+            file.write("# Netscape HTTP Cookie File\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tdummy-session\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t0\tcsrftoken\tdummy-csrf\n")
+            file.write(".instagram.com\tTRUE\t/\tTRUE\t1\texpired\tdummy-expired\n")
+            file.write(".example.test\tTRUE\t/\tTRUE\t0\tunrelated\tdummy-value\n")
+            file.flush()
+            cookies = reel.load_cookies(file.name)
+        self.assertEqual({cookie["name"] for cookie in cookies}, {"sessionid", "csrftoken"})
+
     def test_actual_main_navigation_failure_and_listener_parse_signals(self):
         sync = MagicMock()
         browser = sync.return_value.__enter__.return_value.chromium.launch.return_value

@@ -1,25 +1,56 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
-const os = require('node:os');
-const path = require('node:path');
-const { saveVerifiedPhotos } = require('./instagramPhotoFallback');
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const vm = require("node:vm");
 
-test('removes earlier photos when a later carousel attachment fails', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'instagram-photos-test-'));
-  const original = global.fetch;
-  let calls = 0;
-  global.fetch = async () => ++calls === 1
-    ? new Response(Buffer.alloc(2048), { headers: { 'content-type': 'image/jpeg' } })
-    : new Response('', { status: 403 });
-  try {
-    await assert.rejects(saveVerifiedPhotos({ code: 'target', photos: ['https://a.cdninstagram.com/1', 'https://a.cdninstagram.com/2'] }, 'target', dir), /HTTP 403/);
-    assert.deepEqual(await fs.readdir(dir), []);
-    await assert.rejects(saveVerifiedPhotos({ code: 'other', photos: ['https://a.cdninstagram.com/1'] }, 'target', dir), /identity mismatch/);
-    await assert.rejects(saveVerifiedPhotos({ code: 'target', photos: ['https://example.com/1'] }, 'target', dir), /URL rejected/);
-    assert.equal(calls, 2);
-  } finally {
-    global.fetch = original;
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+test("photo browser child receives no session path for anonymous retrieval", async () => {
+  const source = await fs.readFile(path.join(__dirname, "instagramPhotoFallback.js"), "utf8");
+  const module = { exports: {} };
+  const seen = [];
+  const sandboxRequire = name => {
+    if (name === "node:util") return { promisify: () => async (_command, _args, options) => {
+      seen.push(options.env.INSTAGRAM_COOKIES);
+      return { stdout: "HARMONY_INSTAGRAM_PHOTOS:{\"code\":\"EXACT\",\"photos\":[]}" };
+    } };
+    if (name === "./browserLock") return { withBrowserLock: work => work() };
+    return require(name);
+  };
+  vm.runInNewContext(source, {
+    require: sandboxRequire,
+    module,
+    __dirname,
+    process: { ...process, env: { ...process.env, INSTAGRAM_COOKIES: "/private/miss-harmony.txt" } },
+    URL,
+  });
+  await assert.rejects(module.exports.downloadInstagramPhotos("https://www.instagram.com/p/EXACT/", "/unused"));
+  assert.equal(seen[0], "");
+});
+
+test("photo browser receives the existing session only for the explicit authenticated retry", async () => {
+  const source = await fs.readFile(path.join(__dirname, "instagramPhotoFallback.js"), "utf8");
+  const module = { exports: {} };
+  const seen = [];
+  const error = new Error("browser login redirect");
+  error.stderr = "HARMONY_INSTAGRAM_AUTH_REQUIRED";
+  const sandboxRequire = name => {
+    if (name === "node:util") return { promisify: () => async (_command, _args, options) => {
+      seen.push(options.env.INSTAGRAM_COOKIES);
+      throw error;
+    } };
+    if (name === "./browserLock") return { withBrowserLock: work => work() };
+    return require(name);
+  };
+  vm.runInNewContext(source, {
+    require: sandboxRequire,
+    module,
+    __dirname,
+    process: { ...process, env: { ...process.env, INSTAGRAM_COOKIES: "/private/miss-harmony.txt" } },
+    URL,
+  });
+  await assert.rejects(
+    module.exports.downloadInstagramPhotos("https://www.instagram.com/p/EXACT/", "/unused", { useCookies: true }),
+    error => error.code === "INSTAGRAM_AUTH_REQUIRED"
+  );
+  assert.deepEqual(seen, ["/private/miss-harmony.txt"]);
 });

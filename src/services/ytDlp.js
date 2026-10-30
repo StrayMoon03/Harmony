@@ -11,20 +11,22 @@ const execFileAsync = promisify(execFile);
  * @param {string} url
  * @returns {Promise<object>}
  */
-async function getMediaInfo(url) {
+async function getMediaInfo(url, options = {}) {
   const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
 
   let stdout;
 
   try {
+    const args = [
+      ...(options.ignoreConfig ? ["--ignore-config"] : []),
+      "--dump-single-json",
+      "--no-playlist",
+      "--no-warnings",
+      url,
+    ];
     ({ stdout } = await execFileAsync(
       ytDlpPath,
-      [
-        "--dump-single-json",
-        "--no-playlist",
-        "--no-warnings",
-        url,
-      ],
+      args,
       {
         windowsHide: true,
         timeout: 18000,
