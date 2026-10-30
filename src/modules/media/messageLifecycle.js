@@ -50,6 +50,7 @@ async function withMediaLifecycle(message, work, options = {}) {
   let workingMessagePromise = null;
   let workingMessage = null;
   let timeoutNoticePromise = null;
+  const abortController = options.cancelWorkOnTimeout ? new AbortController() : null;
 
   await message.channel.sendTyping().catch((error) => {
     console.warn("Could not start Harmony typing indicator:", error?.message || error);
@@ -73,6 +74,7 @@ async function withMediaLifecycle(message, work, options = {}) {
     if (retrievalFinished || timedOut) return;
     timedOut = true;
     const timeoutError = new MediaRetrievalTimeoutError(cutoffMs);
+    abortController?.abort(timeoutError);
     timeoutNoticePromise = (async () => {
       await removeWorking();
       const sent = await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
@@ -103,6 +105,7 @@ async function withMediaLifecycle(message, work, options = {}) {
     assertCanPublish() {
       if (timedOut) throw new MediaRetrievalTimeoutError(cutoffMs);
     },
+    signal: abortController?.signal || null,
     get timedOut() { return timedOut; },
   };
 

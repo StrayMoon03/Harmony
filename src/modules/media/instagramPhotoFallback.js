@@ -5,14 +5,18 @@ const { promisify } = require("node:util");
 const { withBrowserLock } = require("./browserLock");
 const exec = promisify(execFile);
 
-async function saveVerifiedPhotos(result, expectedCode, jobDir) {
+async function saveVerifiedPhotos(result, expectedCode, jobDir, options = {}) {
   if (result.code !== expectedCode || !Array.isArray(result.photos) || !result.photos.length || result.photos.length > 20) throw new Error("Instagram photo identity mismatch");
   const saved = [];
   try {
     for (const [index, value] of result.photos.entries()) {
+      options.signal?.throwIfAborted();
       const url = new URL(value);
       if (url.protocol !== "https:" || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram photo URL rejected");
-      const response = await fetch(value, { redirect: "error", signal: AbortSignal.timeout(15000) });
+      const requestSignal = options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)])
+        : AbortSignal.timeout(15000);
+      const response = await fetch(value, { redirect: "error", signal: requestSignal });
       if (!response.ok) throw new Error(`Instagram photo request failed: HTTP ${response.status}`);
       const type = response.headers.get("content-type") || "";
       if (!type.startsWith("image/")) throw new Error("Instagram photo response was not an image");
@@ -30,15 +34,16 @@ async function saveVerifiedPhotos(result, expectedCode, jobDir) {
   }
 }
 
-async function downloadInstagramPhotos(url, jobDir) {
+async function downloadInstagramPhotos(url, jobDir, options = {}) {
   const parsed = new URL(url);
   const match = parsed.pathname.match(/^\/(?:[A-Za-z0-9._]+\/)?p\/([A-Za-z0-9_-]+)\/?$/);
   if (parsed.protocol !== "https:" || !match || !["instagram.com", "www.instagram.com"].includes(parsed.hostname)) throw new Error("Instagram photo fallback requires an exact post URL");
-  const { stdout } = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramPhotoBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024 }));
+  const { stdout } = await withBrowserLock(() => exec(process.env.PYTHON_PATH || "python3", [path.join(__dirname, "instagramPhotoBrowser.py"), url], { timeout: 45000, maxBuffer: 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}) }), { signal: options.signal });
   const line = stdout.split(/\r?\n/).find((x) => x.startsWith("HARMONY_INSTAGRAM_PHOTOS:"));
   if (!line) throw new Error("Instagram browser returned no verified photos");
   const result = JSON.parse(line.slice("HARMONY_INSTAGRAM_PHOTOS:".length));
-  const files = await saveVerifiedPhotos(result, match[1], jobDir);
+  options.signal?.throwIfAborted();
+  const files = await saveVerifiedPhotos(result, match[1], jobDir, options);
   return { files, creator: result.creator };
 }
 

@@ -6,7 +6,7 @@ const {
   deleteOriginalAfterSuccess,
 } = require("../modules/media/messageLifecycle");
 const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
-const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 90000;
+const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 120000;
 const fs = require("node:fs/promises");
 const { EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -455,15 +455,20 @@ async function processMediaMessage(message, lifecycle) {
       }
 
       try {
-        info = await getMediaInfo(originalUrl);
+        info = await getMediaInfo(originalUrl, {
+          signal: lifecycle?.signal || undefined,
+        });
       } catch {
+        if (lifecycle?.signal?.aborted) throw lifecycle.signal.reason;
         console.warn(
           "Metadata unavailable. Continuing with download only."
         );
       }
 
       const downloadResult =
-        await downloadMedia(originalUrl);
+        await downloadMedia(originalUrl, {
+          signal: lifecycle?.signal || undefined,
+        });
 
       const classification = classify(
         downloadResult.files,
@@ -1207,15 +1212,16 @@ async function handleMediaMessage(message) {
   if (message.author.bot) return;
   const finders = [findInstagramLinks, findFacebookLinks, findTikTokLinks, findXLinks, findYouTubeLinks, findThreadsLinks];
   if (!finders.some((find) => find(message.content).length)) return;
-  // Facebook's exact-post browser is deliberately serialized so concurrent
-  // shares cannot compete for the same browser session. Include that bounded
-  // queue time in Facebook's lifecycle window; the global 20-second cutoff
-  // remains unchanged for every other platform.
+  // Facebook and Instagram exact-post browser work is deliberately serialized
+  // so concurrent shares cannot compete for the same browser session. The
+  // Instagram lifecycle also cancels its queued/in-flight fallback on timeout;
+  // other platforms retain the global 20-second cutoff.
   const cutoffMs = mediaLifecycleCutoffMs(message.content);
+  const cancelWorkOnTimeout = findInstagramLinks(message.content).length > 0;
   return withMediaLifecycle(
     message,
     (lifecycle) => processMediaMessage(message, lifecycle),
-    { cutoffMs, onTimeout: (error) => logMediaError(message, error) }
+    { cutoffMs, cancelWorkOnTimeout, onTimeout: (error) => logMediaError(message, error) }
   );
 }
 

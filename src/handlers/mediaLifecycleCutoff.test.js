@@ -9,14 +9,14 @@ test("Facebook shares allow the serialized exact-post browser queue to finish", 
   );
 });
 
-test("Instagram fallback recovery receives the bounded 90-second lifecycle window", () => {
+test("Instagram fallback recovery receives a two-minute bounded lifecycle window", () => {
   assert.equal(
     mediaLifecycleCutoffMs("https://www.instagram.com/reel/example/"),
-    90000
+    120000
   );
   assert.equal(
     mediaLifecycleCutoffMs("https://www.instagram.com/p/example/"),
-    90000
+    120000
   );
 });
 

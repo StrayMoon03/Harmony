@@ -7,6 +7,7 @@ const { promisify } = require("node:util");
 const execFileAsync = promisify(execFile);
 
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
+const INSTAGRAM_GALLERY_TIMEOUT_MS = 45000;
 
 const IMAGE_EXT = new Set([
   "jpg",
@@ -137,14 +138,20 @@ async function createJobDirectory() {
  * @param {string} url
  * @returns {Promise<DownloadResult>}
  */
-async function downloadMedia(url) {
+async function downloadMedia(url, options = {}) {
+  const signal = options.signal;
+  signal?.throwIfAborted();
   const jobDir = await createJobDirectory();
   const errors = [];
 
   for (const useCookies of [true, false]) {
     try {
-      return await downloadWithYtDlp(url, jobDir, { useCookies });
+      return await downloadWithYtDlp(url, jobDir, { useCookies, signal });
     } catch (error) {
+      if (signal?.aborted) {
+        await fs.rm(jobDir, { recursive: true, force: true });
+        throw signal.reason || error;
+      }
       errors.push(error);
       console.warn(
         `Instagram yt-dlp ${useCookies ? "cookie" : "public"} attempt failed; ` +
@@ -161,8 +168,13 @@ async function downloadMedia(url) {
       requireAudio: errors.some((error) =>
         String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")
       ),
+      signal,
     });
   } catch (galleryError) {
+    if (signal?.aborted) {
+      await fs.rm(jobDir, { recursive: true, force: true });
+      throw signal.reason || galleryError;
+    }
     errors.push(galleryError);
     await fs.rm(jobDir, { recursive: true, force: true });
     await fs.mkdir(jobDir, { recursive: true });
@@ -170,10 +182,14 @@ async function downloadMedia(url) {
       const reelPath = new URL(url).pathname;
       const isReel = /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(reelPath);
       const result = isReel
-        ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir)
-        : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir);
+        ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir, { signal })
+        : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir, { signal });
       return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
     } catch (browserError) {
+      if (signal?.aborted) {
+        await fs.rm(jobDir, { recursive: true, force: true });
+        throw signal.reason || browserError;
+      }
       errors.push(browserError);
       await fs.rm(jobDir, { recursive: true, force: true });
     }
@@ -250,6 +266,7 @@ async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
     timeout: 120000,
     killSignal: "SIGKILL",
     maxBuffer: 20 * 1024 * 1024,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
 
   return stdout
@@ -396,9 +413,12 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
     args,
     {
       windowsHide: true,
-      timeout: 120000,
+      // Keep this recovery stage shorter than Instagram's overall lifecycle
+      // window so exact-record browser recovery still has time to run.
+      timeout: INSTAGRAM_GALLERY_TIMEOUT_MS,
       killSignal: "SIGKILL",
       maxBuffer: 20 * 1024 * 1024,
+      ...(options.signal ? { signal: options.signal } : {}),
     }
   );
 

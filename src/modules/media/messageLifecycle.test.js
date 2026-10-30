@@ -85,6 +85,28 @@ test("timeout error reports its configured retrieval deadline", () => {
   );
 });
 
+test("Instagram can cancel in-flight retrieval at its configured cutoff", async () => {
+  const message = fakeMessage();
+  let receivedSignal;
+  await assert.rejects(withMediaLifecycle(message, (lifecycle) => {
+    receivedSignal = lifecycle.signal;
+    return new Promise((resolve, reject) => lifecycle.signal.addEventListener(
+      "abort",
+      () => reject(lifecycle.signal.reason),
+      { once: true }
+    ));
+  }, { cutoffMs: 25, cancelWorkOnTimeout: true }), MediaRetrievalTimeoutError);
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test("retrieval remains non-cancelling for paths that do not opt in", async () => {
+  const message = fakeMessage();
+  await withMediaLifecycle(message, async (lifecycle) => lifecycle.markRetrieved(), {
+    cutoffMs: 25,
+  });
+  assert.equal(message.sent.length, 0);
+});
+
 test("configured custom status emoji replaces the fallback attachment", async () => {
   process.env.HARMONY_WORKING_EMOJI_ID = "123456789012345678";
   const message = fakeMessage();
