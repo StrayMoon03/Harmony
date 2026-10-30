@@ -174,6 +174,7 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: process.env.SESSION_REFRESH_RAILWAY_PROJECT_TOKEN,
     SESSION_REFRESH_RAILWAY_SERVICE_ID: process.env.SESSION_REFRESH_RAILWAY_SERVICE_ID,
     INSTAGRAM_COOKIES_BASE64: process.env.INSTAGRAM_COOKIES_BASE64,
+    INSTAGRAM_EXPECTED_USERNAME: process.env.INSTAGRAM_EXPECTED_USERNAME,
     INSTAGRAM_COOKIES: process.env.INSTAGRAM_COOKIES,
     HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: process.env.HARMONY_CREDENTIAL_MANAGER_ROLE_IDS,
   };
@@ -184,6 +185,7 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "mock-project-token",
     SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
     INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
+    INSTAGRAM_EXPECTED_USERNAME: "@MissHarmony",
     INSTAGRAM_COOKIES: cookiePath,
     HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: "",
   });

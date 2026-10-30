@@ -8,6 +8,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "harmony-refresh-workflow-
 process.env.HARMONY_DB_PATH = path.join(tempDir, "workflow.sqlite");
 process.env.INSTAGRAM_COOKIES = path.join(tempDir, "instagram-cookies.txt");
 process.env.INSTAGRAM_COOKIES_BASE64 = Buffer.from("prior-session", "utf8").toString("base64");
+process.env.INSTAGRAM_EXPECTED_USERNAME = "@MissHarmony";
 process.env.SESSION_REFRESH_PUBLIC_URL = "https://refresh.example";
 process.env.DISCORD_OAUTH_CLIENT_ID = "mock-client-id";
 process.env.DISCORD_OAUTH_CLIENT_SECRET = "mock-client-secret";
@@ -150,7 +151,7 @@ test("ambiguous validation and rotation failure preserve the existing credential
     let validations = 0;
     let restoredValue;
     const workflow = createSessionRefreshWorkflow({
-      validator: async () => ({ status: ++validations === 1 ? "AUTHENTICATED" : "UNAUTHENTICATED" }),
+      validator: async () => ({ status: ++validations === 1 ? "AUTHENTICATED" : "IDENTITY_MISMATCH" }),
       providerFactory: () => ({ rotate: async () => {}, restore: async (_service, value) => { restoredValue = value; } }),
       audit: { recordCredentialRefreshStage() {} },
       now: () => "2026-10-28T00:07:00.000Z",
@@ -161,6 +162,60 @@ test("ambiguous validation and rotation failure preserve the existing credential
     assert.equal(restoredValue, activeEncoded);
     assert.equal(process.env.INSTAGRAM_COOKIES_BASE64, activeEncoded);
   });
+});
+
+test("Instagram identity mismatch is rejected before rotation and preserves existing session", async () => {
+  getDb();
+  const file = process.env.INSTAGRAM_COOKIES;
+  const active = "existing-session-must-survive";
+  const candidate = "COOKIE_SECRET_PLAINTEXT_WRONG_ACCOUNT";
+  const activeEncoded = Buffer.from(active, "utf8").toString("base64");
+  fs.writeFileSync(file, active);
+  process.env.INSTAGRAM_COOKIES_BASE64 = activeEncoded;
+  makeRequest("2026-10-28T00:08:00.000Z");
+  let rotations = 0;
+  const auditEvents = [];
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => ({ status: "IDENTITY_MISMATCH" }),
+    providerFactory: () => ({ rotate: async () => { rotations++; }, restore: async () => {} }),
+    audit: { recordCredentialRefreshStage: (entry) => auditEvents.push(entry) },
+  });
+  const result = await workflow.submit(context(), candidate);
+  assert.equal(result.ok, false);
+  assert.equal(rotations, 0);
+  assert.equal(fs.readFileSync(file, "utf8"), active);
+  assert.equal(process.env.INSTAGRAM_COOKIES_BASE64, activeEncoded);
+  assert.doesNotMatch(JSON.stringify({ result, auditEvents }), /COOKIE_SECRET_PLAINTEXT|MissHarmony|wrong-account/);
+});
+
+test("missing Instagram expected username fails closed before validation or rotation", async () => {
+  getDb();
+  const file = process.env.INSTAGRAM_COOKIES;
+  const active = "existing-session-must-survive";
+  const candidate = "arbitrary-account-cookie-export";
+  const activeEncoded = Buffer.from(active, "utf8").toString("base64");
+  fs.writeFileSync(file, active);
+  process.env.INSTAGRAM_COOKIES_BASE64 = activeEncoded;
+  const expected = process.env.INSTAGRAM_EXPECTED_USERNAME;
+  delete process.env.INSTAGRAM_EXPECTED_USERNAME;
+  makeRequest("2026-10-28T00:09:00.000Z");
+  let validations = 0;
+  let rotations = 0;
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => { validations++; return { status: "AUTHENTICATED" }; },
+    providerFactory: () => ({ rotate: async () => { rotations++; }, restore: async () => {} }),
+    audit: { recordCredentialRefreshStage() {} },
+  });
+  try {
+    const result = await workflow.submit(context(), candidate);
+    assert.equal(result.ok, false);
+    assert.equal(validations, 0);
+    assert.equal(rotations, 0);
+    assert.equal(fs.readFileSync(file, "utf8"), active);
+    assert.equal(process.env.INSTAGRAM_COOKIES_BASE64, activeEncoded);
+  } finally {
+    process.env.INSTAGRAM_EXPECTED_USERNAME = expected;
+  }
 });
 
 test.after(() => {

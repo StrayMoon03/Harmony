@@ -1,13 +1,15 @@
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const { expectedInstagramUsername } = require("./sessionRefreshConfig");
 
 const VALIDATION_HELPER = path.resolve(__dirname, "../modules/media/sessionCookieValidation.py");
-const VALIDATION_STATUSES = new Set(["AUTHENTICATED", "UNAUTHENTICATED", "OWNER_REQUIRED", "INCONCLUSIVE", "INVALID_FORMAT"]);
+const VALIDATION_STATUSES = new Set(["AUTHENTICATED", "UNAUTHENTICATED", "OWNER_REQUIRED", "INCONCLUSIVE", "INVALID_FORMAT", "IDENTITY_MISMATCH", "IDENTITY_UNVERIFIABLE"]);
 
 function validateSessionCookie(service, candidate, {
   spawnProcess = spawn,
   helperPath = VALIDATION_HELPER,
   pythonPath = process.env.PYTHON_PATH || "python3",
+  env = process.env,
   timeoutMs = 35_000,
 } = {}) {
   return new Promise((resolve) => {
@@ -15,9 +17,13 @@ function validateSessionCookie(service, candidate, {
       resolve({ status: "INVALID_FORMAT" });
       return;
     }
+    if (service === "instagram" && !expectedInstagramUsername(env)) {
+      resolve({ status: "IDENTITY_UNVERIFIABLE" });
+      return;
+    }
     let child;
     try {
-      child = spawnProcess(pythonPath, [helperPath, service], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+      child = spawnProcess(pythonPath, [helperPath, service], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true, env });
     } catch {
       resolve({ status: "INCONCLUSIVE" });
       return;
