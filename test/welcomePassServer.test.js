@@ -195,6 +195,80 @@ test("existing approval callback continues to link, grant STAY, and publish appr
   assert.equal(welcomePassStore.getWelcomePassSubmissionAlert("YS-APPROVE1"), null);
 });
 
+
+test("approval can uniquely match Discord global name", async (t) => {
+  const env = makeEnvironment("approval-global-name-guild");
+  env.member.user.username = "different.username";
+  env.member.user.globalName = "Tokki";
+  env.member.displayName = "Different Display";
+  const { server, baseUrl } = await startServer(env.client);
+  t.after(() => server.close());
+
+  const response = await post(baseUrl, "/welcome-pass/approved", {
+    code: "YS-GLOBAL01",
+    approverName: "Review Admin",
+    discordUsername: "@TOKKI",
+    birthdayOptIn: false,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(env.roleGrants, 1);
+  assert.ok(env.sent.some((item) => item.content.includes("<@discord-member-1>")));
+});
+
+test("approval can uniquely match Discord display name", async (t) => {
+  const env = makeEnvironment("approval-display-name-guild");
+  env.member.user.username = "different.username";
+  env.member.user.globalName = "Different Global";
+  env.member.displayName = "Tokki";
+  const { server, baseUrl } = await startServer(env.client);
+  t.after(() => server.close());
+
+  const response = await post(baseUrl, "/welcome-pass/approved", {
+    code: "YS-DISPLY01",
+    approverName: "Review Admin",
+    discordUsername: "tokki",
+    birthdayOptIn: false,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(env.roleGrants, 1);
+});
+
+test("release message without a member token gets a safe member greeting prepended", async (t) => {
+  const env = makeEnvironment("approval-release-fallback-guild");
+  welcomePassStore.updateWelcomePassSetting(env.guild.id, "releaseMessage", "This is our main channel!! Please check out the rules.");
+  const { server, baseUrl } = await startServer(env.client);
+  t.after(() => server.close());
+
+  const response = await post(baseUrl, "/welcome-pass/approved", {
+    code: "YS-RELEASE1",
+    approverName: "Review Admin",
+    discordUsername: env.member.user.username,
+    birthdayOptIn: false,
+  });
+  assert.equal(response.status, 200);
+  const release = env.sent.find((item) => item.content.includes("This is our main channel!!"));
+  assert.ok(release);
+  assert.equal(release.content, "Welcome <@discord-member-1>!\n\nThis is our main channel!! Please check out the rules.");
+  assert.deepEqual(release.allowedMentions, { parse: [], users: ["discord-member-1"] });
+});
+
+test("staff confirmation distinguishes a member who already had STAY", async (t) => {
+  const env = makeEnvironment("approval-existing-stay-guild");
+  env.member.roles.cache.has = () => true;
+  const { server, baseUrl } = await startServer(env.client);
+  t.after(() => server.close());
+
+  const response = await post(baseUrl, "/welcome-pass/approved", {
+    code: "YS-HADSTAY1",
+    approverName: "Review Admin",
+    discordUsername: env.member.user.username,
+    birthdayOptIn: false,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(env.roleGrants, 0);
+  assert.ok(env.sent.some((item) => item.content.includes("member already had STAY")));
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });

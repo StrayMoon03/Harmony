@@ -221,12 +221,17 @@ async function autoLinkWelcomePassByDiscordUsername(
   const members = await guild.members.fetch().catch(() => null);
   if (!members) return { status: "member_list_unavailable" };
 
-  const matches = [...members.values()].filter(
-    (member) =>
-      !member.user.bot &&
-      normalizeDiscordUsername(member.user.username) ===
-        normalizedUsername
-  );
+  const matches = [...members.values()].filter((member) => {
+    if (member.user.bot) return false;
+    const aliases = [
+      member.user.username,
+      member.user.globalName,
+      member.displayName,
+    ]
+      .map(normalizeDiscordUsername)
+      .filter(Boolean);
+    return aliases.includes(normalizedUsername);
+  });
 
   if (matches.length !== 1) {
     await notifyDiscordUsernameIssue(
@@ -289,7 +294,8 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
     (await guild.roles.fetch(settings.role_id).catch(() => null));
   if (!role) return { status: "role_missing" };
 
-  if (!member.roles.cache.has(role.id)) {
+  const alreadyHadStayRole = member.roles.cache.has(role.id);
+  if (!alreadyHadStayRole) {
     await member.roles.add(
       role,
       "Welcome Pass approved: " + assignment.code
@@ -321,9 +327,13 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
       member.displayName ||
       member.user.globalName ||
       member.user.username;
+    const configuredReleaseMessage = String(settings.release_message || "");
+    const releaseTemplate = /\{(?:member|name)\}/.test(configuredReleaseMessage)
+      ? configuredReleaseMessage
+      : "Welcome {member}!\n\n" + configuredReleaseMessage;
     const releasePayload = await buildReleaseMessagePayload(
       guild,
-      settings.release_message,
+      releaseTemplate,
       {
         memberMention: "<@" + member.id + ">",
         memberName,
@@ -338,7 +348,9 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
   if (adminChannel) {
     await adminChannel.send({
       content: [
-        "✅ **Welcome Pass approved — STAY role granted**",
+        alreadyHadStayRole
+          ? "✅ **Welcome Pass approved — member already had STAY**"
+          : "✅ **Welcome Pass approved — STAY role granted**",
         "",
         "Member: <@" + member.id + ">",
         "Confirmation: `" + assignment.code + "`",
