@@ -2028,11 +2028,92 @@ async function nativeReconciliationPickerPayload(guild, page = 0) {
   });
 }
 
-async function beginNativeEventReconciliation(guild, guildId, nativeId) {
+function nativeRecurrenceMatches(nativeEvent, anchor) {
+  const current = nativeRecurrencePayload(nativeEvent, nativeEvent?.scheduledStartAt);
+  if (!current || !anchor?.recurrence_rule) return false;
+  try {
+    const stored = JSON.parse(anchor.recurrence_rule);
+    return stored?.source === "discord" && JSON.stringify(stored) === current;
+  } catch { return false; }
+}
+
+async function repairLinkedNativeRecurringEvent(client, guildId, nativeEvent, linked) {
+  if (!nativeEvent?.scheduledStartAt) return { error: "That Discord recurring event has no available start time, so Harmony could not reconcile it." };
+  const seriesId = linked.recurrence_series_id || randomUUID();
+  const anchor = linked.recurrence_series_id
+    ? (store.getSeriesAnchor(guildId, linked.recurrence_series_id) || linked)
+    : linked;
+  const timezone = calendarPresentationTimezone(anchor);
+  const wasHealthy = Boolean(
+    anchor.recurrence_series_id &&
+    Number(anchor.recurrence_native_enabled) === NATIVE_RECURRENCE_MODE &&
+    nativeRecurrenceMatches(nativeEvent, anchor)
+  );
+  const previousRows = linked.recurrence_series_id ? store.listSeriesEvents(guildId, seriesId) : [linked];
+  const previousByIndex = new Map(previousRows.map((event) => [Number(event.recurrence_index), event]));
+  const startAt = nativeEvent.scheduledStartAt?.toISOString?.() || new Date(nativeEvent.scheduledStartAt).toISOString();
+  const endAt = nativeEvent.scheduledEndAt?.toISOString?.() || anchor.event_end_at || null;
+  const eventDate = calendarDateInTimezone(startAt, timezone) || startAt.slice(0, 10);
+
+  // Keep the linked Harmony row as the anchor and retain its category,
+  // description, location, announcement settings, and other presentation data.
+  // A legacy one-off is upgraded in place; no replacement anchor is created.
+  let repairedAnchor = store.updateEvent(guildId, anchor.id, {
+    discord_event_id: nativeEvent.id,
+    discord_event_origin: "adopted",
+    event_at: startAt,
+    event_end_at: endAt,
+    event_date: eventDate,
+    recurrence_series_id: seriesId,
+    recurrence_rule: wasHealthy ? anchor.recurrence_rule : nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt),
+    recurrence_index: 0,
+    recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+  });
+  if (!repairedAnchor) return { error: "That linked Harmony calendar event is no longer active." };
+  if (anchor.id !== linked.id) store.updateEvent(guildId, linked.id, { discord_event_id: null });
+
+  const occurrences = await syncDiscordRecurringSeries(guildId, repairedAnchor);
+  repairedAnchor = store.getEvent(guildId, repairedAnchor.id);
+  // Projection updates existing occurrence dates in place. Rebuild generated
+  // reminders only for rows whose schedule moved; custom/manual rows and
+  // sent/cancelled history remain under the store's existing safeguards.
+  for (const event of store.listSeriesEvents(guildId, seriesId)) {
+    const before = previousByIndex.get(Number(event.recurrence_index));
+    if (!before || (before.event_at === event.event_at && before.event_end_at === event.event_end_at && before.event_date === event.event_date)) continue;
+    const offsets = announcementOffsetsFromEvent(before);
+    if (offsets.length || before.announcement_channel_id) {
+      store.rebuildGeneratedEventAnnouncements(
+        guildId,
+        event.id,
+        calendarAnnouncementItems(before, offsets, Number.NEGATIVE_INFINITY),
+        calendarAnnouncementItems(event, offsets),
+      );
+    }
+  }
+
+  const affectedDates = new Set([
+    ...previousRows.map((event) => event.event_date),
+    ...occurrences.map((occurrence) => calendarDateInTimezone(occurrence.eventAt, timezone) || occurrence.eventAt.slice(0, 10)),
+  ]);
+  for (const date of affectedDates) await refreshPublishedCalendar(client, guildId, repairedAnchor.calendar_type, date).catch(() => {});
+  return { repaired: true, anchor: repairedAnchor, occurrences, wasHealthy };
+}
+
+async function beginNativeEventReconciliation(guild, guildId, nativeId, client = null) {
   let native = null;
   try { native = await guild?.scheduledEvents?.fetch(nativeId); } catch { native = null; }
   if (!native) return { error: "That Discord Scheduled Event is no longer available." };
   const linked = store.getEventByDiscordId(guildId, nativeId);
+  if (linked && native.recurrenceRule) {
+    const repaired = await repairLinkedNativeRecurringEvent(client, guildId, native, linked);
+    if (repaired.error) return repaired;
+    return {
+      ...repaired,
+      message: repaired.wasHealthy
+        ? `Reconciled **${repaired.anchor.title}** with its Discord recurring series. ${repaired.occurrences.length} occurrence(s) are projected in Harmony.`
+        : `Repaired the existing Harmony event **${repaired.anchor.title}** as a Discord recurring series. ${repaired.occurrences.length} occurrence(s) are projected in Harmony.`,
+    };
+  }
   if (linked) return { error: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.` };
   const reconciliation = store.getDiscordEventReconciliation(guildId, nativeId);
   if (reconciliation && reconciliation.status !== "open") store.saveDiscordEventReconciliation(guildId, nativeId, null, "open");
@@ -2563,8 +2644,8 @@ async function handleEventSchedulerInteraction(interaction) {
       return true;
     }
     if (action === "reconcile-select" && interaction.isStringSelectMenu?.()) {
-      const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, interaction.values[0]);
-      await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.payload);
+      const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, interaction.values[0], interaction.client);
+      await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.repaired ? { content: result.message, flags: 64 } : result.payload);
       return true;
     }
     return false;
@@ -2920,8 +3001,8 @@ async function handleManagerInteraction(interaction) {
 
   if (calendarType === "community" && action === "findnativeselect" && interaction.isStringSelectMenu()) {
     const nativeId = interaction.values[0];
-    const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, nativeId);
-    await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.payload);
+    const result = await beginNativeEventReconciliation(interaction.guild, interaction.guildId, nativeId, interaction.client);
+    await interaction.reply(result.error ? { content: result.error, flags: 64 } : result.repaired ? { content: result.message, flags: 64 } : result.payload);
     return;
   }
 
