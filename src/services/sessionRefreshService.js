@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { getAdminCapabilities, resolveAdminCapabilities, checkSocial, STATUS } = require("./operationsStatusService");
+const { getAdminCapabilities, resolveAdminCapabilities, checkSocial, isCookieRefreshRequired } = require("./operationsStatusService");
 const auditStore = require("../stores/operationsAuditStore");
 const requestStore = require("../stores/credentialRefreshStore");
 const refreshConfig = require("./sessionRefreshConfig");
@@ -10,7 +10,7 @@ const RATE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_REQUESTS_PER_HOUR = 3;
 const SERVICES = requestStore.SERVICES;
 const SAFE_RESULT_MESSAGES = Object.freeze({
-  unauthorized: "Only the owner or a configured Credential Manager can request a secure cookie refresh.",
+  unauthorized: "Only the server owner or an authorized Harmony administrator can request a secure cookie refresh.",
   secure_refresh_unavailable: "Secure cookie refresh is not yet available. No credentials were changed.",
   rate_limited: "Too many refresh requests were made recently. Try again later.",
   invalid_request: "This refresh request is invalid or has expired.",
@@ -155,7 +155,7 @@ async function handleRefreshInteraction(interaction) {
   const authorizedContext = { ...context, resolvedGuildOwnerId: capabilities.resolvedGuildOwnerId };
   const available = Boolean(capabilities.canManageCredentials && secureRefreshInfrastructureAvailable(service));
   const sessionStatus = available ? await checkSocial(service) : null;
-  const hasExpiry = sessionStatus?.status === STATUS.attention;
+  const hasExpiry = isCookieRefreshRequired(sessionStatus);
   const result = !context.guild || !context.userId
     ? { ok: false, reason: "unauthorized" }
     : !capabilities.canManageCredentials

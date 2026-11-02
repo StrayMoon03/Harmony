@@ -202,7 +202,7 @@ test("OAuth redemption recognizes the guild owner when the cached guild lacks ow
   });
 });
 
-test("OAuth redemption rejects a regular admin without a Credential Manager role", async () => {
+test("OAuth redemption allows a Discord administrator without a Credential Manager role", async () => {
   const guild = {
     id: "guild-1",
     fetch: async () => ({ id: "guild-1", ownerId: "actual-owner" }),
@@ -210,6 +210,28 @@ test("OAuth redemption rejects a regular admin without a Credential Manager role
   };
   const h = createHarness({
     actorId: "regular-admin",
+    client: { guilds: { cache: new Map([["guild-1", guild]]) } },
+    useDefaultAuthorization: true,
+    useRealInteractionWorkflow: true,
+  });
+  await withServer(h.handler, async (server) => {
+    const start = await request(server, `/session-refresh/${h.record.request_id}`);
+    const authorizeUrl = new URL(start.headers.location);
+    const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
+    const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
+    assert.equal(callback.status, 303);
+    assert.equal(h.record.status, "consumed");
+  });
+});
+
+test("OAuth redemption still rejects a regular member after live guild authorization", async () => {
+  const guild = {
+    id: "guild-1",
+    fetch: async () => ({ id: "guild-1", ownerId: "actual-owner" }),
+    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: () => false }, roles: { cache: [] } }) },
+  };
+  const h = createHarness({
+    actorId: "ordinary-member",
     client: { guilds: { cache: new Map([["guild-1", guild]]) } },
     useDefaultAuthorization: true,
     useRealInteractionWorkflow: true,

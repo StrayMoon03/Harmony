@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES, isCookieRefreshRequired } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -32,16 +32,19 @@ function isSocialRow(row) {
 }
 
 function hasCookieRefreshEvidence(row) {
-  return isSocialRow(row) && row.status === STATUS.attention &&
-    COOKIE_SERVICES.has(row.id.slice("social-".length)) &&
-    /(?:cookies need to be refreshed|session refresh required)/i.test(row.action || "");
+  return isSocialRow(row) && isCookieRefreshRequired(row);
+}
+
+function hasAccountVerificationEvidence(row) {
+  return isSocialRow(row) && row?.status === STATUS.owner &&
+    /checkpoint|challenge|account verification|security verification/i.test(`${row.explanation || ""} ${row.action || ""}`);
 }
 
 function statusAction(row, capabilities = {}) {
   if (hasCookieRefreshEvidence(row)) {
     const platform = row.name;
     if (!capabilities.canManageCredentials) {
-      return `${platform} cookies need to be refreshed. Ask the owner or a Credential Manager.`;
+      return `${platform} cookies need to be refreshed. Ask the owner or an authorized Harmony administrator.`;
     }
     const service = row.id.slice("social-".length);
     return isServiceRefreshAvailable(service)
@@ -71,8 +74,10 @@ function adminPresentationRows(report) {
     const row = rowFor(`social-${platform}`);
     if (!row) continue;
     let label = simpleStatusLabel(row.status);
-    if (hasCookieRefreshEvidence(row)) label = "Cookies need to be refreshed";
-    rows.push(present(row, SOCIAL[platform], label));
+    const cookiesNeedRefresh = hasCookieRefreshEvidence(row);
+    if (cookiesNeedRefresh) label = "Cookies Need Refresh";
+    else if (hasAccountVerificationEvidence(row)) label = "Account Verification Required";
+    rows.push(present(row, SOCIAL[platform], label, cookiesNeedRefresh ? STATUS.attention : row.status));
   }
 
   const discovery = rowFor("discovery");
@@ -113,7 +118,7 @@ function makeStatusPayload(report, capabilities = {}) {
     let label = row.label;
     if (hasCookieRefreshEvidence((report.rows || []).find((source) => source.id === row.id))) {
       const service = row.id.slice("social-".length);
-      if (!capabilities.canManageCredentials) label += ". Ask the owner or a Credential Manager.";
+      if (!capabilities.canManageCredentials) label += ". Ask the owner or an authorized Harmony administrator.";
       else if (!isServiceRefreshAvailable(service)) label += ". Ask the owner to finish secure setup.";
     }
     return `${view.icon} **${row.name}** — ${label}`;
@@ -246,6 +251,7 @@ module.exports = {
   makeOwnerDiagnosticsPayload,
   adminPresentationRows,
   hasCookieRefreshEvidence,
+  hasAccountVerificationEvidence,
   statusAction,
   respondWithStatus,
   respondWithOwnerDiagnostics,

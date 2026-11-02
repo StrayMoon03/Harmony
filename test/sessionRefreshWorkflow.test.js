@@ -78,7 +78,7 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
   assert.match(refreshedStatus.explanation, /recent media retrieval succeeded/i);
 });
 
-test("Status offers cookie refresh only for explicit expiry and only to authorized credential managers", () => {
+test("Status offers cookie refresh only for explicit expiry and authorized Harmony admins", () => {
   const report = { checkedAt: "2026-10-28T00:00:00.000Z", rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.attention, explanation: "Sign-in required.", action: "Session refresh required." },
     { id: "social-threads", name: "Threads", status: STATUS.owner, explanation: "Security checkpoint.", action: "Owner attention required." },
@@ -94,8 +94,8 @@ test("Status offers cookie refresh only for explicit expiry and only to authoriz
   const regularButtons = regular.components.flatMap((row) => row.components);
   assert.ok(!regularButtons.some((component) => String(component.data.custom_id).startsWith("harmony-session-refresh:")));
   assert.ok(!regularButtons.some((component) => /Refresh .* Cookies/.test(component.data.label || "")));
-  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
-  assert.match(JSON.stringify(regular), /Owner\/Developer Required/);
+  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies Need Refresh\. Ask the owner or an authorized Harmony administrator\./);
+  assert.match(JSON.stringify(regular), /Account Verification Required/);
 
   const unknown = statusCommand.makeStatusPayload({ checkedAt: report.checkedAt, rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.unknown, explanation: "Login validity is not actively verified.", action: "No action unless a media request reports a login issue." },

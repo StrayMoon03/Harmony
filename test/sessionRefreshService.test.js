@@ -55,7 +55,7 @@ function workflow({ now = "2026-10-27T12:00:00.000Z", infrastructureAvailable = 
   };
 }
 
-test("owner and configured Credential Manager can request; regular admin cannot", () => {
+test("owner and authorized server admins can request; ordinary members cannot", () => {
   const managerRoleIds = new Set(["credential-manager"]);
   const ownerCaps = getAdminCapabilities({ guild: guild(), userId: "owner-1", member: adminMember(), credentialManagerRoleIds: managerRoleIds });
   const trustedCaps = getAdminCapabilities({ guild: guild(), userId: "manager-1", member: adminMember(["credential-manager"]), credentialManagerRoleIds: managerRoleIds });
@@ -63,12 +63,14 @@ test("owner and configured Credential Manager can request; regular admin cannot"
   assert.equal(ownerCaps.canManageCredentials, true);
   assert.equal(trustedCaps.canManageCredentials, true);
   assert.equal(regularCaps.canDiagnose, true);
-  assert.equal(regularCaps.canManageCredentials, false);
+  assert.equal(regularCaps.canManageCredentials, true);
+  const memberCaps = getAdminCapabilities({ guild: guild(), userId: "member-1", member: adminMember([], false), credentialManagerRoleIds: managerRoleIds });
+  assert.equal(memberCaps.canManageCredentials, false);
 
   const testFlow = workflow({ capabilities: (candidate) => getAdminCapabilities({ ...candidate, credentialManagerRoleIds: managerRoleIds }) });
   assert.equal(testFlow.service.issue(context(), "instagram").ok, true);
   assert.equal(testFlow.service.issue(context({ userId: "manager-1", roles: ["credential-manager"] }), "threads").ok, true);
-  assert.equal(testFlow.service.issue(context({ userId: "admin-1" }), "facebook").reason, "unauthorized");
+  assert.equal(testFlow.service.issue(context({ userId: "member-1", admin: false }), "facebook").reason, "unauthorized");
 });
 
 test("credential manager role is honored by the shared capability model", () => {
@@ -145,17 +147,17 @@ test("forged refresh components are rejected server-side and never include a cre
     reply: async (payload) => { interactionPayload = payload; },
   });
   let interactionPayload;
-  const forged = makeInteraction("ordinary-admin", adminMember());
+  const forged = makeInteraction("ordinary-member", adminMember([], false));
   assert.equal(await refreshService.handleRefreshInteraction(forged), true);
-  assert.match(interactionPayload.content, /Only the owner or a configured Credential Manager/);
+  assert.match(interactionPayload.content, /Only the server owner or an authorized Harmony administrator/);
   assert.equal(interactionPayload.flags, 64);
   assert.equal("components" in interactionPayload, false);
   assert.equal("files" in interactionPayload, false);
 
   const ownerLookupGuild = { id: "guild-refresh", fetch: async () => ({ id: "guild-refresh", ownerId: "owner-1" }) };
-  const forgedAgainstOwnerLookup = makeInteraction("ordinary-admin", adminMember(), ownerLookupGuild);
+  const forgedAgainstOwnerLookup = makeInteraction("ordinary-member", adminMember([], false), ownerLookupGuild);
   assert.equal(await refreshService.handleRefreshInteraction(forgedAgainstOwnerLookup), true);
-  assert.match(interactionPayload.content, /Only the owner or a configured Credential Manager/);
+  assert.match(interactionPayload.content, /Only the server owner or an authorized Harmony administrator/);
 
   const ownerAttempt = makeInteraction("owner-1", adminMember());
   assert.equal(await refreshService.handleRefreshInteraction(ownerAttempt), true);
@@ -206,6 +208,17 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\/[0-9a-f-]{36}$/);
     assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
 
+    recordSocialAuthFailure("instagram", new Date().toISOString(), "session");
+    const adminInteraction = {
+      customId: "harmony-session-refresh:instagram", guild: ownerGuildWithoutOwnerId,
+      member: adminMember(), user: { id: "server-admin" },
+      isButton: () => true, reply: async (message) => { payload = message; },
+    };
+    await refreshService.handleRefreshInteraction(adminInteraction);
+    assert.match(payload.content, /short-lived secure instagram cookie refresh request/i);
+    assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\//);
+    assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
+
     const beforeCheckpoint = getDb().prepare("SELECT COUNT(*) AS n FROM credential_refresh_requests").get().n;
     recordSocialAuthFailure("instagram", new Date().toISOString(), "owner");
     await refreshService.handleRefreshInteraction(interaction);
@@ -220,7 +233,7 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
   }
 });
 
-test("status distinguishes session expiry from security checkpoints and never offers credential entry", () => {
+test("status distinguishes cookie expiry from checkpoints and never offers credential entry", () => {
   const report = {
     checkedAt: "2026-10-27T12:00:00.000Z",
     rows: [
@@ -230,14 +243,14 @@ test("status distinguishes session expiry from security checkpoints and never of
   };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
   const text = JSON.stringify(payload);
-  assert.match(text, /\*\*Instagram\*\* — Cookies need to be refreshed\. Ask the owner to finish secure setup/);
-  assert.match(text, /\*\*Threads\*\* — Owner\/Developer Required/);
+  assert.match(text, /\*\*Instagram\*\* — Cookies Need Refresh\. Ask the owner to finish secure setup/);
+  assert.match(text, /\*\*Threads\*\* — Account Verification Required/);
   assert.doesNotMatch(text, /harmony-session-refresh:/);
   assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-status:refresh"));
   assert.doesNotMatch(text, /Refresh Instagram Cookies|harmony-session-refresh:/);
   const regularAdminPayload = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
-  assert.match(JSON.stringify(regularAdminPayload), /ask the owner or a Credential Manager/i);
-  assert.match(JSON.stringify(regularAdminPayload), /\*\*Threads\*\* — Owner\/Developer Required/);
+  assert.match(JSON.stringify(regularAdminPayload), /ask the owner or an authorized Harmony administrator/i);
+  assert.match(JSON.stringify(regularAdminPayload), /\*\*Threads\*\* — Account Verification Required/);
 });
 
 test("failed validation audit accepts no submitted session or raw error and cannot rotate a secret", () => {

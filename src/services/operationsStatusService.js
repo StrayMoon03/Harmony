@@ -56,6 +56,12 @@ function parseConfiguredRoleIds(value = process.env.HARMONY_CREDENTIAL_MANAGER_R
   return new Set(String(value).split(/[\s,]+/).filter((id) => /^\d{15,22}$/.test(id)));
 }
 
+function isCookieRefreshRequired(row) {
+  return /^social-(instagram|threads|facebook|youtube)$/.test(row?.id || "") &&
+    [STATUS.attention, STATUS.owner].includes(row.status) &&
+    /(?:cookies need to be refreshed|session refresh required)/i.test(row?.action || "");
+}
+
 function readGuildOwnerId(guild) {
   const candidates = [guild?.ownerId, guild?.ownerID, guild?.owner_id, guild?.owner?.id];
   return candidates.find((id) => typeof id === "string" && id.length > 0) || null;
@@ -77,7 +83,9 @@ function getAdminCapabilities({ guild, member, userId, resolvedGuildOwnerId, cre
     canViewFullStatus: diagnose,
     canViewOwnerDiagnostics: owner,
     isGuildOwner: owner,
-    canManageCredentials: owner || (diagnose && hasCredentialRole),
+    // Secure cookie refresh is an Admin Controls operation. Server admins who
+    // can administer Harmony may use it; owner diagnostics remain owner-only.
+    canManageCredentials: diagnose,
     credentialManagementAvailable: false,
     credentialManagerRoleConfigured: hasCredentialRole,
   };
@@ -285,6 +293,7 @@ module.exports = {
   STATUS,
   SOCIAL,
   COOKIE_SERVICES,
+  isCookieRefreshRequired,
   SOCIAL_SUCCESS_TTL_MS,
   getAdminCapabilities,
   resolveAdminCapabilities,
