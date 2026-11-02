@@ -267,6 +267,16 @@ function migrate(database) {
     CREATE INDEX IF NOT EXISTS idx_credential_refresh_expiry
       ON credential_refresh_requests (status, expires_at);
 
+    CREATE TABLE IF NOT EXISTS social_health_state (
+      platform       TEXT PRIMARY KEY CHECK (platform IN ('instagram', 'facebook', 'youtube', 'threads', 'tiktok', 'x')),
+      state          TEXT NOT NULL CHECK (state IN ('success', 'failure')),
+      failure_kind   TEXT CHECK (failure_kind IN ('session', 'owner')),
+      last_success_at TEXT,
+      updated_at     TEXT NOT NULL,
+      CHECK ((state = 'success' AND failure_kind IS NULL AND last_success_at IS NOT NULL) OR
+             (state = 'failure' AND failure_kind IS NOT NULL))
+    );
+
     CREATE TABLE IF NOT EXISTS member_count_settings (
       guild_id           TEXT PRIMARY KEY,
       role_id            TEXT NOT NULL,

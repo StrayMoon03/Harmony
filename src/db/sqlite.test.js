@@ -72,3 +72,21 @@ test("legacy share rows survive the one-time guild-scope migration", () => {
   );
   database.close();
 });
+
+test("social health migration is additive and idempotent", () => {
+  const database = new DatabaseSync(":memory:");
+  migrate(database);
+  migrate(database);
+  const columns = database.prepare("PRAGMA table_info(social_health_state)").all().map((column) => column.name);
+  assert.deepEqual(columns, ["platform", "state", "failure_kind", "last_success_at", "updated_at"]);
+  database.prepare(`
+    INSERT INTO social_health_state (platform, state, failure_kind, last_success_at, updated_at)
+    VALUES ('facebook', 'failure', 'session', NULL, '2026-11-02T12:00:00.000Z')
+  `).run();
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM social_health_state").get().n, 1);
+  assert.throws(() => database.prepare(`
+    INSERT INTO social_health_state (platform, state, failure_kind, last_success_at, updated_at)
+    VALUES ('unknown-platform', 'failure', 'session', NULL, '2026-11-02T12:00:00.000Z')
+  `).run(), /CHECK constraint failed/);
+  database.close();
+});
