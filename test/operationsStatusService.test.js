@@ -95,11 +95,12 @@ test("session file presence never exposes its path or contents or claims authent
   assert.equal(JSON.stringify(row).includes("SESSION_COOKIE_VALUE_NEVER_OUTPUT"), false);
 });
 
-test("permission metadata separates diagnosis from credential management", () => {
+test("Manage Server admins can refresh credentials while owner diagnostics remain owner-only", () => {
   const manageServer = { permissions: { has: (permission) => permission === PermissionFlagsBits.ManageGuild } };
   const regular = statusService.getAdminCapabilities({ guild: guild(), member: manageServer, userId: "admin-1", credentialManagerRoleIds: new Set() });
   assert.equal(regular.canDiagnose, true);
-  assert.equal(regular.canManageCredentials, false);
+  assert.equal(regular.canManageCredentials, true);
+  assert.equal(regular.canViewOwnerDiagnostics, false);
 
   const trusted = statusService.getAdminCapabilities({
     guild: guild(), userId: "admin-2", credentialManagerRoleIds: new Set(["trusted-role"]),
@@ -133,7 +134,7 @@ test("owner capability refreshes guild metadata when the interaction guild lacks
     credentialManagerRoleIds: new Set(),
   });
   assert.equal(regularAdmin.canDiagnose, true);
-  assert.equal(regularAdmin.canManageCredentials, false);
+  assert.equal(regularAdmin.canManageCredentials, true);
 });
 
 test("harmony-status resolves a guild owner before rendering session-refresh guidance", async () => {
@@ -183,7 +184,7 @@ test("regular-admin Status shows each platform as simple dashboard lights while 
       { id: "discovery", name: "Event discovery", status: statusService.STATUS.unknown, explanation: "Automatic Stray Kids schedule checks are off for this server.", action: "No action needed." },
       { id: "event-sync", name: "Discord/event synchronization", status: statusService.STATUS.unknown, explanation: "Listeners are attached; end-to-end sync is not tracked.", action: "Use Calendar reconciliation controls." },
       { id: "social-instagram", name: "Instagram", status: statusService.STATUS.unknown, explanation: "Session validity is not actively tested.", action: "No action unless a request reports a login problem." },
-      { id: "social-facebook", name: "Facebook", status: statusService.STATUS.attention, explanation: "Facebook cookies need to be refreshed after a media request reported sign-in is required. SECRET_DIAGNOSTIC", action: "Facebook cookies need to be refreshed." },
+      { id: "social-facebook", name: "Facebook", status: statusService.STATUS.owner, explanation: "Facebook cookies need to be refreshed after a media request reported sign-in is required. SECRET_DIAGNOSTIC", action: "Facebook cookies need to be refreshed." },
       { id: "social-youtube", name: "YouTube", status: statusService.STATUS.owner, explanation: "A security checkpoint was reported.", action: "Owner attention required; resolve the account check with the platform." },
       { id: "social-threads", name: "Threads", status: statusService.STATUS.healthy, explanation: "A recent media retrieval succeeded.", action: "No action needed." },
       { id: "social-tiktok", name: "TikTok", status: statusService.STATUS.unknown, explanation: "No verified retrieval yet.", action: "No action available." },
@@ -195,12 +196,13 @@ test("regular-admin Status shows each platform as simple dashboard lights while 
   const adminText = JSON.stringify(regular);
   for (const expected of [
     "**Harmony** — Working", "**Discord** — Connected", "**Instagram** — Unable to Verify",
-    "**Facebook** — Cookies need to be refreshed", "**YouTube** — Owner/Developer Required",
+    "**Facebook** — Cookies Need Refresh", "**YouTube** — Account Verification Required",
     "**Threads** — Working", "**TikTok** — Unable to Verify", "**X** — Unable to Verify",
     "**Event Discovery** — Off", "**Community Guard** — Off",
   ]) assert.ok(adminText.includes(expected), expected);
   assert.doesNotMatch(adminText, /Social Media Links/);
-  assert.match(adminText, /\*\*Facebook\*\* — Cookies need to be refreshed\. Ask the owner or a Credential Manager\./);
+  assert.match(adminText, /🟡 \*\*Facebook\*\* — Cookies Need Refresh/);
+  assert.doesNotMatch(adminText, /\*\*Facebook\*\* — Owner\/Developer Required/);
   assert.doesNotMatch(adminText, /SECRET_DIAGNOSTIC|Active rules|Review Room|ordinary members|\/harmony-guard|Turn discovery on|No explicit login failure|does not actively test/);
   assert.doesNotMatch(adminText, /Database|Discord\/event synchronization|Railway|OAuth/);
   assert.doesNotMatch(adminText, /harmony-session-refresh:/);
@@ -219,13 +221,13 @@ test("regular-admin Status shows each platform as simple dashboard lights while 
   assert.doesNotMatch(diagnosticText, /COOKIE_VALUE|token-value|oauth-secret|private-cookie-file/);
 });
 
-test("regular admins never receive secure cookie controls and refresh-capable admins do", () => {
+test("authorized admins receive secure cookie controls for explicit expiry, ordinary members do not", () => {
   const report = { checkedAt: new Date().toISOString(), rows: [
     { id: "social-instagram", name: "Instagram", status: statusService.STATUS.attention, explanation: "Sensitive authentication evidence.", action: "Instagram cookies need to be refreshed." },
   ] };
   const regular = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
-  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies need to be refreshed/);
-  assert.match(JSON.stringify(regular), /Ask the owner or a Credential Manager/);
+  assert.match(JSON.stringify(regular), /\*\*Instagram\*\* — Cookies Need Refresh/);
+  assert.match(JSON.stringify(regular), /Ask the owner or an authorized Harmony administrator/);
   assert.doesNotMatch(JSON.stringify(regular), /harmony-session-refresh:|Refresh Instagram Cookies/);
   const oldEnv = Object.fromEntries(["INSTAGRAM_COOKIES", "INSTAGRAM_COOKIES_BASE64", "INSTAGRAM_EXPECTED_USERNAME", "SESSION_REFRESH_PUBLIC_URL", "DISCORD_OAUTH_CLIENT_ID", "DISCORD_OAUTH_CLIENT_SECRET", "SESSION_REFRESH_RAILWAY_PROJECT_TOKEN", "SESSION_REFRESH_RAILWAY_SERVICE_ID"].map((key) => [key, process.env[key]]));
   const cookieFile = path.join(tempDir, "refresh-available-cookies.txt");
@@ -241,14 +243,33 @@ test("regular admins never receive secure cookie controls and refresh-capable ad
     SESSION_REFRESH_RAILWAY_SERVICE_ID: "test-service-id",
   });
   try {
-    const credentialManager = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
-    assert.ok(credentialManager.components.flatMap((row) => row.components).some((button) => button.data.label === "Refresh Instagram Cookies"));
+    const authorizedAdmin = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
+    assert.ok(authorizedAdmin.components.flatMap((row) => row.components).some((button) => button.data.label === "Refresh Instagram Cookies"));
   } finally {
     for (const [key, value] of Object.entries(oldEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
   }
+});
+
+test("cookie expiry wording is consistent across refreshable platforms and checkpoints stay distinct", () => {
+  const report = { checkedAt: new Date().toISOString(), rows: [
+    ...["instagram", "facebook", "threads", "youtube"].map((platform) => ({
+      id: `social-${platform}`, name: platform[0].toUpperCase() + platform.slice(1),
+      status: statusService.STATUS.owner, explanation: "Private diagnostic evidence", action: `${platform} cookies need to be refreshed.`,
+    })),
+    { id: "social-tiktok", name: "TikTok", status: statusService.STATUS.owner,
+      explanation: "Private checkpoint detail", action: "Account verification required; owner attention required." },
+  ] };
+  const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
+  const text = JSON.stringify(payload);
+  for (const platform of ["Instagram", "Facebook", "Threads", "Youtube"]) {
+    assert.match(text, new RegExp(`\\*\\*${platform}\\*\\* — Cookies Need Refresh`, "i"));
+    assert.doesNotMatch(text, new RegExp(`\\*\\*${platform}\\*\\* — Owner/Developer Required`, "i"));
+  }
+  assert.match(text, /TikTok.*Account Verification Required/);
+  assert.doesNotMatch(text, /Private diagnostic evidence|Private checkpoint detail/);
 });
 
 test("disabled discovery and Guard are neutral while enabled faults remain attention states", async () => {
