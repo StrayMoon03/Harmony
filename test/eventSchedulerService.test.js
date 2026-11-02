@@ -1751,7 +1751,7 @@ test("Find Discord Event routes Add to Calendar into canonical announcements wit
   assert.deepEqual(native, { guildId, id: "existing-native-add", name: "Existing Event", scheduledStartAt: native.scheduledStartAt });
 });
 
-test("Find Discord Event refuses duplicate linking when the native event is already linked", async () => {
+test("Find Discord Event keeps the already linked response for a genuine one-off event", async () => {
   const guildId = `find-native-duplicate-${Date.now()}`;
   const native = { guildId, id: "already-linked-native", name: "Already Linked", scheduledStartAt: new Date("2099-10-20T23:00:00Z") };
   const eventId = store.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: native.name, eventDate: "2099-10-20", eventAt: native.scheduledStartAt.toISOString(), eventTimezone: "UTC", timezone: "UTC", calendarType: "community", category: "other", discordEventId: native.id, createdBy: "admin" });
@@ -1766,6 +1766,109 @@ test("Find Discord Event refuses duplicate linking when the native event is alre
   assert.match(choose.responses[0].payload.content, /already linked/);
   assert.equal(store.getEvent(guildId, eventId).discord_event_id, native.id);
   assert.equal(store.getDiscordEventReconciliation(guildId, native.id), null);
+});
+
+test("Find Discord Event upgrades a linked legacy one-off into a native recurring series and repairs it idempotently", async () => {
+  const guildId = `find-native-upgrade-${Date.now()}`;
+  const native = {
+    guildId, id: "linked-weekly-native", name: "Saturday K-Drama",
+    scheduledStartAt: new Date("2099-11-14T20:00:00.000Z"),
+    scheduledEndAt: new Date("2099-11-14T22:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-11-14T20:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [6], count: 4 },
+  };
+  let discordCreates = 0;
+  const nativeEvents = new Map([[native.id, native]]);
+  const community = fakeChannel("native-repair-calendar");
+  store.setCalendarChannels(guildId, "stray-native-repair", community.id);
+  const guild = fakeGuild(guildId, [community]);
+  guild.scheduledEvents = { fetch: async (id) => id ? nativeEvents.get(id) : nativeEvents, create: async () => { discordCreates += 1; throw new Error("must not create a Discord event"); } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  await publishMonthlyCalendar(client, guildId, "community", "2099-11");
+  await publishMonthlyCalendar(client, guildId, "community", "2099-12");
+  const oldDate = "2099-11-07";
+  const eventId = store.createCalendarEvent({
+    guildId, calendarChannelId: community.id, title: native.name, eventDate: oldDate,
+    eventAt: "2099-11-07T20:00:00.000Z", eventEndAt: "2099-11-07T22:00:00.000Z",
+    eventTimezone: "America/New_York", timezone: "America/New_York", calendarType: "community",
+    category: "kdrama", calendarEventType: "kdrama", description: "Keep this Harmony description",
+    eventLocation: "Watch room", link: "https://example.test/details", discordEventId: native.id,
+    discordEventOrigin: "adopted", announcementChannelId: "announcements", announcementOffsets: [86400], createdBy: "owner",
+  });
+  const original = store.getEvent(guildId, eventId);
+
+  const reconcile = async () => {
+    const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
+    await handleEventSchedulerInteraction(select);
+    return select.responses[0].payload.content;
+  };
+  const firstMessage = await reconcile();
+  assert.match(firstMessage, /Repaired the existing Harmony event/);
+  let anchor = store.getEventByDiscordId(guildId, native.id);
+  assert.equal(anchor.id, eventId);
+  assert.equal(anchor.recurrence_native_enabled, 2);
+  assert.ok(anchor.recurrence_series_id);
+  assert.equal(anchor.recurrence_index, 0);
+  assert.equal(anchor.event_at, native.scheduledStartAt.toISOString());
+  assert.equal(anchor.event_date, "2099-11-14");
+  assert.equal(anchor.description, original.description);
+  assert.equal(anchor.category, original.category);
+  assert.equal(anchor.calendar_event_type, original.calendar_event_type);
+  assert.equal(anchor.event_location, original.event_location);
+  assert.equal(anchor.link, original.link);
+  let rows = store.listSeriesEvents(guildId, anchor.recurrence_series_id);
+  assert.deepEqual(rows.map((row) => row.event_date), ["2099-11-14", "2099-11-21", "2099-11-28", "2099-12-05"]);
+  assert.equal(rows.length, 4);
+  const announcementsBefore = rows.flatMap((row) => store.listAnnouncements(row.id).filter((item) => item.status === "pending").map((item) => `${row.id}:${item.scheduled_for}`));
+  assert.equal(new Set(announcementsBefore).size, announcementsBefore.length);
+  assert.equal(discordCreates, 0);
+  const november = await community.messages.fetch("native-repair-calendar-message-1");
+  const december = await community.messages.fetch("native-repair-calendar-message-2");
+  assert.match(november.payload.embeds[0].description, /Nov 14|Nov 21|Nov 28/);
+  assert.match(december.payload.embeds[0].description, /Dec 5/);
+
+  const secondMessage = await reconcile();
+  assert.match(secondMessage, /Reconciled/);
+  anchor = store.getEventByDiscordId(guildId, native.id);
+  rows = store.listSeriesEvents(guildId, anchor.recurrence_series_id);
+  assert.equal(rows.length, 4);
+  const announcementsAfter = rows.flatMap((row) => store.listAnnouncements(row.id).filter((item) => item.status === "pending").map((item) => `${row.id}:${item.scheduled_for}`));
+  assert.deepEqual(announcementsAfter, announcementsBefore);
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ?").get(guildId, native.id).count, 1);
+  assert.equal(discordCreates, 0);
+});
+
+test("Find Discord Event repairs missing projections on an already linked native series", async () => {
+  const guildId = `find-native-project-${Date.now()}`;
+  const native = {
+    guildId, id: "linked-native-projection", name: "Linked Friday K-Drama",
+    scheduledStartAt: new Date("2099-12-04T20:00:00.000Z"),
+    scheduledEndAt: new Date("2099-12-04T22:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-12-04T20:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+  };
+  const guild = fakeGuild(guildId, []);
+  guild.scheduledEvents = { fetch: async (id) => id ? native : new Map([[native.id, native]]) };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const anchorId = await store.createCalendarEvent({
+    guildId, title: native.name, eventDate: "2099-12-04", eventAt: native.scheduledStartAt.toISOString(),
+    eventEndAt: native.scheduledEndAt.toISOString(), eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "community", category: "kdrama", discordEventId: native.id, discordEventOrigin: "adopted",
+    recurrenceSeriesId: `existing-native-series-${guildId}`,
+    recurrenceRule: JSON.stringify({ source: "discord", anchorAt: native.scheduledStartAt.toISOString(), startAt: native.scheduledStartAt.toISOString(), endAt: null, frequency: 2, interval: 1, byWeekday: [5], byNWeekday: null, byMonth: null, byMonthDay: null, byYearDay: null, count: 4 }),
+    recurrenceIndex: 0, recurrenceNativeEnabled: 2, createdBy: "owner",
+  });
+  await syncDiscordRecurringSeries(guildId, store.getEvent(guildId, anchorId));
+  const anchor = store.getEvent(guildId, anchorId);
+  getDb().prepare("DELETE FROM scheduled_events WHERE guild_id = ? AND recurrence_series_id = ? AND recurrence_index = 2").run(guildId, anchor.recurrence_series_id);
+  assert.equal(store.listSeriesEvents(guildId, anchor.recurrence_series_id).length, 3);
+  const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(select);
+  assert.match(select.responses[0].payload.content, /Reconciled/);
+  let rows = store.listSeriesEvents(guildId, anchor.recurrence_series_id);
+  assert.deepEqual(rows.map((row) => row.recurrence_index), [0, 1, 2, 3]);
+  await handleEventSchedulerInteraction(fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] }));
+  rows = store.listSeriesEvents(guildId, anchor.recurrence_series_id);
+  assert.deepEqual(rows.map((row) => row.recurrence_index), [0, 1, 2, 3]);
+  assert.equal(store.getEventByDiscordId(guildId, native.id).id, anchorId);
 });
 
 test("Find Discord Event reopens a previously reviewed but unlinked native event", async () => {
