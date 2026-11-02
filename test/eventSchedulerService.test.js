@@ -28,6 +28,7 @@ const {
   sendImmediateCalendarAnnouncement,
   addNativeEventToCalendar,
   upcomingCalendarEvents,
+  nativeSeriesOccurrences,
   syncDiscordRecurringSeries,
   normalizeCalendarAnnouncementBody,
   processScheduledAnnouncements,
@@ -1792,9 +1793,23 @@ test("Find Discord Event upgrades a linked legacy one-off into a native recurrin
     eventTimezone: "America/New_York", timezone: "America/New_York", calendarType: "community",
     category: "kdrama", calendarEventType: "kdrama", description: "Keep this Harmony description",
     eventLocation: "Watch room", link: "https://example.test/details", discordEventId: native.id,
-    discordEventOrigin: "adopted", announcementChannelId: "announcements", announcementOffsets: [86400], createdBy: "owner",
+    discordEventOrigin: "adopted", recurrenceEndDate: "2099-10-31",
+    announcementChannelId: "announcements", announcementOffsets: [86400], createdBy: "owner",
   });
   const original = store.getEvent(guildId, eventId);
+  const staleProjection = nativeSeriesOccurrences({
+    ...original,
+    recurrence_series_id: "would-have-been-adopted",
+    recurrence_native_enabled: 2,
+    recurrence_rule: JSON.stringify({
+      source: "discord", anchorAt: native.scheduledStartAt.toISOString(),
+      startAt: native.recurrenceRule.startAt.toISOString(), endAt: null,
+      frequency: 2, interval: 1, byWeekday: [6], byNWeekday: null,
+      byMonth: null, byMonthDay: null, byYearDay: null, count: 4,
+    }),
+    recurrence_index: 0,
+  });
+  assert.deepEqual(staleProjection, [], "preserving the pre-series Harmony cutoff would reproduce production's zero-occurrence failure");
 
   const reconcile = async () => {
     const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
@@ -1810,6 +1825,7 @@ test("Find Discord Event upgrades a linked legacy one-off into a native recurrin
   assert.equal(anchor.recurrence_index, 0);
   assert.equal(anchor.event_at, native.scheduledStartAt.toISOString());
   assert.equal(anchor.event_date, "2099-11-14");
+  assert.equal(anchor.recurrence_end_date, null);
   assert.equal(anchor.description, original.description);
   assert.equal(anchor.category, original.category);
   assert.equal(anchor.calendar_event_type, original.calendar_event_type);
@@ -1835,6 +1851,57 @@ test("Find Discord Event upgrades a linked legacy one-off into a native recurrin
   assert.deepEqual(announcementsAfter, announcementsBefore);
   assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ?").get(guildId, native.id).count, 1);
   assert.equal(discordCreates, 0);
+});
+
+test("Find Discord Event reports an error instead of success when Discord recurrence projects zero occurrences", async () => {
+  const guildId = `find-native-empty-projection-${Date.now()}`;
+  const native = {
+    guildId, id: "native-invalid-window", name: "Recurring event with invalid window",
+    scheduledStartAt: new Date("2099-12-04T20:00:00.000Z"),
+    scheduledEndAt: new Date("2099-12-04T22:00:00.000Z"),
+    recurrenceRule: {
+      startAt: new Date("2099-12-04T20:00:00.000Z"),
+      endAt: new Date("2099-11-01T00:00:00.000Z"),
+      frequency: 2, interval: 1, byWeekday: [5], count: null,
+    },
+  };
+  const guild = fakeGuild(guildId, []);
+  guild.scheduledEvents = { fetch: async (id) => id ? native : new Map([[native.id, native]]) };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.createCalendarEvent({
+    guildId, title: native.name, eventDate: "2099-11-27", eventAt: "2099-11-27T20:00:00.000Z",
+    eventEndAt: "2099-11-27T22:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "community", category: "kdrama", discordEventId: native.id, discordEventOrigin: "adopted", createdBy: "owner",
+  });
+  const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(select);
+  assert.match(select.responses[0].payload.content, /could not project any occurrences/i);
+  assert.doesNotMatch(select.responses[0].payload.content, /repaired|projected in Harmony/i);
+});
+
+test("native repair preserves a Harmony cutoff that still includes the Discord anchor", async () => {
+  const guildId = `find-native-current-cutoff-${Date.now()}`;
+  const native = {
+    guildId, id: "native-current-cutoff", name: "Bounded weekly K-Drama",
+    scheduledStartAt: new Date("2099-12-04T20:00:00.000Z"),
+    scheduledEndAt: new Date("2099-12-04T22:00:00.000Z"),
+    recurrenceRule: { startAt: new Date("2099-12-04T20:00:00.000Z"), frequency: 2, interval: 1, byWeekday: [5], count: 4 },
+  };
+  const guild = fakeGuild(guildId, []);
+  guild.scheduledEvents = { fetch: async (id) => id ? native : new Map([[native.id, native]]) };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.createCalendarEvent({
+    guildId, title: native.name, eventDate: "2099-12-04", eventAt: native.scheduledStartAt.toISOString(),
+    eventEndAt: native.scheduledEndAt.toISOString(), eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "community", category: "kdrama", discordEventId: native.id, discordEventOrigin: "adopted",
+    recurrenceEndDate: "2099-12-11", createdBy: "owner",
+  });
+  const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
+  await handleEventSchedulerInteraction(select);
+  assert.match(select.responses[0].payload.content, /2 occurrence\(s\) are projected/);
+  const anchor = store.getEventByDiscordId(guildId, native.id);
+  assert.equal(anchor.recurrence_end_date, "2099-12-11");
+  assert.deepEqual(store.listSeriesEvents(guildId, anchor.recurrence_series_id).map((event) => event.event_date), ["2099-12-04", "2099-12-11"]);
 });
 
 test("Find Discord Event repairs missing projections on an already linked native series", async () => {
