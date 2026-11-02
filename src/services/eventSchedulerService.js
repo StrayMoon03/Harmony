@@ -2054,6 +2054,28 @@ async function repairLinkedNativeRecurringEvent(client, guildId, nativeEvent, li
   const startAt = nativeEvent.scheduledStartAt?.toISOString?.() || new Date(nativeEvent.scheduledStartAt).toISOString();
   const endAt = nativeEvent.scheduledEndAt?.toISOString?.() || anchor.event_end_at || null;
   const eventDate = calendarDateInTimezone(startAt, timezone) || startAt.slice(0, 10);
+  const recurrenceRule = wasHealthy ? anchor.recurrence_rule : nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt);
+  const oldCutoffBoundary = parseManagerDate(anchor.recurrence_end_date)
+    ? calendarCutoffBoundary(anchor.recurrence_end_date, timezone)
+    : null;
+  // An old Harmony import cutoff can predate the current Discord occurrence.
+  // It cannot cap this repair: Discord's own count/endAt rule is authoritative.
+  const recurrenceEndDate = oldCutoffBoundary && oldCutoffBoundary.getTime() < Date.parse(startAt)
+    ? null
+    : anchor.recurrence_end_date || null;
+  const projectedPreview = nativeSeriesOccurrences({
+    ...anchor,
+    event_at: startAt,
+    event_end_at: endAt,
+    recurrence_series_id: seriesId,
+    recurrence_rule: recurrenceRule,
+    recurrence_index: 0,
+    recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+    recurrence_end_date: recurrenceEndDate,
+  });
+  if (!projectedPreview.length) {
+    return { error: "Harmony could not project any occurrences from that Discord recurring event. Its recurrence rule or dates need owner review." };
+  }
 
   // Keep the linked Harmony row as the anchor and retain its category,
   // description, location, announcement settings, and other presentation data.
@@ -2065,14 +2087,18 @@ async function repairLinkedNativeRecurringEvent(client, guildId, nativeEvent, li
     event_end_at: endAt,
     event_date: eventDate,
     recurrence_series_id: seriesId,
-    recurrence_rule: wasHealthy ? anchor.recurrence_rule : nativeRecurrencePayload(nativeEvent, nativeEvent.scheduledStartAt),
+    recurrence_rule: recurrenceRule,
     recurrence_index: 0,
     recurrence_native_enabled: NATIVE_RECURRENCE_MODE,
+    recurrence_end_date: recurrenceEndDate,
   });
   if (!repairedAnchor) return { error: "That linked Harmony calendar event is no longer active." };
   if (anchor.id !== linked.id) store.updateEvent(guildId, linked.id, { discord_event_id: null });
 
   const occurrences = await syncDiscordRecurringSeries(guildId, repairedAnchor);
+  if (!occurrences.length) {
+    return { error: "Harmony could not project any occurrences from that Discord recurring event. Its recurrence rule or dates need owner review." };
+  }
   repairedAnchor = store.getEvent(guildId, repairedAnchor.id);
   // Projection updates existing occurrence dates in place. Rebuild generated
   // reminders only for rows whose schedule moved; custom/manual rows and
