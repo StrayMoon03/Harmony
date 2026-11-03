@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const store = require("../src/stores/eventSchedulerStore");
 const adapter = require("../src/services/calendarDiscoverySources/strayKidsJypeScheduleAdapter");
-const { runDiscovery, windowFor, fetchWithLimits } = require("../src/services/calendarDiscoveryService");
+const { runDiscovery, windowFor, fetchWithLimits, aggregateDiscoveryResults, formatDiscoverySummary } = require("../src/services/calendarDiscoveryService");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
 
 function response(payload, status = 200) {
@@ -43,17 +43,47 @@ test("automatic discovery is idempotent, updates open candidates, and never reop
   const fetchImpl = async () => response({ data: records });
   const first = await runDiscovery(client, { now: new Date("2026-10-14T12:00:00Z"), fetchImpl });
   assert.equal(first.results[0].newCount, 2);
+  assert.deepEqual(first.results[0].recordResults.map((item) => item.classification), ["new_candidate", "new_candidate", "outside_discovery_window"]);
+  assert.equal(first.results[0].classifications.outside_discovery_window, 1);
   assert.equal(store.listCalendarCandidates(guildId).length, 2);
   assert.equal(store.listEvents(guildId).length, 0);
   const repeat = await runDiscovery(client, { now: new Date("2026-10-14T13:00:00Z"), fetchImpl });
   assert.equal(repeat.results[0].newCount, 0);
+  assert.deepEqual(repeat.results[0].recordResults.map((item) => item.classification), ["already_known_unchanged", "already_known_unchanged", "outside_discovery_window"]);
   assert.equal(store.listCalendarCandidates(guildId).length, 2);
   const candidate = store.listCalendarCandidates(guildId).find((item) => item.discovery_key.endsWith(":201"));
   store.decideCalendarCandidate(guildId, candidate.id, "dismissed", "admin");
   const changed = await runDiscovery(client, { now: new Date("2026-10-14T14:00:00Z"), fetchImpl: async () => response({ data: [{ ...records[0], title: "Show A (rescheduled)" }, records[1]] }) });
   assert.equal(changed.results[0].newCount, 0);
+  assert.deepEqual(changed.results[0].recordResults.map((item) => item.classification), ["admin_decision_preserved", "already_known_unchanged"]);
+  assert.equal(changed.results[0].recordResults[0].reason, "dismissed");
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "dismissed");
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).title, "Show A");
+});
+
+test("discovery classifies normalization rejects and candidate updates with safe reason codes", async () => {
+  const guildId = `discovery-reasons-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const records = [
+    { id: "301", title: "New show", category: "SHOW", isAllDay: true, scheduledDate: "2026-10-20" },
+    { id: "302", title: "No date", category: "SHOW", isAllDay: true },
+    { id: "303", title: "Anniversary", category: "ANNIVERSARY", isAllDay: true, scheduledDate: "2026-10-21" },
+  ];
+  const first = await runDiscovery(client, { now: new Date("2026-10-14T12:00:00Z"), fetchImpl: async () => response({ schedules: records }) });
+  assert.deepEqual(first.results[0].recordResults.map((item) => [item.classification, item.reason]), [
+    ["new_candidate", "candidate-created"],
+    ["normalization_rejected", "missing-date"],
+    ["normalization_rejected", "excluded-category"],
+  ]);
+  assert.deepEqual(first.results[0].normalizationReasons, { "missing-date": 1, "excluded-category": 1 });
+  const updated = await runDiscovery(client, { now: new Date("2026-10-14T13:00:00Z"), fetchImpl: async () => response({ schedules: [{ ...records[0], title: "New show (updated)" }] }) });
+  assert.equal(updated.results[0].recordResults[0].classification, "updated_candidate");
+  assert.equal(updated.results[0].recordResults[0].reason, "open-candidate-source-changed");
+  const summary = formatDiscoverySummary(aggregateDiscoveryResults([first.results[0], updated.results[0]]));
+  assert.match(summary, /normalization rejected 2/);
+  assert.match(summary, /missing-date: 1, excluded-category: 1/);
+  assert.doesNotMatch(summary, /New show|Anniversary|No date/);
 });
 
 test("source endpoint uses the official structured contract", async () => {
@@ -67,6 +97,10 @@ test("source endpoint uses the official structured contract", async () => {
   assert.match(requested.url, /startDate=2026-10-14T00%3A00%3A00\.000Z/);
   assert.match(requested.url, /endDate=2027-02-11T23%3A59%3A59\.999Z/);
   assert.equal(requested.options.headers.accept, "application/json");
+});
+
+test("unexpected JYP response shapes fail visibly instead of appearing as an empty schedule", async () => {
+  await assert.rejects(adapter.fetchRecords({ startDate: "2026-10-14", endDate: "2027-02-11", fetchImpl: async () => response({ unexpected: { value: 1 } }) }), /did not contain a recognized record list/);
 });
 
 test("HTTP wrapper exposes upstream validators to source adapters", async () => {

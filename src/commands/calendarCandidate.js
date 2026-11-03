@@ -1,6 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { submitCalendarCandidate, discoveredCandidatePickerPayload, nativeReconciliationPickerPayload } = require("../services/eventSchedulerService");
-const { runDiscovery } = require("../services/calendarDiscoveryService");
+const { runDiscovery, aggregateDiscoveryResults, formatDiscoverySummary } = require("../services/calendarDiscoveryService");
 
 const data = new SlashCommandBuilder()
   .setName("harmony-calendar")
@@ -42,10 +42,8 @@ async function execute(interaction) {
       await interaction.editReply("A discovery check is already running. Please try again shortly.");
       return;
     }
-    const totals = result.results.reduce((sum, item) => ({
-      fetched: sum.fetched + (item.fetched || 0), newCount: sum.newCount + (item.newCount || 0), updated: sum.updated + (item.updated || 0), duplicate: sum.duplicate + (item.duplicate || 0), skipped: sum.skipped + (item.skipped || 0), failed: sum.failed + (item.ok ? 0 : 1),
-    }), { fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0, failed: 0 });
-    await interaction.editReply(`Official schedule check complete. Fetched ${totals.fetched}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; skipped ${totals.skipped}${totals.failed ? `; failed ${totals.failed}` : ""}. No calendar events were created automatically.`);
+    const totals = aggregateDiscoveryResults(result.results);
+    await interaction.editReply(formatDiscoverySummary(totals));
     return;
   }
   const link = interaction.options.getString("link", true).trim();

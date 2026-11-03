@@ -27,7 +27,7 @@ function recordArray(payload) {
   for (const key of ["data", "schedules", "items", "results"]) {
     if (Array.isArray(payload?.[key])) return payload[key];
   }
-  return [];
+  return null;
 }
 
 function sourceUrlFor(record) {
@@ -102,7 +102,13 @@ async function fetchRecords({ startDate, endDate, fetchImpl = global.fetch, sign
   if (response?.status === 304) return { url, records: [], notModified: true, etag: null, lastModified: null };
   if (!response?.ok) throw new Error(`JYP schedule request failed (${response?.status || "unknown"})`);
   const payload = await response.json();
-  return { url, records: recordArray(payload), notModified: false, etag: response.headers?.get?.("etag") || null, lastModified: response.headers?.get?.("last-modified") || null };
+  const records = recordArray(payload);
+  if (!records) {
+    const error = new Error("JYP schedule response did not contain a recognized record list");
+    error.code = "unexpected-response-shape";
+    throw error;
+  }
+  return { url, records, notModified: false, etag: response.headers?.get?.("etag") || null, lastModified: response.headers?.get?.("last-modified") || null };
 }
 
 module.exports = {
