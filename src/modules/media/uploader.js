@@ -723,7 +723,7 @@ const DISCORD_MAX_ATTACHMENTS = 10;
  * @param {Array<{ path: string }>} files
  * @param {string|{ header: string, footer: string, buttonLabel?: string, buttonUrl?: string }} cardText
  * @param {string|number} [rawDirOrColor]
- * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean }} [options]
+ * @param {{ embedColor?: number, ensureAppleCompatibleVideo?: boolean, safeVideoFileNamePrefix?: string }} [options]
  * @returns {Promise<string[]>} Discord message IDs created by Harmony
  */
 async function uploadMedia(
@@ -760,8 +760,13 @@ async function uploadMedia(
 
   /** @type {string[]} */
   const paths = [];
+  const attachmentNames = [];
   /** @type {string[]} */
   const sentMessageIds = [];
+  const safeVideoFileNamePrefix = String(options.safeVideoFileNamePrefix || "")
+    .replace(/[^a-z0-9_-]/gi, "")
+    .slice(0, 48);
+  let safeVideoFileIndex = 0;
 
   try {
     for (const file of files) {
@@ -775,6 +780,12 @@ async function uploadMedia(
       }
 
       paths.push(ready);
+      if (safeVideoFileNamePrefix && VIDEO_EXT.has(path.extname(ready).toLowerCase())) {
+        safeVideoFileIndex += 1;
+        attachmentNames.push(`${safeVideoFileNamePrefix}-${safeVideoFileIndex}.mp4`);
+      } else {
+        attachmentNames.push(null);
+      }
     }
 
     if (paths.length === 0) {
@@ -810,7 +821,10 @@ async function uploadMedia(
 
       /** @type {import("discord.js").MessageReplyOptions} */
       const payload = {
-        files: batch,
+        files: batch.map((filePath, batchIndex) => {
+          const name = attachmentNames[i * DISCORD_MAX_ATTACHMENTS + batchIndex];
+          return name ? { attachment: filePath, name } : filePath;
+        }),
         allowedMentions: { repliedUser: false },
       };
 

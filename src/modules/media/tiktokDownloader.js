@@ -734,9 +734,25 @@ function shouldKeepOriginalTikTokPreview(downloadResult, isPhotoPost) {
   return !isPhotoPost && downloadResult?.hasAudio === false;
 }
 
+function requiresTikTokStreamingFallback(durationSeconds) {
+  return Number(durationSeconds) >= 90;
+}
+
+function getTikTokUploadOptions(isPhotoPost) {
+  return {
+    embedColor: 0xff4fa3,
+    ...(isPhotoPost ? {} : {
+      ensureAppleCompatibleVideo: true,
+      safeVideoFileNamePrefix: "harmony-tiktok-video",
+    }),
+  };
+}
+
 module.exports = {
   downloadTikTokMedia,
   shouldKeepOriginalTikTokPreview,
+  requiresTikTokStreamingFallback,
+  getTikTokUploadOptions,
   isTikTokPhotoPost,
   fileHasAudioStream,
   isYtDlpExtractionFailure,

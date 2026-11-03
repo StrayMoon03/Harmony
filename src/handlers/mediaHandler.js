@@ -17,6 +17,8 @@ const {
 const {
   downloadTikTokMedia,
   shouldKeepOriginalTikTokPreview,
+  requiresTikTokStreamingFallback,
+  getTikTokUploadOptions,
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
 const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("../modules/media/formatter");
@@ -716,7 +718,7 @@ async function processMediaMessage(message, lifecycle) {
 
       // TikTok photo-mode posts can expose the soundtrack duration in
       // metadata. That duration does not make the post a long video.
-      if (!isPhotoPost && durationSeconds >= 90) {
+      if (!isPhotoPost && requiresTikTokStreamingFallback(durationSeconds)) {
         throw new Error("TikTok video requires its original platform link and cannot be replaced safely.");
       }
 
@@ -773,7 +775,7 @@ async function processMediaMessage(message, lifecycle) {
         classification.files,
         cardText,
         downloadResult.rawDir,
-        { embedColor: 0xff4fa3 }
+        getTikTokUploadOptions(isPhotoPost)
       );
       await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
