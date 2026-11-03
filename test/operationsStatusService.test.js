@@ -10,7 +10,7 @@ process.env.YOUTUBE_COOKIES = path.join(tempDir, "missing-youtube-cookies.txt");
 
 const { PermissionFlagsBits } = require("discord.js");
 const { getDb, closeDb } = require("../src/db/sqlite");
-const statusService = require("../src/services/operationsStatusService");
+let statusService = require("../src/services/operationsStatusService");
 const guardStore = require("../src/stores/communityGuardStore");
 const eventStore = require("../src/stores/eventSchedulerStore");
 const statusCommand = require("../src/commands/status");
@@ -32,6 +32,68 @@ function guild(id = "guild-status") {
     channels: { cache: new Map(), fetch: async () => null },
   };
 }
+
+function reloadStatusService() {
+  closeDb();
+  delete require.cache[require.resolve("../src/stores/socialHealthStore")];
+  delete require.cache[require.resolve("../src/services/operationsStatusService")];
+  statusService = require("../src/services/operationsStatusService");
+  return statusService;
+}
+
+test.beforeEach(() => {
+  getDb().prepare("DELETE FROM social_health_state").run();
+});
+
+test("social health signals survive a database close and status-service reload", async () => {
+  const now = new Date().toISOString();
+  statusService.recordSocialSuccess("facebook", now);
+  statusService.recordSocialAuthFailure("facebook", now, "session");
+  assert.equal(getDb().prepare("SELECT last_success_at FROM social_health_state WHERE platform = 'facebook'").get().last_success_at, null);
+  for (const platform of ["instagram", "youtube", "threads"]) statusService.recordSocialSuccess(platform, now);
+
+  statusService = reloadStatusService();
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
+  assert.match((await statusService.checkSocial("facebook")).action, /Facebook cookies need to be refreshed/);
+  for (const platform of ["instagram", "youtube", "threads"]) {
+    assert.equal((await statusService.checkSocial(platform)).status, statusService.STATUS.healthy, platform);
+  }
+
+  statusService.recordSocialSuccess("facebook", new Date().toISOString());
+  statusService = reloadStatusService();
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.healthy);
+});
+
+test("expired persisted success returns Unable to Verify after restart", async () => {
+  const expiredAt = new Date(Date.now() - statusService.SOCIAL_SUCCESS_TTL_MS - 1).toISOString();
+  statusService.recordSocialSuccess("instagram", expiredAt);
+  statusService = reloadStatusService();
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.unknown);
+});
+
+test("checkpoint state survives restart and ordinary success does not clear it", async () => {
+  const checkpointAt = "2026-11-02T12:00:00.000Z";
+  statusService.recordSocialAuthFailure("youtube", checkpointAt, "owner");
+  statusService.recordSocialSuccess("youtube", new Date().toISOString());
+  statusService = reloadStatusService();
+  const row = await statusService.checkSocial("youtube");
+  assert.equal(row.status, statusService.STATUS.owner);
+  assert.match(row.action, /Owner attention required/);
+  const saved = getDb().prepare("SELECT state, failure_kind, last_success_at FROM social_health_state WHERE platform = 'youtube'").get();
+  assert.equal(saved.state, "failure");
+  assert.equal(saved.failure_kind, "owner");
+  assert.ok(saved.last_success_at);
+  assert.equal(getDb().prepare("SELECT updated_at FROM social_health_state WHERE platform = 'youtube'").get().updated_at, checkpointAt);
+});
+
+test("social health persistence stores only allowlisted state and normalized timestamps", () => {
+  statusService.recordSocialAuthFailure("facebook", "private auth error COOKIE_SECRET_TOKEN", "session: raw exception");
+  const savedRows = getDb().prepare("SELECT * FROM social_health_state").all();
+  const saved = JSON.stringify(savedRows);
+  assert.doesNotMatch(saved, /private auth error|COOKIE_SECRET|TOKEN|raw exception/);
+  assert.match(saved, /session/);
+  assert.doesNotMatch(saved, /private auth error/);
+});
 
 test("fresh status reports healthy Discord and database checks independently", async () => {
   const rows = await statusService.collectStatus({ client: client(), guild: guild() });

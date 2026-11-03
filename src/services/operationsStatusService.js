@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const { getDb } = require("../db/sqlite");
+const socialHealthStore = require("../stores/socialHealthStore");
 const eventStore = require("../stores/eventSchedulerStore");
 const guardStore = require("../stores/communityGuardStore");
 const guardService = require("./communityGuardService");
@@ -23,8 +24,6 @@ const SOCIAL = Object.freeze({
 });
 const COOKIE_SERVICES = new Set(["instagram", "threads", "facebook", "youtube"]);
 const SOCIAL_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
-const authFailures = new Map();
-const socialSuccesses = new Map();
 
 function isExplicitAuthenticationFailure(error) {
   const text = [error?.message, error?.stderr, typeof error === "string" ? error : ""]
@@ -105,19 +104,24 @@ async function resolveAdminCapabilities(context = {}) {
 
 function recordSocialAuthFailure(platform, at = new Date().toISOString(), kind = "session") {
   const key = String(platform || "").toLowerCase();
-  if (COOKIE_SERVICES.has(key)) {
-    socialSuccesses.delete(key);
-    authFailures.set(key, { at, kind: kind === "owner" ? "owner" : "session" });
+  if (!SOCIAL[key]) return;
+  try {
+    socialHealthStore.recordFailure(key, kind === "owner" ? "owner" : "session", at);
+  } catch {
+    // A health-signal write must not break the media failure/reporting path.
   }
 }
 
 function recordSocialSuccess(platform, at = new Date().toISOString()) {
   const key = String(platform || "").toLowerCase();
   if (!SOCIAL[key]) return;
-  // Ordinary media success may clear a stale login failure, but a platform
-  // security checkpoint still needs the owner to resolve it explicitly.
-  if (authFailures.get(key)?.kind !== "owner") authFailures.delete(key);
-  socialSuccesses.set(key, at);
+  // The store preserves an unresolved owner/checkpoint failure while recording
+  // the successful retrieval for diagnostics. Other stale failures are cleared.
+  try {
+    socialHealthStore.recordSuccess(key, at);
+  } catch {
+    // A health-signal write must not turn a successful media request into a failure.
+  }
 }
 
 function sessionPath(platform) {
@@ -148,24 +152,32 @@ async function sessionConfigured(platform) {
 async function checkSocial(platform) {
   const name = SOCIAL[platform];
   if (!name) return statusRow(`social-${platform}`, String(platform), STATUS.unknown, "This platform is not supported.");
-  const authFailure = authFailures.get(platform);
-  if (authFailure?.kind === "owner") return statusRow(
+  const health = socialHealthStore.get(platform);
+  if (health?.state === "failure" && health.failure_kind === "owner") return statusRow(
     `social-${platform}`,
     name,
     STATUS.owner,
     "The platform returned a security checkpoint or verification page. Harmony cannot complete that account check.",
     "Owner attention required; resolve the account check with the platform.",
-    authFailure.at
+    health.updated_at
   );
-  if (authFailure) return statusRow(
+  if (health?.state === "failure" && health.failure_kind === "session" && COOKIE_SERVICES.has(platform)) return statusRow(
     `social-${platform}`,
     name,
     STATUS.attention,
     `${name} cookies need to be refreshed. A media request reported that sign-in or a renewed session is required.`,
     `${name} cookies need to be refreshed.`,
-    authFailure.at
+    health.updated_at
   );
-  const successAt = socialSuccesses.get(platform);
+  if (health?.state === "failure" && health.failure_kind === "session") return statusRow(
+    `social-${platform}`,
+    name,
+    STATUS.attention,
+    "A media request reported an authentication problem.",
+    "Try the platform again; if the problem continues, ask the owner.",
+    health.updated_at
+  );
+  const successAt = health?.last_success_at;
   const successAge = successAt ? Date.now() - new Date(successAt).getTime() : Infinity;
   if (Number.isFinite(successAge) && successAge >= 0 && successAge <= SOCIAL_SUCCESS_TTL_MS) {
     return statusRow(
