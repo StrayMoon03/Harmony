@@ -1152,11 +1152,23 @@ async function syncDiscordRecurringSeries(guildId, anchor, until = null) {
     if (Number(occurrence.occurrenceIndex) === Number(anchor.recurrence_index)) continue;
     const existing = store.getSeriesEvent(guildId, anchor.recurrence_series_id, occurrence.occurrenceIndex);
     if (existing) {
-      if (existing.event_at !== occurrence.eventAt || existing.event_end_at !== occurrence.eventEndAt || existing.event_date !== occurrenceDate(occurrence)) {
+      // A repair can inherit stale projected rows from an older/partially
+      // adopted series. Keep occurrence-specific descriptive metadata, but
+      // reconcile the fields that determine which calendar query can find and
+      // correctly place the row. In particular, a row with the wrong
+      // calendar_type is invisible to the Youtiful Stays monthly query even
+      // when its series index and dates are otherwise correct.
+      const projectionChanges = {
+        event_at: occurrence.eventAt,
+        event_end_at: occurrence.eventEndAt,
+        event_date: occurrenceDate(occurrence),
+        calendar_type: anchor.calendar_type,
+        timezone: anchor.timezone,
+        event_timezone: anchor.event_timezone,
+      };
+      if (Object.entries(projectionChanges).some(([key, value]) => existing[key] !== value)) {
         store.updateEvent(guildId, existing.id, {
-          event_at: occurrence.eventAt,
-          event_end_at: occurrence.eventEndAt,
-          event_date: occurrenceDate(occurrence),
+          ...projectionChanges,
         });
       }
       continue;
@@ -2121,8 +2133,41 @@ async function repairLinkedNativeRecurringEvent(client, guildId, nativeEvent, li
     ...previousRows.map((event) => event.event_date),
     ...occurrences.map((occurrence) => calendarDateInTimezone(occurrence.eventAt, timezone) || occurrence.eventAt.slice(0, 10)),
   ]);
-  for (const date of affectedDates) await refreshPublishedCalendar(client, guildId, repairedAnchor.calendar_type, date).catch(() => {});
-  return { repaired: true, anchor: repairedAnchor, occurrences, wasHealthy };
+  const refreshedMonths = new Set();
+  const refreshErrors = [];
+  for (const date of affectedDates) {
+    try {
+      if (await refreshPublishedCalendar(client, guildId, repairedAnchor.calendar_type, date)) {
+        refreshedMonths.add(monthKeyFromDate(date));
+      }
+    } catch (error) {
+      refreshErrors.push(monthKeyFromDate(date));
+      console.error("Published calendar refresh after native recurring repair failed:", error);
+    }
+  }
+
+  // Do not report a repair as successful just because Discord's recurrence
+  // rule generated dates. Verify that the active persisted rows are returned
+  // by Harmony's normal upcoming-calendar query after projection/refresh.
+  const expectedIndexes = new Set(occurrences.map((item) => Number(item.occurrenceIndex)));
+  const persistedRows = store.listSeriesEvents(guildId, seriesId)
+    .filter((item) => !item.cancelled_at && expectedIndexes.has(Number(item.recurrence_index)));
+  const calendarVisibleRows = upcomingCalendarEvents(guildId, repairedAnchor.calendar_type)
+    .filter((item) => item.recurrence_series_id === seriesId && expectedIndexes.has(Number(item.recurrence_index)));
+  const diagnostics = {
+    generated: occurrences.length,
+    persisted: new Set(persistedRows.map((item) => Number(item.recurrence_index))).size,
+    calendarVisible: new Set(calendarVisibleRows.map((item) => Number(item.recurrence_index))).size,
+    refreshedMonths: [...refreshedMonths].filter(Boolean).sort(),
+    refreshErrors: [...new Set(refreshErrors)].filter(Boolean).sort(),
+  };
+  if (!diagnostics.calendarVisible) {
+    return {
+      error: `Harmony generated ${diagnostics.generated} occurrence(s), persisted ${diagnostics.persisted}, but 0 are visible in the upcoming ${repairedAnchor.calendar_type === "community" ? "Youtiful Stays" : "Stray Kids"} calendar. Calendar refresh could not complete the repair.`,
+      diagnostics,
+    };
+  }
+  return { repaired: true, anchor: repairedAnchor, occurrences, wasHealthy, diagnostics };
 }
 
 async function beginNativeEventReconciliation(guild, guildId, nativeId, client = null) {
@@ -2136,8 +2181,8 @@ async function beginNativeEventReconciliation(guild, guildId, nativeId, client =
     return {
       ...repaired,
       message: repaired.wasHealthy
-        ? `Reconciled **${repaired.anchor.title}** with its Discord recurring series. ${repaired.occurrences.length} occurrence(s) are projected in Harmony.`
-        : `Repaired the existing Harmony event **${repaired.anchor.title}** as a Discord recurring series. ${repaired.occurrences.length} occurrence(s) are projected in Harmony.`,
+        ? `Reconciled **${repaired.anchor.title}** with its Discord recurring series. Generated ${repaired.diagnostics.generated}; persisted ${repaired.diagnostics.persisted}; upcoming-calendar visible ${repaired.diagnostics.calendarVisible}; refreshed ${repaired.diagnostics.refreshedMonths.length} published month(s).`
+        : `Repaired the existing Harmony event **${repaired.anchor.title}** as a Discord recurring series. Generated ${repaired.diagnostics.generated}; persisted ${repaired.diagnostics.persisted}; upcoming-calendar visible ${repaired.diagnostics.calendarVisible}; refreshed ${repaired.diagnostics.refreshedMonths.length} published month(s).`,
     };
   }
   if (linked) return { error: `That Discord Scheduled Event is already linked to **${linked.title}**. Use the Schedule Manager's Edit → Announcements action to configure or change its reminders.` };

@@ -1853,6 +1853,126 @@ test("Find Discord Event upgrades a linked legacy one-off into a native recurrin
   assert.equal(discordCreates, 0);
 });
 
+test("Find Discord Event repairs stale projected calendar rows and publishes visible K-Drama occurrences", async () => {
+  const guildId = `find-native-calendar-visible-${Date.now()}`;
+  const nativeId = "kdrama-saturday-discord-series";
+  const native = {
+    guildId,
+    id: nativeId,
+    name: "Kdrama with Us! Europe and US EST friendly",
+    scheduledStartAt: new Date("2026-11-07T19:00:00.000Z"),
+    scheduledEndAt: new Date("2026-11-07T21:00:00.000Z"),
+    recurrenceRule: {
+      startAt: new Date("2026-10-31T18:00:00.000Z"),
+      frequency: 2,
+      interval: 1,
+      byWeekday: [6],
+      count: 6,
+    },
+  };
+  let discordCreates = 0;
+  const community = fakeChannel(`community-${guildId}`);
+  const strayKids = fakeChannel(`stray-kids-${guildId}`);
+  store.setCalendarChannels(guildId, strayKids.id, community.id);
+  const guild = fakeGuild(guildId, [community, strayKids]);
+  guild.scheduledEvents = {
+    fetch: async (id) => id ? native : new Map([[native.id, native]]),
+    create: async () => { discordCreates += 1; throw new Error("reconciliation must not create a Discord event"); },
+  };
+  const client = { guilds: { cache: new Map([[guildId, guild]]), fetch: async () => guild } };
+  const seriesId = `stale-native-series-${guildId}`;
+  const oldRule = JSON.stringify({
+    source: "discord", anchorAt: "2026-10-31T18:00:00.000Z", startAt: "2026-10-31T18:00:00.000Z",
+    endAt: null, frequency: 2, interval: 1, byWeekday: [6], byNWeekday: null,
+    byMonth: null, byMonthDay: null, byYearDay: null, count: 6,
+  });
+  const anchorId = store.createCalendarEvent({
+    guildId, title: native.name, eventDate: "2026-10-31", eventAt: "2026-10-31T18:00:00.000Z",
+    eventEndAt: "2026-10-31T20:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York",
+    calendarType: "community", category: "kdrama", calendarEventType: "kdrama",
+    description: "Keep the existing series description", discordEventId: nativeId, discordEventOrigin: "adopted",
+    recurrenceSeriesId: seriesId, recurrenceRule: oldRule, recurrenceIndex: 0,
+    recurrenceEndDate: "2026-10-26", recurrenceNativeEnabled: 2, createdBy: "owner",
+  });
+
+  // Reproduce the stale historical rows: projection indices exist, but the
+  // wrong calendar_type excludes them from the Youtiful Stays SQL query, and
+  // their old date/time fields would keep them out of their actual months.
+  for (let index = 1; index < 6; index += 1) {
+    store.createCalendarEvent({
+      guildId, title: native.name, eventDate: "2026-10-31", eventAt: "2026-10-31T18:00:00.000Z",
+      eventEndAt: "2026-10-31T20:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York",
+      calendarType: "stray_kids", category: "kdrama", calendarEventType: "kdrama",
+      description: "Occurrence-specific details remain intact", recurrenceSeriesId: seriesId,
+      recurrenceRule: oldRule, recurrenceIndex: index, recurrenceNativeEnabled: 0, createdBy: "owner",
+    });
+  }
+
+  // Publish the same monthly messages the repair is expected to refresh.
+  await publishMonthlyCalendar(client, guildId, "community", "2026-11");
+  await publishMonthlyCalendar(client, guildId, "community", "2026-12");
+  assert.equal(upcomingCalendarEvents(guildId, "community", new Date("2026-11-03T12:00:00.000Z"))
+    .filter((event) => event.recurrence_series_id === seriesId).length, 0);
+
+  const reconcile = async () => {
+    const select = fakeInteraction({
+      customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [nativeId],
+    });
+    await handleEventSchedulerInteraction(select);
+    return select.responses[0].payload.content;
+  };
+  const firstResult = await reconcile();
+  assert.match(firstResult, /Generated 6; persisted 6; upcoming-calendar visible 6; refreshed 2 published month/);
+
+  const anchor = store.getEventByDiscordId(guildId, nativeId);
+  assert.equal(anchor.id, anchorId, "repair must retain the existing linked anchor");
+  assert.equal(anchor.recurrence_end_date, null, "the stale pre-anchor cutoff must not hide Discord's current series");
+  assert.equal(anchor.description, "Keep the existing series description");
+  let rows = store.listSeriesEvents(guildId, seriesId);
+  assert.equal(rows.length, 6);
+  assert.deepEqual(rows.map((row) => row.event_date), [
+    "2026-11-07", "2026-11-14", "2026-11-21", "2026-11-28", "2026-12-05", "2026-12-12",
+  ]);
+  for (const row of rows) {
+    assert.equal(row.calendar_type, "community");
+    assert.equal(row.cancelled_at, null);
+    assert.equal(row.recurrence_series_id, seriesId);
+    assert.ok(Number.isInteger(Number(row.recurrence_index)));
+  }
+  assert.equal(rows[1].description, "Occurrence-specific details remain intact");
+
+  const upcoming = upcomingCalendarEvents(guildId, "community", new Date("2026-11-03T12:00:00.000Z"))
+    .filter((event) => event.recurrence_series_id === seriesId);
+  assert.equal(upcoming.length, 6);
+  assert.deepEqual(upcoming.map((event) => event.event_date), rows.map((row) => row.event_date));
+  const novemberOutput = buildYoutifulCalendarMessages("2026-11", upcoming.filter((event) => event.event_date.startsWith("2026-11")), Date.parse("2026-11-03T12:00:00Z"))[0].embeds[0].description;
+  const decemberOutput = buildYoutifulCalendarMessages("2026-12", upcoming.filter((event) => event.event_date.startsWith("2026-12")), Date.parse("2026-11-03T12:00:00Z"))[0].embeds[0].description;
+  assert.match(novemberOutput, /Nov 7/);
+  assert.match(novemberOutput, /Nov 14/);
+  assert.match(novemberOutput, /Nov 21/);
+  assert.match(novemberOutput, /Nov 28/);
+  assert.match(decemberOutput, /Dec 5/);
+  assert.match(decemberOutput, /Dec 12/);
+
+  const publishedNovember = await community.messages.fetch(`community-${guildId}-message-1`);
+  const publishedDecember = await community.messages.fetch(`community-${guildId}-message-2`);
+  assert.match(publishedNovember.payload.embeds[0].description, /Nov 14/);
+  assert.match(publishedDecember.payload.embeds[0].description, /Dec 12/);
+
+  const oneOffId = store.createCalendarEvent({
+    guildId, title: "Unrelated one-off", eventDate: "2026-11-10", eventAt: "2026-11-10T20:00:00.000Z",
+    eventTimezone: "America/New_York", timezone: "America/New_York", calendarType: "community", category: "chat_only", createdBy: "owner",
+  });
+  const oneOffBefore = store.getEvent(guildId, oneOffId);
+  const secondResult = await reconcile();
+  assert.match(secondResult, /Reconciled/);
+  rows = store.listSeriesEvents(guildId, seriesId);
+  assert.equal(rows.length, 6, "repeated reconciliation must not duplicate Harmony occurrence rows");
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM scheduled_events WHERE guild_id = ? AND discord_event_id = ?").get(guildId, nativeId).count, 1);
+  assert.equal(discordCreates, 0);
+  assert.deepEqual(store.getEvent(guildId, oneOffId), oneOffBefore, "unrelated one-off events remain unchanged");
+});
+
 test("Find Discord Event reports an error instead of success when Discord recurrence projects zero occurrences", async () => {
   const guildId = `find-native-empty-projection-${Date.now()}`;
   const native = {
@@ -1898,7 +2018,7 @@ test("native repair preserves a Harmony cutoff that still includes the Discord a
   });
   const select = fakeInteraction({ customId: "harmony-calendar:reconcile-select", kind: "select", guildId, guild, client, values: [native.id] });
   await handleEventSchedulerInteraction(select);
-  assert.match(select.responses[0].payload.content, /2 occurrence\(s\) are projected/);
+  assert.match(select.responses[0].payload.content, /Generated 2; persisted 2; upcoming-calendar visible 1/);
   const anchor = store.getEventByDiscordId(guildId, native.id);
   assert.equal(anchor.recurrence_end_date, "2099-12-11");
   assert.deepEqual(store.listSeriesEvents(guildId, anchor.recurrence_series_id).map((event) => event.event_date), ["2099-12-04", "2099-12-11"]);
