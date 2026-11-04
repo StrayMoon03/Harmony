@@ -330,7 +330,7 @@ test("cookie expiry wording is consistent across refreshable platforms and check
     assert.match(text, new RegExp(`\\*\\*${platform}\\*\\* — Cookies Need Refresh`, "i"));
     assert.doesNotMatch(text, new RegExp(`\\*\\*${platform}\\*\\* — Owner/Developer Required`, "i"));
   }
-  assert.match(text, /TikTok.*Account Verification Required/);
+  assert.match(text, /TikTok.*Owner\/Developer Required/);
   assert.doesNotMatch(text, /Private diagnostic evidence|Private checkpoint detail/);
 });
 

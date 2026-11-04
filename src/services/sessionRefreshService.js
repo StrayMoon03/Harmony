@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
-const { getAdminCapabilities, resolveAdminCapabilities, checkSocial, isCookieRefreshRequired } = require("./operationsStatusService");
+const { getAdminCapabilities, resolveAdminCapabilities, checkSocial, isCookieRefreshRequired, isAccountVerificationRequired } = require("./operationsStatusService");
 const auditStore = require("../stores/operationsAuditStore");
 const requestStore = require("../stores/credentialRefreshStore");
 const refreshConfig = require("./sessionRefreshConfig");
@@ -61,8 +61,9 @@ function createRefreshWorkflow({
     else audit.recordAdminOperation(entry);
   }
 
-  function issue(context, service) {
+  function issue(context, service, maintenanceType = "cookie_refresh") {
     if (!SERVICES.has(service)) return { ok: false, reason: "invalid_request" };
+    if (!["cookie_refresh", "account_verification"].includes(maintenanceType)) return { ok: false, reason: "invalid_request" };
     if (!authorized(context)) return { ok: false, reason: "unauthorized" };
     if (!infrastructureAvailable(service)) {
       recordRequestOutcome(context, service, "unavailable");
@@ -87,6 +88,7 @@ function createRefreshWorkflow({
       guildId: context.guild.id,
       actorId: context.userId,
       service,
+      maintenanceType,
       createdAt,
       expiresAt,
     });
@@ -145,9 +147,10 @@ const refreshWorkflow = createRefreshWorkflow();
 
 async function handleRefreshInteraction(interaction) {
   if (!interaction.isButton?.()) return false;
-  const match = String(interaction.customId || "").match(/^harmony-session-refresh:(instagram|threads|facebook|youtube)$/);
+  const match = String(interaction.customId || "").match(/^harmony-(session-refresh|account-maintenance):(instagram|threads|facebook|youtube)$/);
   if (!match) return false;
-  const service = match[1];
+  const [, action, service] = match;
+  const maintenanceType = action === "account-maintenance" ? "account_verification" : "cookie_refresh";
   const context = { guild: interaction.guild, member: interaction.member, userId: interaction.user?.id };
   const capabilities = interaction.guild && context.userId
     ? await resolveAdminCapabilities(context)
@@ -155,19 +158,23 @@ async function handleRefreshInteraction(interaction) {
   const authorizedContext = { ...context, resolvedGuildOwnerId: capabilities.resolvedGuildOwnerId };
   const available = Boolean(capabilities.canManageCredentials && secureRefreshInfrastructureAvailable(service));
   const sessionStatus = available ? await checkSocial(service) : null;
-  const hasExpiry = isCookieRefreshRequired(sessionStatus);
+  const actionableState = maintenanceType === "account_verification"
+    ? isAccountVerificationRequired(sessionStatus)
+    : isCookieRefreshRequired(sessionStatus);
   const result = !context.guild || !context.userId
     ? { ok: false, reason: "unauthorized" }
     : !capabilities.canManageCredentials
       ? { ok: false, reason: "unauthorized" }
       : !available
         ? { ok: false, reason: "secure_refresh_unavailable" }
-        : !hasExpiry
+        : !actionableState
           ? { ok: false, reason: "invalid_request" }
-          : refreshWorkflow.issue(authorizedContext, service);
+          : refreshWorkflow.issue(authorizedContext, service, maintenanceType);
   const payload = {
     content: result.ok
-      ? `A short-lived secure ${service} cookie refresh request is ready. Open the protected page, sign in to Discord, and submit the new cookie export there.`
+      ? maintenanceType === "account_verification"
+        ? `A short-lived secure ${service} account-maintenance request is ready. If the platform requires an account check, complete it directly with that platform first. Then use the protected page to submit a fresh session export.`
+        : `A short-lived secure ${service} cookie refresh request is ready. Open the protected page, sign in to Discord, and submit the new cookie export there.`
       : formatRefreshOutcome(result),
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },

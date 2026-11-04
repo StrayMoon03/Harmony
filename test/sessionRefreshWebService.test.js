@@ -23,12 +23,13 @@ Object.assign(process.env, {
 const { createSessionRefreshHttpHandler } = require("../src/services/sessionRefreshWebService");
 const { createRefreshWorkflow } = require("../src/services/sessionRefreshService");
 
-function createHarness({ actorId = "actor-1", identityId = actorId, authorized = true, expired = false, client = {}, useDefaultAuthorization = false, useRealInteractionWorkflow = false } = {}) {
+function createHarness({ actorId = "actor-1", identityId = actorId, authorized = true, expired = false, maintenanceType = "cookie_refresh", client = {}, useDefaultAuthorization = false, useRealInteractionWorkflow = false } = {}) {
   const record = {
     request_id: "550e8400-e29b-41d4-a716-446655440000",
     guild_id: "guild-1",
     actor_id: actorId,
     service: "instagram",
+    maintenance_type: maintenanceType,
     status: expired ? "expired" : "pending",
     expires_at: expired ? "2000-01-01T00:00:00.000Z" : new Date(Date.now() + 60_000).toISOString(),
   };
@@ -75,6 +76,26 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
   const handler = createSessionRefreshHttpHandler(handlerOptions);
   return { handler, record, events, getCandidate: () => receivedCandidate };
 }
+
+test("account-verification workflow page explains external platform steps without exposing secrets", async () => {
+  const h = createHarness({ maintenanceType: "account_verification" });
+  await withServer(h.handler, async (server) => {
+    const start = await request(server, `/session-refresh/${h.record.request_id}`);
+    const authorizeUrl = new URL(start.headers.location);
+    const stateCookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state="));
+    const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, {
+      headers: { Cookie: stateCookie.split(";")[0] },
+    });
+    const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session="));
+    const form = await request(server, "/session-refresh/form", { headers: { Cookie: sessionCookie.split(";")[0] } });
+    assert.equal(form.status, 200);
+    assert.match(form.body, /Account verification required/);
+    assert.match(form.body, /Harmony cannot complete a security checkpoint/);
+    assert.match(form.body, /official instagram app or website/);
+    assert.match(form.body, /Harmony will keep the current session/);
+    assert.doesNotMatch(form.body, /mock-project-token|test-client-secret|existing-session/);
+  });
+});
 
 function request(server, pathName, { method = "GET", headers = {}, body } = {}) {
   const address = server.address();

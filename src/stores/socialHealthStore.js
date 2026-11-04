@@ -45,4 +45,17 @@ function recordSuccess(platform, at) {
   return true;
 }
 
-module.exports = { PLATFORMS, get, recordFailure, recordSuccess };
+function recordVerifiedSuccess(platform, at) {
+  if (!PLATFORMS.has(platform)) return false;
+  const timestamp = safeTimestamp(at);
+  getDb().prepare(`
+    INSERT INTO social_health_state (platform, state, failure_kind, last_success_at, updated_at)
+    VALUES (?, 'success', NULL, ?, ?)
+    ON CONFLICT(platform) DO UPDATE SET
+      state = 'success', failure_kind = NULL,
+      last_success_at = excluded.last_success_at, updated_at = excluded.updated_at
+  `).run(platform, timestamp, timestamp);
+  return true;
+}
+
+module.exports = { PLATFORMS, get, recordFailure, recordSuccess, recordVerifiedSuccess };

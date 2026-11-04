@@ -2,14 +2,17 @@ const { getDb } = require("../db/sqlite");
 
 const SERVICES = new Set(["instagram", "threads", "facebook", "youtube"]);
 
-function createRequest({ requestId, tokenHash, guildId, actorId, service, createdAt, expiresAt }) {
+const MAINTENANCE_TYPES = new Set(["cookie_refresh", "account_verification"]);
+
+function createRequest({ requestId, tokenHash, guildId, actorId, service, maintenanceType = "cookie_refresh", createdAt, expiresAt }) {
   if (!SERVICES.has(service)) throw new Error("unsupported_service");
+  if (!MAINTENANCE_TYPES.has(maintenanceType)) throw new Error("unsupported_maintenance_type");
   getDb().prepare(`
     INSERT INTO credential_refresh_requests (
-      request_id, token_hash, guild_id, actor_id, service, status, created_at, expires_at
-    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
-  `).run(requestId, tokenHash, guildId, actorId, service, createdAt, expiresAt);
-  return { requestId, guildId, actorId, service, status: "pending", createdAt, expiresAt };
+      request_id, token_hash, guild_id, actor_id, service, maintenance_type, status, created_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+  `).run(requestId, tokenHash, guildId, actorId, service, maintenanceType, createdAt, expiresAt);
+  return { requestId, guildId, actorId, service, maintenanceType, status: "pending", createdAt, expiresAt };
 }
 
 function countRecentRequests({ guildId, actorId, since }) {
@@ -21,7 +24,7 @@ function countRecentRequests({ guildId, actorId, since }) {
 
 function getRequest(requestId) {
   const row = getDb().prepare(`
-    SELECT request_id, guild_id, actor_id, service, status, created_at, expires_at, redeemed_at, completed_at
+    SELECT request_id, guild_id, actor_id, service, maintenance_type, status, created_at, expires_at, redeemed_at, completed_at
     FROM credential_refresh_requests WHERE request_id = ?
   `).get(requestId);
   return row || null;
@@ -48,6 +51,7 @@ function redeemRequestById({ requestId, guildId, actorId, service, now }) {
     guildId: row.guild_id,
     actorId: row.actor_id,
     service: row.service,
+    maintenanceType: row.maintenance_type,
     status: "consumed",
     redeemedAt: now,
     expiresAt: row.expires_at,
@@ -91,6 +95,7 @@ function expirePending(now) {
 
 module.exports = {
   SERVICES,
+  MAINTENANCE_TYPES,
   createRequest,
   countRecentRequests,
   getRequest,

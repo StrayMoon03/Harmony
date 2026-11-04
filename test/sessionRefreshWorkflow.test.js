@@ -78,6 +78,45 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
   assert.match(refreshedStatus.explanation, /recent media retrieval succeeded/i);
 });
 
+test("verified authorized maintenance clears a persisted checkpoint only after activation verification", async () => {
+  getDb();
+  statusService.recordSocialAuthFailure("instagram", "2026-10-28T00:00:30.000Z", "owner");
+  assert.equal((await statusService.checkSocial("instagram")).status, STATUS.owner);
+  makeRequest("2026-10-28T00:01:00.000Z");
+  let validations = 0;
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => { validations++; return { status: "AUTHENTICATED" }; },
+    providerFactory: () => ({ rotate: async () => {}, restore: async () => {} }),
+    audit: { recordCredentialRefreshStage() {} },
+    now: () => "2026-10-28T00:02:00.000Z",
+  });
+  const result = await workflow.submit(context(), "new-verified-session");
+  assert.equal(result.ok, true);
+  assert.equal(validations, 2);
+  assert.equal((await statusService.checkSocial("instagram")).status, STATUS.healthy);
+  assert.equal(require("../src/stores/socialHealthStore").get("instagram").failure_kind, null);
+});
+
+test("unresolved platform checkpoint rejects candidate without rotating or clearing health state", async () => {
+  getDb();
+  statusService.recordSocialAuthFailure("instagram", "2026-10-28T00:03:00.000Z", "owner");
+  const before = require("../src/stores/socialHealthStore").get("instagram");
+  makeRequest("2026-10-28T00:04:00.000Z");
+  let rotations = 0;
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => ({ status: "OWNER_REQUIRED" }),
+    providerFactory: () => ({ rotate: async () => { rotations++; } }),
+    audit: { recordCredentialRefreshStage() {} },
+    now: () => "2026-10-28T00:05:00.000Z",
+  });
+  const result = await workflow.submit(context(), "candidate-with-unresolved-checkpoint");
+  assert.equal(result.reason, "owner_required");
+  assert.match(result.message, /complete that directly with the platform/i);
+  assert.equal(rotations, 0);
+  assert.equal((await statusService.checkSocial("instagram")).status, STATUS.owner);
+  assert.deepEqual(require("../src/stores/socialHealthStore").get("instagram"), before);
+});
+
 test("Status offers cookie refresh only for explicit expiry and authorized Harmony admins", () => {
   const report = { checkedAt: "2026-10-28T00:00:00.000Z", rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.attention, explanation: "Sign-in required.", action: "Session refresh required." },

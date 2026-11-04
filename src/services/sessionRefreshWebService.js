@@ -169,10 +169,15 @@ async function resolveAuthorizedActor(client, requestRecord, userId) {
 function formPage(session) {
   const csrf = session.csrf;
   const service = session.service;
+  const accountVerification = session.maintenanceType === "account_verification";
+  const pageTitle = accountVerification ? `Fix ${service} account access` : `Refresh ${service} cookies`;
+  const verificationNotice = accountVerification
+    ? `<section><h2>Account verification required</h2><p>Harmony cannot complete a security checkpoint, identity confirmation, or other verification challenge for you. Open the official ${escapeHtml(service)} app or website, complete any requested verification there, then export a fresh session from that same account and submit it below. If the platform still shows a challenge, do not submit the export yet; Harmony will keep the current session.</p></section>`
+    : "";
   const instagramIdentityNotice = service === "instagram"
     ? `<p><strong>Instagram account: Miss Harmony</strong></p><p>Export cookies from the dedicated Miss Harmony Instagram browser session${expectedInstagramUsername() ? ` (@${escapeHtml(expectedInstagramUsername())})` : ""}. Harmony verifies the signed-in username before replacing the current cookies.</p>`
     : "";
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Refresh ${service} cookies</title><style>body{font:16px system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem;color:#202124}textarea{box-sizing:border-box;width:100%;min-height:18rem;font:13px monospace}button{padding:.7rem 1rem;margin-top:1rem}small{color:#555}</style><body><main><h1>Refresh ${service} cookies</h1>${instagramIdentityNotice}<p>${COOKIE_GUIDANCE[service]}</p><p>This page is protected by Discord sign-in. Harmony validates the candidate before updating the existing session. The cookie contents are sent only in this HTTPS form body; they are not saved in Harmony's database or returned in the result.</p><form method="post" action="/session-refresh/submit" enctype="application/x-www-form-urlencoded" autocomplete="off"><input type="hidden" name="csrf" value="${csrf}"><label for="candidate">Paste the complete cookies.txt export</label><p><textarea id="candidate" name="candidate" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></p><small>Do not paste this into Discord. Keep this page open until Harmony shows the result.</small><p><button type="submit">Validate and refresh cookies</button></p></form></main></body></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${pageTitle}</title><style>body{font:16px system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem;color:#202124}textarea{box-sizing:border-box;width:100%;min-height:18rem;font:13px monospace}button{padding:.7rem 1rem;margin-top:1rem}small{color:#555}</style><body><main><h1>${pageTitle}</h1>${verificationNotice}${instagramIdentityNotice}<p>${COOKIE_GUIDANCE[service]}</p><p>This page is protected by Discord sign-in. Harmony validates the candidate before updating the existing session. The cookie contents are sent only in this HTTPS form body; they are not saved in Harmony's database or returned in the result.</p><form method="post" action="/session-refresh/submit" enctype="application/x-www-form-urlencoded" autocomplete="off"><input type="hidden" name="csrf" value="${csrf}"><label for="candidate">Paste the complete cookies.txt export</label><p><textarea id="candidate" name="candidate" required autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></p><small>Do not paste this into Discord. Keep this page open until Harmony shows the result.</small><p><button type="submit">Validate and refresh cookies</button></p></form></main></body></html>`;
 }
 
 function resultPage(result) {
@@ -224,6 +229,7 @@ function sessionForRequest(request, requests) {
       guildId: record.guild_id,
       actorId: record.actor_id,
       service: record.service,
+      maintenanceType: record.maintenance_type || "cookie_refresh",
       csrf: session.csrf,
       expiresAt: session.expiresAt,
     },

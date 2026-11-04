@@ -4,12 +4,12 @@ const runtimeSecrets = require("./runtimeSecrets");
 const { validateSessionCookie } = require("./sessionCookieValidator");
 const { createRailwaySessionSecretProvider } = require("./railwaySessionSecretProvider");
 const { SECRET_VARIABLES, expectedInstagramUsername } = require("./sessionRefreshConfig");
-const { recordSocialSuccess } = require("./operationsStatusService");
+const { recordSocialMaintenanceSuccess } = require("./operationsStatusService");
 
 const RESULT_MESSAGES = Object.freeze({
   invalid_format: "That does not look like a supported cookie export. The existing session was kept.",
   invalid_session: "The platform did not confirm an active signed-in session. The existing session was kept.",
-  owner_required: "The platform returned a security checkpoint. The existing session was kept; owner attention is required.",
+  owner_required: "The platform still requires account verification. Complete that directly with the platform, then export a fresh session and try again. The existing session was kept.",
   validation_unavailable: "Harmony could not safely verify that session. The existing session was kept.",
   rotation_failure: "Harmony could not update the session setting. The existing session was preserved.",
   rollback_attention: "Harmony could not confirm the session setting was restored. Stop and contact the owner; no credential details are shown here.",
@@ -28,7 +28,7 @@ function createSessionRefreshWorkflow({
   runtime = runtimeSecrets,
   audit = auditStore,
   requests = requestStore,
-  onSuccess = recordSocialSuccess,
+  onSuccess = recordSocialMaintenanceSuccess,
   now = () => new Date().toISOString(),
 } = {}) {
   function record(context, service, stage, success) {
