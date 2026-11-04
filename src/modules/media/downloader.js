@@ -144,7 +144,8 @@ async function downloadMedia(url, options = {}) {
   const jobDir = await createJobDirectory();
   const errors = [];
 
-  for (const useCookies of [true, false]) {
+  // Never authenticate Instagram media downloads with a personal account session.
+  for (const useCookies of [false]) {
     try {
       return await downloadWithYtDlp(url, jobDir, { useCookies, signal });
     } catch (error) {
@@ -385,13 +386,6 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
   const galleryDlPath =
     process.env.GALLERYDL_PATH || "gallery-dl";
 
-  const cookiesPath =
-    process.env.INSTAGRAM_COOKIES ||
-    path.resolve(
-      __dirname,
-      "../../instagram-cookies.txt"
-    );
-
   const args = [
     "-o",
     // Let gallery-dl use the DASH manifest so its downloader can fetch
@@ -400,12 +394,7 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
     "-d",
     jobDir,
   ];
-  try {
-    await fs.access(cookiesPath);
-    args.unshift("--cookies", cookiesPath);
-  } catch {
-    console.warn("Instagram gallery-dl is continuing without cookies.");
-  }
+  // Cookie-free mode: do not attach stored Instagram login credentials.
   args.push(url);
 
   await execFileAsync(
