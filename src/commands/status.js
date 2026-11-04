@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES, isCookieRefreshRequired } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES, isCookieRefreshRequired, isAccountVerificationRequired } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -36,8 +36,7 @@ function hasCookieRefreshEvidence(row) {
 }
 
 function hasAccountVerificationEvidence(row) {
-  return isSocialRow(row) && row?.status === STATUS.owner &&
-    /checkpoint|challenge|account verification|security verification/i.test(`${row.explanation || ""} ${row.action || ""}`);
+  return isSocialRow(row) && isAccountVerificationRequired(row);
 }
 
 function statusAction(row, capabilities = {}) {
@@ -120,6 +119,11 @@ function makeStatusPayload(report, capabilities = {}) {
       const service = row.id.slice("social-".length);
       if (!capabilities.canManageCredentials) label += ". Ask the owner or an authorized Harmony administrator.";
       else if (!isServiceRefreshAvailable(service)) label += ". Ask the owner to finish secure setup.";
+    } else if (hasAccountVerificationEvidence((report.rows || []).find((source) => source.id === row.id))) {
+      const service = row.id.slice("social-".length);
+      if (!capabilities.canManageCredentials) label += ". Ask the owner or an authorized Harmony administrator.";
+      else if (isServiceRefreshAvailable(service)) label += `. Complete the account check with ${row.name}, then click **Fix ${row.name} Account** below to submit a fresh session.`;
+      else label += ". Secure account maintenance is not fully set up. Ask the owner to complete setup.";
     }
     return `${view.icon} **${row.name}** — ${label}`;
   }).join("\n");
@@ -136,6 +140,14 @@ function makeStatusPayload(report, capabilities = {}) {
         .setLabel(`Refresh ${row.name} Cookies`)
         .setStyle(ButtonStyle.Success))
     : [];
+  const accountMaintenanceButtons = capabilities.canManageCredentials
+    ? (report.rows || []).filter((row) => hasAccountVerificationEvidence(row) &&
+      isServiceRefreshAvailable(row.id.slice("social-".length)))
+      .slice(0, 4).map((row) => new ButtonBuilder()
+        .setCustomId(`harmony-account-maintenance:${row.id.slice("social-".length)}`)
+        .setLabel(`Fix ${row.name} Account`)
+        .setStyle(ButtonStyle.Secondary))
+    : [];
   const statusButtons = [
     new ButtonBuilder().setCustomId("harmony-status:refresh").setLabel("Refresh Status").setStyle(ButtonStyle.Primary),
     ...(capabilities.canViewOwnerDiagnostics ? [new ButtonBuilder()
@@ -145,6 +157,7 @@ function makeStatusPayload(report, capabilities = {}) {
   ];
   const components = [];
   if (refreshButtons.length) components.push(new ActionRowBuilder().addComponents(...refreshButtons));
+  if (accountMaintenanceButtons.length) components.push(new ActionRowBuilder().addComponents(...accountMaintenanceButtons));
   components.push(new ActionRowBuilder().addComponents(...statusButtons));
   return {
     embeds: [embed],

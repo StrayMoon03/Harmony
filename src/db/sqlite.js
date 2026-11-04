@@ -255,6 +255,7 @@ function migrate(database) {
       guild_id     TEXT NOT NULL,
       actor_id     TEXT NOT NULL,
       service      TEXT NOT NULL CHECK (service IN ('instagram', 'threads', 'facebook', 'youtube')),
+      maintenance_type TEXT NOT NULL DEFAULT 'cookie_refresh' CHECK (maintenance_type IN ('cookie_refresh', 'account_verification')),
       status       TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'completed', 'expired')),
       created_at   TEXT NOT NULL,
       expires_at   TEXT NOT NULL,
@@ -546,6 +547,13 @@ function migrate(database) {
   `);
 
   migrateBirthdayHistoryForNonMembers(database);
+
+  const credentialRefreshColumns = new Set(
+    database.prepare("PRAGMA table_info(credential_refresh_requests)").all().map((column) => column.name)
+  );
+  if (!credentialRefreshColumns.has("maintenance_type")) {
+    database.exec("ALTER TABLE credential_refresh_requests ADD COLUMN maintenance_type TEXT NOT NULL DEFAULT 'cookie_refresh' CHECK (maintenance_type IN ('cookie_refresh', 'account_verification'))");
+  }
 
   migrateSharesToGuildScope(database);
 

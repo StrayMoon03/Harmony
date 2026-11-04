@@ -4,12 +4,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { DatabaseSync } = require("node:sqlite");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "harmony-session-refresh-"));
 process.env.HARMONY_DB_PATH = path.join(tempDir, "refresh.sqlite");
 
 const { PermissionFlagsBits } = require("discord.js");
-const { getDb, closeDb } = require("../src/db/sqlite");
+const { getDb, closeDb, migrate } = require("../src/db/sqlite");
 const { recordSocialAuthFailure, recordSocialSuccess } = require("../src/services/operationsStatusService");
 const { getAdminCapabilities, STATUS } = require("../src/services/operationsStatusService");
 const refreshService = require("../src/services/sessionRefreshService");
@@ -19,9 +20,9 @@ function guild(id = "guild-refresh") {
   return { id, ownerId: "owner-1" };
 }
 
-function adminMember(roleIds = [], isAdmin = true) {
+function adminMember(roleIds = [], isAdmin = true, permission = PermissionFlagsBits.Administrator) {
   return {
-    permissions: { has: (permission) => isAdmin && permission === PermissionFlagsBits.Administrator },
+    permissions: { has: (requested) => isAdmin && requested === permission },
     roles: { cache: roleIds.map((id) => ({ id })) },
   };
 }
@@ -71,6 +72,22 @@ test("owner and authorized server admins can request; ordinary members cannot", 
   assert.equal(testFlow.service.issue(context(), "instagram").ok, true);
   assert.equal(testFlow.service.issue(context({ userId: "manager-1", roles: ["credential-manager"] }), "threads").ok, true);
   assert.equal(testFlow.service.issue(context({ userId: "member-1", admin: false }), "facebook").reason, "unauthorized");
+});
+
+test("legacy refresh requests migrate additively to cookie-refresh purpose", () => {
+  const legacy = new DatabaseSync(":memory:");
+  legacy.exec(`CREATE TABLE credential_refresh_requests (
+    request_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, guild_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL, service TEXT NOT NULL, status TEXT NOT NULL,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, redeemed_at TEXT, completed_at TEXT
+  )`);
+  legacy.prepare(`INSERT INTO credential_refresh_requests
+    (request_id, token_hash, guild_id, actor_id, service, status, created_at, expires_at)
+    VALUES ('legacy', 'hash', 'guild', 'actor', 'facebook', 'pending', '2026-10-01', '2026-10-02')`).run();
+  migrate(legacy);
+  const row = legacy.prepare("SELECT maintenance_type FROM credential_refresh_requests WHERE request_id = 'legacy'").get();
+  assert.equal(row.maintenance_type, "cookie_refresh");
+  legacy.close();
 });
 
 test("credential manager role is honored by the shared capability model", () => {
@@ -224,6 +241,11 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
     await refreshService.handleRefreshInteraction(interaction);
     assert.match(payload.content, /invalid or has expired/i);
     assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM credential_refresh_requests").get().n, beforeCheckpoint);
+    await refreshService.handleRefreshInteraction({ ...interaction, customId: "harmony-account-maintenance:instagram" });
+    assert.match(payload.content, /complete it directly with that platform/i);
+    const request = getDb().prepare("SELECT service, maintenance_type FROM credential_refresh_requests ORDER BY rowid DESC LIMIT 1").get();
+    assert.deepEqual({ ...request }, { service: "instagram", maintenance_type: "account_verification" });
+    assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
     recordSocialSuccess("instagram");
   } finally {
     for (const [name, value] of Object.entries(env)) {
@@ -233,24 +255,108 @@ test("authorized refresh button issues an HTTPS-scoped page only for explicit ex
   }
 });
 
-test("status distinguishes cookie expiry from checkpoints and never offers credential entry", () => {
+test("status offers distinct cookie and account-verification maintenance to authorized admins only", () => {
+  const priorEnv = { ...process.env };
+  const statusCookiePath = path.join(tempDir, "status-social-session.txt");
+  fs.writeFileSync(statusCookiePath, "non-secret-placeholder");
+  Object.assign(process.env, {
+    SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
+    DISCORD_OAUTH_CLIENT_ID: "mock-client-id",
+    DISCORD_OAUTH_CLIENT_SECRET: "mock-client-secret",
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "mock-project-token",
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
+    INSTAGRAM_COOKIES_BASE64: Buffer.from("placeholder").toString("base64"),
+    INSTAGRAM_EXPECTED_USERNAME: "missharmony",
+    INSTAGRAM_COOKIES: statusCookiePath,
+    THREADS_COOKIES_BASE64: Buffer.from("placeholder").toString("base64"),
+    THREADS_COOKIES: statusCookiePath,
+    FACEBOOK_COOKIES_BASE64: Buffer.from("placeholder").toString("base64"),
+    FACEBOOK_COOKIES: statusCookiePath,
+  });
+  try {
   const report = {
     checkedAt: "2026-10-27T12:00:00.000Z",
     rows: [
       { id: "social-instagram", name: "Instagram", status: STATUS.attention, explanation: "Sign-in required.", action: "Session refresh required; ask the owner or trusted Credential Manager." },
-      { id: "social-threads", name: "Threads", status: STATUS.owner, explanation: "Security checkpoint.", action: "Owner attention required; resolve the account check with the platform." },
+      { id: "social-facebook", name: "Facebook", status: STATUS.owner, explanation: "Security checkpoint.", action: "Owner attention required; resolve the account check with the platform." },
     ],
   };
   const payload = statusCommand.makeStatusPayload(report, { canManageCredentials: true });
   const text = JSON.stringify(payload);
-  assert.match(text, /\*\*Instagram\*\* — Cookies Need Refresh\. Ask the owner to finish secure setup/);
-  assert.match(text, /\*\*Threads\*\* — Account Verification Required/);
-  assert.doesNotMatch(text, /harmony-session-refresh:/);
+  assert.match(text, /\*\*Instagram\*\* — Cookies Need Refresh/);
+  assert.match(text, /\*\*Facebook\*\* — Account Verification Required/);
+  assert.match(text, /harmony-session-refresh:instagram/);
+  assert.match(text, /harmony-account-maintenance:facebook/);
   assert.ok(payload.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-status:refresh"));
-  assert.doesNotMatch(text, /Refresh Instagram Cookies|harmony-session-refresh:/);
+  assert.match(text, /Refresh Instagram Cookies/);
+  assert.match(text, /Fix Facebook Account/);
   const regularAdminPayload = statusCommand.makeStatusPayload(report, { canManageCredentials: false });
   assert.match(JSON.stringify(regularAdminPayload), /ask the owner or an authorized Harmony administrator/i);
-  assert.match(JSON.stringify(regularAdminPayload), /\*\*Threads\*\* — Account Verification Required/);
+  assert.match(JSON.stringify(regularAdminPayload), /\*\*Facebook\*\* — Account Verification Required/);
+  assert.doesNotMatch(JSON.stringify(regularAdminPayload), /harmony-account-maintenance:|Fix Facebook Account/);
+  } finally {
+    for (const name of Object.keys(process.env)) if (!(name in priorEnv)) delete process.env[name];
+    Object.assign(process.env, priorEnv);
+  }
+});
+
+test("Manage Server admin can launch account verification; regular members cannot", async () => {
+  getDb();
+  const originalEnv = {
+    SESSION_REFRESH_PUBLIC_URL: process.env.SESSION_REFRESH_PUBLIC_URL,
+    DISCORD_OAUTH_CLIENT_ID: process.env.DISCORD_OAUTH_CLIENT_ID,
+    DISCORD_OAUTH_CLIENT_SECRET: process.env.DISCORD_OAUTH_CLIENT_SECRET,
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: process.env.SESSION_REFRESH_RAILWAY_PROJECT_TOKEN,
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: process.env.SESSION_REFRESH_RAILWAY_SERVICE_ID,
+    INSTAGRAM_COOKIES_BASE64: process.env.INSTAGRAM_COOKIES_BASE64,
+    INSTAGRAM_EXPECTED_USERNAME: process.env.INSTAGRAM_EXPECTED_USERNAME,
+    INSTAGRAM_COOKIES: process.env.INSTAGRAM_COOKIES,
+    FACEBOOK_COOKIES_BASE64: process.env.FACEBOOK_COOKIES_BASE64,
+    FACEBOOK_COOKIES: process.env.FACEBOOK_COOKIES,
+  };
+  Object.assign(process.env, {
+    SESSION_REFRESH_PUBLIC_URL: "https://refresh.example",
+    DISCORD_OAUTH_CLIENT_ID: "mock-client-id",
+    DISCORD_OAUTH_CLIENT_SECRET: "mock-client-secret",
+    SESSION_REFRESH_RAILWAY_PROJECT_TOKEN: "mock-project-token",
+    SESSION_REFRESH_RAILWAY_SERVICE_ID: "mock-service-id",
+    INSTAGRAM_COOKIES_BASE64: Buffer.from("existing-session").toString("base64"),
+    INSTAGRAM_EXPECTED_USERNAME: "missharmony",
+    INSTAGRAM_COOKIES: path.join(tempDir, "account-maintenance-cookie.txt"),
+    FACEBOOK_COOKIES_BASE64: Buffer.from("existing-facebook-session").toString("base64"),
+    FACEBOOK_COOKIES: path.join(tempDir, "account-maintenance-facebook.txt"),
+  });
+  fs.writeFileSync(process.env.INSTAGRAM_COOKIES, "existing-session");
+  fs.writeFileSync(process.env.FACEBOOK_COOKIES, "existing-facebook-session");
+  try {
+    let payload;
+    const guildContext = { id: "guild-refresh", fetch: async () => ({ id: "guild-refresh", ownerId: "owner-1" }) };
+    const base = {
+      customId: "harmony-account-maintenance:instagram", guild: guildContext,
+      user: { id: "manage-server-admin" }, member: adminMember([], true, PermissionFlagsBits.ManageGuild), isButton: () => true,
+      reply: async (value) => { payload = value; },
+    };
+    recordSocialAuthFailure("instagram", new Date().toISOString(), "session");
+    await refreshService.handleRefreshInteraction({ ...base, customId: "harmony-session-refresh:instagram" });
+    assert.match(payload.content, /cookie refresh request/i);
+    recordSocialAuthFailure("facebook", new Date().toISOString(), "owner");
+    const facebookButton = { ...base, customId: "harmony-account-maintenance:facebook" };
+    await refreshService.handleRefreshInteraction(facebookButton);
+    assert.match(payload.content, /account-maintenance request/i);
+    assert.match(payload.components[0].components[0].data.url, /^https:\/\/refresh\.example\/session-refresh\//);
+    assert.doesNotMatch(JSON.stringify(payload), /mock-project-token|mock-client-secret|existing-session/);
+    await refreshService.handleRefreshInteraction({ ...facebookButton, user: { id: "administrator" }, member: adminMember([], true) });
+    assert.match(payload.content, /account-maintenance request/i);
+
+    await refreshService.handleRefreshInteraction({ ...base, user: { id: "member" }, member: adminMember([], false) });
+    assert.match(payload.content, /Only the server owner or an authorized Harmony administrator/);
+    assert.equal("components" in payload, false);
+  } finally {
+    for (const [name, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("failed validation audit accepts no submitted session or raw error and cannot rotate a secret", () => {

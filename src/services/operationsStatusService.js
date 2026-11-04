@@ -61,6 +61,12 @@ function isCookieRefreshRequired(row) {
     /(?:cookies need to be refreshed|session refresh required)/i.test(row?.action || "");
 }
 
+function isAccountVerificationRequired(row) {
+  return /^social-(instagram|threads|facebook|youtube)$/.test(row?.id || "") &&
+    row.status === STATUS.owner &&
+    /checkpoint|challenge|account verification|security verification/i.test(`${row.explanation || ""} ${row.action || ""}`);
+}
+
 function readGuildOwnerId(guild) {
   const candidates = [guild?.ownerId, guild?.ownerID, guild?.owner_id, guild?.owner?.id];
   return candidates.find((id) => typeof id === "string" && id.length > 0) || null;
@@ -121,6 +127,18 @@ function recordSocialSuccess(platform, at = new Date().toISOString()) {
     socialHealthStore.recordSuccess(key, at);
   } catch {
     // A health-signal write must not turn a successful media request into a failure.
+  }
+}
+
+function recordSocialMaintenanceSuccess(platform, at = new Date().toISOString()) {
+  const key = String(platform || "").toLowerCase();
+  if (!SOCIAL[key]) return;
+  // Called only after a submitted session passed pre-rotation validation and
+  // post-activation verification. Ordinary media success keeps checkpoint state.
+  try {
+    socialHealthStore.recordVerifiedSuccess(key, at);
+  } catch {
+    // A health-signal write must not turn a verified refresh into a failure.
   }
 }
 
@@ -306,12 +324,14 @@ module.exports = {
   SOCIAL,
   COOKIE_SERVICES,
   isCookieRefreshRequired,
+  isAccountVerificationRequired,
   SOCIAL_SUCCESS_TTL_MS,
   getAdminCapabilities,
   resolveAdminCapabilities,
   parseConfiguredRoleIds,
   recordSocialAuthFailure,
   recordSocialSuccess,
+  recordSocialMaintenanceSuccess,
   isExplicitAuthenticationFailure,
   authenticationFailureKind,
   sessionConfigured,
