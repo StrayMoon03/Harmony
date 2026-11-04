@@ -64,8 +64,30 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function safeError(response, code = 400) {
-  writeHtml(response, code, messagePage("Session refresh", "Harmony could not continue this request. Return to Discord Status and start a new refresh request."));
+const SAFE_STAGES = new Set(["https", "request", "oauth_config", "oauth_state", "oauth_exchange", "oauth_identity", "actor_authorization", "request_redemption", "web_session", "form_request", "form_body", "form_csrf", "form_origin", "routing", "callback"]);
+const SAFE_REASONS = new Set(["https_required", "request_missing", "request_expired", "refresh_unavailable", "oauth_unavailable", "invalid_oauth_state", "oauth_exchange_failed", "oauth_identity_failed", "identity_mismatch", "actor_not_authorized", "redeem_failed", "web_session_invalid", "unsupported_form", "invalid_origin", "body_too_large", "body_read_failed", "session_sign_failed", "handler_failed", "route_not_found"]);
+const SAFE_SERVICES = new Set(["instagram", "facebook", "threads", "youtube"]);
+
+function safeDiagnostic(logger, { referenceId, service, stage, reason, status }) {
+  const entry = {
+    referenceId: /^[0-9a-f-]{36}$/i.test(String(referenceId || "")) ? referenceId : crypto.randomUUID(),
+    service: SAFE_SERVICES.has(service) ? service : "unknown",
+    stage: SAFE_STAGES.has(stage) ? stage : "callback",
+    reason: SAFE_REASONS.has(reason) ? reason : "handler_failed",
+    status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : 500,
+  };
+  try { logger?.warn?.("session_refresh_failure", entry); } catch { /* logging cannot break the response */ }
+  return entry.referenceId;
+}
+
+function safeError(response, code = 400, diagnostic = {}, logger = console) {
+  const referenceId = safeDiagnostic(logger, { ...diagnostic, status: code });
+  const message = `Harmony could not continue this request. Return to Discord Status and start a new refresh request. Reference: ${referenceId}`;
+  writeHtml(response, code, messagePage("Session refresh", message));
+}
+
+function handoffPage() {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Continue to secure maintenance</title><body><main><h1>Discord sign-in complete</h1><p>Continue to the secure Harmony maintenance form.</p><p><a href="/session-refresh/form">Continue to secure maintenance</a></p></main></body></html>`;
 }
 
 function secureRequest(request) {
@@ -236,38 +258,55 @@ function sessionForRequest(request, requests) {
   };
 }
 
-async function handleCallback(request, response, url, { client, fetchImpl, requests, audit, workflow, authorizeActor }) {
+async function handleCallback(request, response, url, { client, fetchImpl, requests, audit, workflow, authorizeActor, logger }) {
   const cookies = parseCookies(request.headers.cookie);
   const state = url.searchParams.get("state") || "";
   const stateCookie = cookies.get("harmony_refresh_oauth_state") || "";
   const saved = verifyPayload(state);
   if (!saved || saved.expiresAt <= Date.now() || !timingSafeStringEqual(state, stateCookie) || !url.searchParams.get("code")) {
-    safeError(response, 401);
+    safeError(response, 401, { requestId: saved?.requestId, stage: "oauth_state", reason: "invalid_oauth_state" }, logger);
     return;
   }
 
   let requestRecord = requests.getRequest(saved.requestId);
-  if (!requestRecord || requestRecord.status !== "pending" || new Date(requestRecord.expires_at).getTime() <= Date.now() || !isServiceRefreshAvailable(requestRecord.service)) {
-    safeError(response, 410);
+  if (!requestRecord) {
+    safeError(response, 410, { requestId: saved.requestId, stage: "request", reason: "request_missing" }, logger);
+    return;
+  }
+  if (requestRecord.status !== "pending" || new Date(requestRecord.expires_at).getTime() <= Date.now()) {
+    safeError(response, 410, { requestId: saved.requestId, service: requestRecord.service, stage: "request", reason: "request_expired" }, logger);
+    return;
+  }
+  if (!isServiceRefreshAvailable(requestRecord.service)) {
+    safeError(response, 410, { requestId: saved.requestId, service: requestRecord.service, stage: "request", reason: "refresh_unavailable" }, logger);
     return;
   }
 
   try {
     const config = configSnapshot();
     const redirectUri = `${config.publicUrl}/session-refresh/oauth/callback`;
-    let accessToken = await exchangeCode(url.searchParams.get("code"), redirectUri, fetchImpl);
+    let accessToken;
+    try { accessToken = await exchangeCode(url.searchParams.get("code"), redirectUri, fetchImpl); }
+    catch {
+      safeError(response, 502, { requestId: saved.requestId, service: requestRecord.service, stage: "oauth_exchange", reason: "oauth_exchange_failed" }, logger);
+      return;
+    }
     let identity;
     try { identity = await fetchDiscordIdentity(accessToken, fetchImpl); }
+    catch {
+      safeError(response, 502, { requestId: saved.requestId, service: requestRecord.service, stage: "oauth_identity", reason: "oauth_identity_failed" }, logger);
+      return;
+    }
     finally { accessToken = ""; }
     if (identity.id !== requestRecord.actor_id) {
       audit.recordCredentialRefreshEvent({ guildId: requestRecord.guild_id, actorId: identity.id, service: requestRecord.service, action: "request_redeemed", outcome: "failure" });
-      safeError(response, 403);
+      safeError(response, 403, { requestId: saved.requestId, service: requestRecord.service, stage: "oauth_identity", reason: "identity_mismatch" }, logger);
       return;
     }
     const authorized = await authorizeActor(client, requestRecord, identity.id);
     if (!authorized) {
       audit.recordCredentialRefreshEvent({ guildId: requestRecord.guild_id, actorId: identity.id, service: requestRecord.service, action: "request_redeemed", outcome: "failure" });
-      safeError(response, 403);
+      safeError(response, 403, { requestId: saved.requestId, service: requestRecord.service, stage: "actor_authorization", reason: "actor_not_authorized" }, logger);
       return;
     }
     const redeemed = workflow.redeemRequestId({
@@ -279,39 +318,39 @@ async function handleCallback(request, response, url, { client, fetchImpl, reque
       resolvedGuildOwnerId: authorized.resolvedGuildOwnerId,
     });
     if (!redeemed.ok) {
-      safeError(response, 410);
+      safeError(response, 410, { requestId: saved.requestId, service: requestRecord.service, stage: "request_redemption", reason: "redeem_failed" }, logger);
       return;
     }
     requestRecord = requests.getRequest(saved.requestId);
     const csrf = randomToken();
     const sessionId = signPayload({ requestId: requestRecord.request_id, csrf, expiresAt: Date.now() + WEB_SESSION_TTL_MS });
-    if (!sessionId) { safeError(response, 503); return; }
-    response.writeHead(303, {
-      Location: "/session-refresh/form",
-      "Cache-Control": "no-store",
-      "Referrer-Policy": "no-referrer",
-      "Set-Cookie": [
-        makeCookie("harmony_refresh_oauth_state", "", { path: "/session-refresh/oauth/callback", maxAge: 0, sameSite: "Lax" }),
-        makeCookie("harmony_refresh_session", sessionId),
-      ],
-    });
-    response.end();
+    if (!sessionId) {
+      safeError(response, 503, { requestId: saved.requestId, service: requestRecord.service, stage: "web_session", reason: "session_sign_failed" }, logger);
+      return;
+    }
+    // Do not immediately redirect from Discord's cross-site OAuth return into a
+    // SameSite=Strict session. The user-initiated same-origin link below starts
+    // a fresh same-site navigation while preserving Strict cookie semantics.
+    writeHtml(response, 200, handoffPage(), [
+      makeCookie("harmony_refresh_oauth_state", "", { path: "/session-refresh/oauth/callback", maxAge: 0, sameSite: "Lax" }),
+      makeCookie("harmony_refresh_session", sessionId),
+    ]);
   } catch {
-    safeError(response, 502);
+    safeError(response, 502, { requestId: saved?.requestId, service: requestRecord?.service, stage: "callback", reason: "handler_failed" }, logger);
   }
 }
 
-async function handleSubmit(request, response, { client, requests, workflow, authorizeActor }) {
+async function handleSubmit(request, response, { client, requests, workflow, authorizeActor, logger }) {
   const existing = sessionForRequest(request, requests);
-  if (!existing) { safeError(response, 401); return; }
+  if (!existing) { safeError(response, 401, { stage: "web_session", reason: "web_session_invalid" }, logger); return; }
   const auth = await authorizeActor(client, { guild_id: existing.session.guildId, actor_id: existing.session.actorId }, existing.session.actorId);
-  if (!auth) { safeError(response, 403); return; }
+  if (!auth) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "actor_authorization", reason: "actor_not_authorized" }, logger); return; }
   if (!String(request.headers["content-type"] || "").startsWith("application/x-www-form-urlencoded")) {
-    safeError(response, 415);
+    safeError(response, 415, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_request", reason: "unsupported_form" }, logger);
     return;
   }
   const origin = String(request.headers.origin || "");
-  if (origin !== publicBaseUrl()) { safeError(response, 403); return; }
+  if (origin !== publicBaseUrl()) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_origin", reason: "invalid_origin" }, logger); return; }
 
   let body;
   let candidate = "";
@@ -327,7 +366,7 @@ async function handleSubmit(request, response, { client, requests, workflow, aut
       candidate = "";
       params.set("csrf", "");
       body.fill(0);
-      safeError(response, 403);
+      safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_csrf", reason: "invalid_oauth_state" }, logger);
       return;
     }
     params.set("csrf", "");
@@ -346,7 +385,13 @@ async function handleSubmit(request, response, { client, requests, workflow, aut
   } catch (error) {
     candidate = "";
     body?.fill(0);
-    safeError(response, error.message === "body_too_large" ? 413 : 400);
+    const tooLarge = error.message === "body_too_large";
+    safeError(response, tooLarge ? 413 : 400, {
+      requestId: existing?.session.requestId,
+      service: existing?.session.service,
+      stage: "form_body",
+      reason: tooLarge ? "body_too_large" : "body_read_failed",
+    }, logger);
   }
 }
 
@@ -358,55 +403,74 @@ function createSessionRefreshHttpHandler({
   workflow = defaultWorkflow,
   interactionWorkflow = defaultRefreshWorkflow,
   authorizeActor = resolveAuthorizedActor,
+  logger = console,
 } = {}) {
   return async function handleSessionRefreshRequest(request, response) {
     let url;
     try { url = new URL(request.url, publicBaseUrl() || "https://localhost"); }
     catch { return false; }
     if (!url.pathname.startsWith("/session-refresh")) return false;
-    if (!secureRequest(request)) {
-      safeError(response, 400);
-      return true;
-    }
-
     const requestMatch = url.pathname.match(/^\/session-refresh\/([0-9a-f-]{36})$/i);
-    if (request.method === "GET" && requestMatch) {
-      const record = requests.getRequest(requestMatch[1]);
-      if (!record || record.status !== "pending" || new Date(record.expires_at).getTime() <= Date.now() || !isServiceRefreshAvailable(record.service)) {
-        safeError(response, 410);
+    const failureContext = { requestId: requestMatch?.[1] };
+    try {
+      if (!secureRequest(request)) {
+        safeError(response, 400, { ...failureContext, stage: "https", reason: "https_required" }, logger);
         return true;
       }
-      const oauth = oauthRedirect(record.request_id);
-      if (!oauth) { safeError(response, 503); return true; }
-      response.writeHead(303, {
-        Location: oauth.authorize,
-        "Cache-Control": "no-store",
-        "Referrer-Policy": "no-referrer",
-        "Set-Cookie": makeCookie("harmony_refresh_oauth_state", oauth.state, { path: "/session-refresh/oauth/callback", maxAge: 600, sameSite: "Lax" }),
-      });
-      response.end();
+
+      if (request.method === "GET" && requestMatch) {
+        const record = requests.getRequest(requestMatch[1]);
+        if (!record) {
+          safeError(response, 410, { requestId: requestMatch[1], stage: "request", reason: "request_missing" }, logger);
+          return true;
+        }
+        failureContext.requestId = record.request_id;
+        failureContext.service = record.service;
+        if (record.status !== "pending" || new Date(record.expires_at).getTime() <= Date.now()) {
+          safeError(response, 410, { requestId: record.request_id, service: record.service, stage: "request", reason: "request_expired" }, logger);
+          return true;
+        }
+        if (!isServiceRefreshAvailable(record.service)) {
+          safeError(response, 410, { requestId: record.request_id, service: record.service, stage: "request", reason: "refresh_unavailable" }, logger);
+          return true;
+        }
+        const oauth = oauthRedirect(record.request_id);
+        if (!oauth) { safeError(response, 503, { requestId: record.request_id, service: record.service, stage: "oauth_config", reason: "oauth_unavailable" }, logger); return true; }
+        response.writeHead(303, {
+          Location: oauth.authorize,
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "Set-Cookie": makeCookie("harmony_refresh_oauth_state", oauth.state, { path: "/session-refresh/oauth/callback", maxAge: 600, sameSite: "Lax" }),
+        });
+        response.end();
+        return true;
+      }
+
+      if (request.method === "GET" && url.pathname === "/session-refresh/oauth/callback") {
+        await handleCallback(request, response, url, { client, fetchImpl, requests, audit, workflow: interactionWorkflow, authorizeActor, logger });
+        return true;
+      }
+
+      if (request.method === "GET" && url.pathname === "/session-refresh/form") {
+        const existing = sessionForRequest(request, requests);
+        if (!existing) { safeError(response, 401, { stage: "web_session", reason: "web_session_invalid" }, logger); return true; }
+        failureContext.requestId = existing.session.requestId;
+        failureContext.service = existing.session.service;
+        writeHtml(response, 200, formPage(existing.session));
+        return true;
+      }
+
+      if (request.method === "POST" && url.pathname === "/session-refresh/submit") {
+        await handleSubmit(request, response, { client, requests, workflow, authorizeActor, logger });
+        return true;
+      }
+
+      safeError(response, 404, { stage: "routing", reason: "route_not_found" }, logger);
+      return true;
+    } catch {
+      safeError(response, 500, { ...failureContext, stage: "callback", reason: "handler_failed" }, logger);
       return true;
     }
-
-    if (request.method === "GET" && url.pathname === "/session-refresh/oauth/callback") {
-      await handleCallback(request, response, url, { client, fetchImpl, requests, audit, workflow: interactionWorkflow, authorizeActor });
-      return true;
-    }
-
-    if (request.method === "GET" && url.pathname === "/session-refresh/form") {
-      const existing = sessionForRequest(request, requests);
-      if (!existing) { safeError(response, 401); return true; }
-      writeHtml(response, 200, formPage(existing.session));
-      return true;
-    }
-
-    if (request.method === "POST" && url.pathname === "/session-refresh/submit") {
-      await handleSubmit(request, response, { client, requests, workflow, authorizeActor });
-      return true;
-    }
-
-    safeError(response, 404);
-    return true;
   };
 }
 

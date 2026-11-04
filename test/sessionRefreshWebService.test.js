@@ -4,6 +4,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { PermissionFlagsBits } = require("discord.js");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "harmony-refresh-web-"));
 const cookiePath = path.join(tempDir, "instagram.txt");
@@ -34,6 +35,7 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
     expires_at: expired ? "2000-01-01T00:00:00.000Z" : new Date(Date.now() + 60_000).toISOString(),
   };
   const events = [];
+  const diagnostics = [];
   let receivedCandidate = "";
   const requests = {
     getRequest(id) { return id === record.request_id ? { ...record } : null; },
@@ -71,10 +73,11 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
     if (String(url).includes("/users/@me")) return new Response(JSON.stringify({ id: identityId }), { status: 200 });
     return new Response("not found", { status: 404 });
   };
-  const handlerOptions = { client, fetchImpl, requests, audit, workflow, interactionWorkflow };
+  const logger = { warn: (event, entry) => diagnostics.push({ event, ...entry }) };
+  const handlerOptions = { client, fetchImpl, requests, audit, workflow, interactionWorkflow, logger };
   if (!useDefaultAuthorization) handlerOptions.authorizeActor = authorizeActor;
   const handler = createSessionRefreshHttpHandler(handlerOptions);
-  return { handler, record, events, getCandidate: () => receivedCandidate };
+  return { handler, record, events, diagnostics, getCandidate: () => receivedCandidate };
 }
 
 test("account-verification workflow page explains external platform steps without exposing secrets", async () => {
@@ -83,9 +86,12 @@ test("account-verification workflow page explains external platform steps withou
     const start = await request(server, `/session-refresh/${h.record.request_id}`);
     const authorizeUrl = new URL(start.headers.location);
     const stateCookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state="));
+    assert.match(stateCookie, /HttpOnly; Secure; SameSite=Lax/);
     const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, {
       headers: { Cookie: stateCookie.split(";")[0] },
     });
+    assert.equal(callback.status, 200);
+    assert.match(callback.body, /Continue to secure maintenance/);
     const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session="));
     const form = await request(server, "/session-refresh/form", { headers: { Cookie: sessionCookie.split(";")[0] } });
     assert.equal(form.status, 200);
@@ -136,11 +142,17 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
     const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(state)}`, {
       headers: { Cookie: stateCookie.split(";")[0] },
     });
-    assert.equal(callback.status, 303);
+    assert.equal(callback.status, 200);
+    assert.match(callback.body, /href="\/session-refresh\/form"/);
+    assert.doesNotMatch(callback.headers.location || "", /session-refresh\/form/);
+    assert.doesNotMatch(callback.body, /oauth-access-token|test-client-secret|mock-project-token|existing-session/);
     const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session="));
     assert.match(sessionCookie, /HttpOnly; Secure; SameSite=Strict/);
     const cookie = sessionCookie.split(";")[0];
 
+    // Model Discord mobile's external-browser OAuth return: the Strict session
+    // cookie is not used on the cross-site OAuth redirect. The same-origin
+    // Continue link is a fresh user navigation and carries it to the form.
     const form = await request(server, "/session-refresh/form", { headers: { Cookie: cookie } });
     assert.equal(form.status, 200);
     assert.match(form.body, /Netscape-format/);
@@ -149,6 +161,15 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
     assert.match(form.body, /dedicated Miss Harmony Instagram browser session/);
     const csrf = form.body.match(/name="csrf" value="([^"]+)"/)[1];
     const candidate = "# Netscape HTTP Cookie File\nPRIVATE_COOKIE_VALUE_NEVER_RETURNED_OR_STORED";
+    const invalidCsrfBody = new URLSearchParams({ csrf: "tampered", candidate: "NEVER_LOG_THIS_CANDIDATE" }).toString();
+    const csrfRejected = await request(server, "/session-refresh/submit", {
+      method: "POST",
+      headers: { Cookie: cookie, Origin: "https://refresh.example", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(invalidCsrfBody) },
+      body: invalidCsrfBody,
+    });
+    assert.equal(csrfRejected.status, 403);
+    assert.equal(h.diagnostics.at(-1).stage, "form_csrf");
+    assert.doesNotMatch(`${csrfRejected.body}${JSON.stringify(h.diagnostics)}`, /NEVER_LOG_THIS_CANDIDATE|PRIVATE_COOKIE_VALUE/);
     const formBody = new URLSearchParams({ csrf, candidate }).toString();
     const submitted = await request(server, "/session-refresh/submit", {
       method: "POST",
@@ -160,6 +181,7 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
     assert.equal(h.getCandidate(), candidate);
     assert.equal(h.record.status, "completed");
     assert.doesNotMatch(JSON.stringify(h.events), /PRIVATE_COOKIE_VALUE|oauth-access-token/);
+    assert.doesNotMatch(JSON.stringify(h.diagnostics), /PRIVATE_COOKIE_VALUE|oauth-access-token|test-client-secret|mock-project-token|existing-session/);
   });
 });
 
@@ -174,6 +196,9 @@ test("OAuth CSRF, actor mismatch, removed capability, expired request, and HTTP 
     const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
     const failed = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=wrong`, { headers: { Cookie: cookie } });
     assert.equal(failed.status, 401);
+    assert.match(failed.body, /Reference: [0-9a-f-]{36}/i);
+    assert.equal(badState.diagnostics.at(-1).stage, "oauth_state");
+    assert.equal(badState.diagnostics.at(-1).reason, "invalid_oauth_state");
     assert.equal(badState.record.status, "pending");
     const httpOnly = await request(server, `/session-refresh/${badState.record.request_id}`, { headers: { "X-Forwarded-Proto": "http" } });
     assert.equal(httpOnly.status, 400);
@@ -218,8 +243,12 @@ test("OAuth redemption recognizes the guild owner when the cached guild lacks ow
     const authorizeUrl = new URL(start.headers.location);
     const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
     const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
-    assert.equal(callback.status, 303);
+    assert.equal(callback.status, 200);
+    const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session=")).split(";")[0];
+    assert.equal((await request(server, "/session-refresh/form", { headers: { Cookie: sessionCookie } })).status, 200);
     assert.equal(h.record.status, "consumed");
+    const replay = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
+    assert.equal(replay.status, 410);
   });
 });
 
@@ -227,7 +256,7 @@ test("OAuth redemption allows a Discord administrator without a Credential Manag
   const guild = {
     id: "guild-1",
     fetch: async () => ({ id: "guild-1", ownerId: "actual-owner" }),
-    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: () => true }, roles: { cache: [] } }) },
+    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: (permission) => permission === PermissionFlagsBits.ManageGuild }, roles: { cache: [] } }) },
   };
   const h = createHarness({
     actorId: "regular-admin",
@@ -240,8 +269,34 @@ test("OAuth redemption allows a Discord administrator without a Credential Manag
     const authorizeUrl = new URL(start.headers.location);
     const cookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
     const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: cookie } });
-    assert.equal(callback.status, 303);
+    assert.equal(callback.status, 200);
+    const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session=")).split(";")[0];
+    const form = await request(server, "/session-refresh/form", { headers: { Cookie: sessionCookie } });
+    assert.equal(form.status, 200);
     assert.equal(h.record.status, "consumed");
+  });
+});
+
+test("OAuth redemption allows a Discord Administrator and reaches the form", async () => {
+  const guild = {
+    id: "guild-1",
+    fetch: async () => ({ id: "guild-1", ownerId: "actual-owner" }),
+    members: { fetch: async ({ user }) => ({ id: user, permissions: { has: (permission) => permission === PermissionFlagsBits.Administrator }, roles: { cache: [] } }) },
+  };
+  const h = createHarness({
+    actorId: "administrator",
+    client: { guilds: { cache: new Map([["guild-1", guild]]) } },
+    useDefaultAuthorization: true,
+    useRealInteractionWorkflow: true,
+  });
+  await withServer(h.handler, async (server) => {
+    const start = await request(server, `/session-refresh/${h.record.request_id}`);
+    const authorizeUrl = new URL(start.headers.location);
+    const stateCookie = start.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_oauth_state=")).split(";")[0];
+    const callback = await request(server, `/session-refresh/oauth/callback?code=oauth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state"))}`, { headers: { Cookie: stateCookie } });
+    assert.equal(callback.status, 200);
+    const sessionCookie = callback.headers["set-cookie"].find((value) => value.startsWith("harmony_refresh_session=")).split(";")[0];
+    assert.equal((await request(server, "/session-refresh/form", { headers: { Cookie: sessionCookie } })).status, 200);
   });
 });
 
