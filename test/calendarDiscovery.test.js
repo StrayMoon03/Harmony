@@ -1,9 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const store = require("../src/stores/eventSchedulerStore");
 const adapter = require("../src/services/calendarDiscoverySources/strayKidsJypeScheduleAdapter");
-const { runDiscovery, windowFor, fetchWithLimits } = require("../src/services/calendarDiscoveryService");
+const { runDiscovery, windowFor, fetchWithLimits, formatDiscoverySummary } = require("../src/services/calendarDiscoveryService");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
+
+const liveDecemberPayload = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/jype-december-2026-live-response.json"), "utf8"));
+const expectedEventShapes = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/jype-december-2026-expected-event-shapes.json"), "utf8"));
 
 function response(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, headers: new Map(), json: async () => payload };
@@ -67,6 +72,104 @@ test("source endpoint uses the official structured contract", async () => {
   assert.match(requested.url, /startDate=2026-10-14T00%3A00%3A00\.000Z/);
   assert.match(requested.url, /endDate=2027-02-11T23%3A59%3A59\.999Z/);
   assert.equal(requested.options.headers.accept, "application/json");
+});
+
+test("current live JYP December response shape normalizes all three returned Stray Kids records", async () => {
+  const result = await adapter.fetchRecords({ startDate: "2026-12-01", endDate: "2026-12-31", fetchImpl: async () => response(liveDecemberPayload) });
+  assert.equal(result.records.length, 3);
+  assert.deepEqual(result.records.map((record) => record.category), ["EVENT", "EVENT", "EVENT"]);
+  for (const record of result.records) assert.ok(adapter.normalizeRecord(record).candidate);
+  assert.deepEqual(result.records.map((record) => record.scheduledDate), ["2026-12-05", "2026-12-12", "2026-12-13"]);
+});
+
+test("JYP-shaped fixture for reported December events reaches review candidates when returned by source", async () => {
+  const guildId = `discovery-jype-december-examples-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const result = await runDiscovery(client, {
+    now: new Date("2026-11-06T12:00:00Z"),
+    fetchImpl: async () => response({ schedules: expectedEventShapes }),
+  });
+  const outcome = result.results[0];
+  assert.equal(outcome.fetched, 7);
+  assert.equal(outcome.normalized, 7);
+  assert.equal(outcome.newCount, 7);
+  assert.equal(outcome.skipped, 0);
+  const candidates = store.listCalendarCandidates(guildId);
+  assert.equal(candidates.length, 7);
+  assert.equal(store.listEvents(guildId).length, 0);
+  const byTitle = new Map(candidates.map((candidate) => [candidate.title, candidate]));
+  for (const record of expectedEventShapes) {
+    const candidate = byTitle.get(record.title);
+    assert.ok(candidate, record.title);
+    assert.equal(candidate.proposed_event_date, record.scheduledDate);
+    assert.equal(candidate.discovery_key, `${adapter.SOURCE_PROVIDER}:10:${record.id}`);
+    if (record.isAllDay) assert.equal(candidate.proposed_event_at, null);
+    else assert.equal(candidate.proposed_event_at, record.scheduledAt);
+  }
+  const broadcast = byTitle.get("Fuji TV 2026 FNS Music Festival Broadcast");
+  assert.equal(JSON.parse(broadcast.source_metadata).explicitOffset, "+09:00");
+  assert.equal(formatDiscoverySummary(result.results).includes("normalized 7"), true);
+});
+
+test("discovery diagnostics classify normalization, date-window skips, duplicates, and prior admin decisions", async () => {
+  const guildId = `discovery-diagnostics-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  store.createOrGetCalendarCandidate({
+    guildId,
+    title: "Previously reviewed event",
+    proposedEventDate: "2026-11-10",
+    sourceUrl: "https://straykids.jype.com/schedule?scheduleId=known-1",
+    sourceProvider: adapter.SOURCE_PROVIDER,
+    discoveryKey: `${adapter.SOURCE_PROVIDER}:10:known-1`,
+    sourceType: "automatic_discovery",
+  });
+  const records = [
+    { id: "known-1", title: "Previously reviewed event", category: "EVENT", isAllDay: true, scheduledDate: "2026-11-10" },
+    { id: "old-1", title: "Old event", category: "SHOW", isAllDay: true, scheduledDate: "2025-11-10" },
+    { id: "anniversary-1", title: "Birthday", category: "ANNIVERSARY", isAllDay: true, scheduledDate: "2026-11-11" },
+    { title: "Missing ID", category: "EVENT", isAllDay: true, scheduledDate: "2026-11-12" },
+  ];
+  const result = await runDiscovery(client, { now: new Date("2026-11-06T12:00:00Z"), fetchImpl: async () => response({ schedules: records }) });
+  const outcome = result.results[0];
+  assert.equal(outcome.fetched, 4);
+  assert.equal(outcome.normalized, 2);
+  assert.equal(outcome.duplicate, 1);
+  assert.equal(outcome.skipped, 3);
+  assert.equal(outcome.adminDecisionPreserved, 0);
+  assert.deepEqual(outcome.categories, { EVENT: 2, SHOW: 1, ANNIVERSARY: 1 });
+  assert.deepEqual(outcome.skipReasons, { "outside-discovery-window": 1, "normalization:excluded-category": 1, "normalization:missing-id": 1 });
+  assert.match(formatDiscoverySummary([outcome]), /outside-discovery-window 1/);
+
+  const candidate = store.listCalendarCandidates(guildId)[0];
+  store.decideCalendarCandidate(guildId, candidate.id, "dismissed", "admin");
+  const afterDecision = await runDiscovery(client, { now: new Date("2026-11-06T13:00:00Z"), fetchImpl: async () => response({ schedules: [records[0]] }) });
+  assert.equal(afterDecision.results[0].adminDecisionPreserved, 1);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "dismissed");
+});
+
+test("unrecognized JYP response envelope fails as a source-shape diagnostic, not an empty successful run", async () => {
+  await assert.rejects(
+    () => adapter.fetchRecords({ startDate: "2026-12-01", endDate: "2026-12-31", fetchImpl: async () => response({ scheduleList: [{ id: "x" }] }) }),
+    (error) => error.code === "unexpected-response-shape"
+  );
+});
+
+test("source-shape API failures produce safe actionable Check Now diagnostics", async () => {
+  const guildId = `discovery-source-shape-error-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const result = await runDiscovery(client, {
+    now: new Date("2026-11-06T12:00:00Z"),
+    fetchImpl: async () => response({ scheduleList: [{ id: "private-payload-marker" }] }),
+  });
+  assert.equal(result.results[0].ok, false);
+  assert.equal(result.results[0].failureReason, "response-shape-unknown");
+  assert.equal("error" in result.results[0], false);
+  const summary = formatDiscoverySummary(result.results);
+  assert.match(summary, /source failures 1 \(response-shape-unknown 1\)/);
+  assert.doesNotMatch(summary, /private-payload-marker|scheduleList/);
 });
 
 test("HTTP wrapper exposes upstream validators to source adapters", async () => {

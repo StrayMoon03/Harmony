@@ -1,0 +1,79 @@
+[
+  {
+    "id": "sample-fns-20261202",
+    "title": "Fuji TV 2026 FNS Music Festival Broadcast",
+    "category": "SHOW",
+    "isAllDay": false,
+    "scheduledAt": "2026-12-02T20:00:00+09:00",
+    "scheduledDate": "2026-12-02",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-tour-hk-20261205",
+    "title": "Stray Kids World Tour <RUN IT> HONG KONG",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-05T00:00:00+09:00",
+    "scheduledDate": "2026-12-05",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-tour-taipei-20261212",
+    "title": "Stray Kids World Tour <RUN IT> TAIPEI",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-12T00:00:00+09:00",
+    "scheduledDate": "2026-12-12",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-musicbank-20261213",
+    "title": "2026 Music Bank Global Festival in Tokyo",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-13T00:00:00+09:00",
+    "scheduledDate": "2026-12-13",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-this-and-that-20261219",
+    "title": "This & That Offline Event",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-19T00:00:00+09:00",
+    "scheduledDate": "2026-12-19",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-sbs-gayo-day1-20261224",
+    "title": "2026 SBS Gayo Daejeon | Ceremony - Day 1",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-24T00:00:00+09:00",
+    "scheduledDate": "2026-12-24",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  },
+  {
+    "id": "sample-sbs-gayo-day2-20261225",
+    "title": "2026 SBS Gayo Daejeon | Ceremony - Day 2",
+    "category": "EVENT",
+    "isAllDay": true,
+    "scheduledAt": "2026-12-25T00:00:00+09:00",
+    "scheduledDate": "2026-12-25",
+    "location": null,
+    "artists": [],
+    "__typename": "Schedule"
+  }
+]
