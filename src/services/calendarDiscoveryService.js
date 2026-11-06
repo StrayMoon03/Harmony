@@ -8,12 +8,77 @@ const CORRECTION_LOOKBACK_HOURS = 48;
 const POLL_INTERVAL_MS = 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DECISION_STATUSES = new Set(["added", "linked", "dismissed"]);
+const DUPLICATE_REASONS = new Set(["same-discovery", "same-source", "same-title-date", "already-calendar"]);
 const locks = new Set();
 const sources = [jype];
 
 function dateKey(date) { return date.toISOString().slice(0, 10); }
 function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
 function addHours(date, hours) { return new Date(date.getTime() + hours * 60 * 60 * 1000); }
+
+function safeCategory(record) {
+  const value = String(record?.category || "").trim().toUpperCase();
+  return ["EVENT", "SHOW", "RELEASE", "ANNIVERSARY", "ETC"].includes(value) ? value : "OTHER";
+}
+
+function increment(counts, key, amount = 1) {
+  counts[key] = (counts[key] || 0) + amount;
+}
+
+function safeSkipReason(reason) {
+  return ["missing-id", "excluded-category", "missing-date", "missing-time"].includes(reason) ? `normalization:${reason}` : "normalization:other";
+}
+
+function safeDuplicateReason(reason) {
+  return DUPLICATE_REASONS.has(reason) ? reason : "other";
+}
+
+function emptyDiagnostics() {
+  return { categories: {}, normalized: 0, skipReasons: {}, adminDecisionPreserved: 0, duplicateReasons: {} };
+}
+
+function formatDiscoverySummary(results = []) {
+  const totals = {
+    fetched: 0, normalized: 0, newCount: 0, updated: 0, duplicate: 0,
+    skipped: 0, adminDecisionPreserved: 0, failures: 0, notModified: 0,
+    categories: {}, skipReasons: {}, failureReasons: {},
+  };
+  for (const item of results) {
+    totals.fetched += item.fetched || 0;
+    totals.normalized += item.normalized || 0;
+    totals.newCount += item.newCount || 0;
+    totals.updated += item.updated || 0;
+    totals.duplicate += item.duplicate || 0;
+    totals.skipped += item.skipped || 0;
+    totals.adminDecisionPreserved += item.adminDecisionPreserved || 0;
+    if (item.notModified) totals.notModified += 1;
+    if (!item.ok) {
+      totals.failures += 1;
+      increment(totals.failureReasons, item.failureReason || "source-failed");
+    }
+    for (const [category, count] of Object.entries(item.categories || {})) increment(totals.categories, category, count);
+    for (const [reason, count] of Object.entries(item.skipReasons || {})) increment(totals.skipReasons, reason, count);
+  }
+  const categoryText = Object.entries(totals.categories).map(([name, count]) => `${name} ${count}`).join(", ") || "none";
+  const skippedText = Object.entries(totals.skipReasons).map(([name, count]) => `${name} ${count}`).join(", ");
+  const failureText = Object.entries(totals.failureReasons).map(([name, count]) => `${name} ${count}`).join(", ");
+  const fetchedText = totals.fetched
+    ? `Fetched ${totals.fetched} (${categoryText})`
+    : totals.notModified ? "JYP source unchanged (HTTP 304)" : "JYP returned 0 records";
+  return [
+    `Official schedule check complete. ${fetchedText}; normalized ${totals.normalized}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; skipped ${totals.skipped}${skippedText ? ` (${skippedText})` : ""}${totals.adminDecisionPreserved ? `; prior admin decisions preserved ${totals.adminDecisionPreserved}` : ""}${totals.failures ? `; source failures ${totals.failures} (${failureText})` : ""}.`,
+    "No calendar events were created automatically.",
+  ].join(" ");
+}
+
+function sourceFailureReason(error) {
+  if (error?.code === "unexpected-response-shape") return "response-shape-unknown";
+  if (error?.code === "invalid-json" || error instanceof SyntaxError) return "invalid-json";
+  if (error?.code === "upstream-http-failure") return Number(error.status) === 429 ? "rate-limited" : "upstream-http-error";
+  if (error?.name === "AbortError" || error?.name === "TimeoutError") return "timeout";
+  return "network-or-source-error";
+}
 
 function windowFor(state, now = new Date()) {
   const start = state?.initialized ? addHours(now, -CORRECTION_LOOKBACK_HOURS) : now;
@@ -60,6 +125,7 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
   const started = Date.now();
   store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { lastRunAt: now.toISOString(), lastError: null });
   let fetched = 0, newCount = 0, updated = 0, duplicate = 0, skipped = 0;
+  const diagnostics = emptyDiagnostics();
   try {
     const conditionalHeaders = {};
     if (state?.etag) conditionalHeaders["if-none-match"] = state.etag;
@@ -77,30 +143,44 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
         guildId,
         window,
         fetched: 0,
+        ...diagnostics,
         latencyMs: Date.now() - started,
       });
-      return { ok: true, notModified: true, sourceKey: source.SOURCE_KEY, runId, window, fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0 };
+      return { ok: true, notModified: true, sourceKey: source.SOURCE_KEY, runId, window, fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0, ...diagnostics };
     }
     fetched = result.records.length;
     for (const record of result.records) {
+      increment(diagnostics.categories, safeCategory(record));
       const normalized = source.normalizeRecord(record);
-      if (!normalized.candidate) { skipped += 1; continue; }
-      if (normalized.candidate.proposedEventDate < window.startDate || normalized.candidate.proposedEventDate > window.endDate) { skipped += 1; continue; }
+      if (!normalized.candidate) {
+        skipped += 1;
+        increment(diagnostics.skipReasons, safeSkipReason(normalized.reason));
+        continue;
+      }
+      diagnostics.normalized += 1;
+      if (normalized.candidate.proposedEventDate < window.startDate || normalized.candidate.proposedEventDate > window.endDate) {
+        skipped += 1;
+        increment(diagnostics.skipReasons, "outside-discovery-window");
+        continue;
+      }
       const outcome = await submitCalendarCandidate(client, guildId ? { guildId, ...normalized.candidate } : normalized.candidate);
       if (outcome.duplicate) {
         duplicate += 1;
         if (outcome.updated) updated += 1;
+        increment(diagnostics.duplicateReasons, safeDuplicateReason(outcome.duplicateReason));
+        if (DECISION_STATUSES.has(outcome.candidate?.status)) diagnostics.adminDecisionPreserved += 1;
         if (outcome.sourceChanged && !outcome.updated) console.warn("Calendar discovery source changed after admin decision", { sourceKey: source.SOURCE_KEY, guildId, discoveryKey: normalized.candidate.discoveryKey, status: outcome.candidate?.status });
       } else newCount += 1;
     }
     const sourceHash = crypto.createHash("sha256").update(JSON.stringify(result.records.map((record) => [record.id, record.updatedAt || record.scheduledAt || record.scheduledDate]))).digest("hex");
     store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { initialized: 1, lastSuccessAt: now.toISOString(), lastSourceHash: sourceHash, etag: result.etag || state?.etag || null, lastModified: result.lastModified || state?.last_modified || null, lastError: null });
-    console.log("Calendar discovery completed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, fetched, newCount, updated, duplicate, skipped, latencyMs: Date.now() - started });
-    return { ok: true, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped };
+    console.log("Calendar discovery completed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, fetched, ...diagnostics, newCount, updated, duplicate, skipped, latencyMs: Date.now() - started });
+    return { ok: true, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped, ...diagnostics };
   } catch (error) {
+    const failureReason = sourceFailureReason(error);
     store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { lastError: error.name || "source-error" });
-    console.error("Calendar discovery failed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, errorClass: error.name || "Error", latencyMs: Date.now() - started });
-    return { ok: false, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped, error: error.message };
+    console.error("Calendar discovery failed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, failureReason, httpStatus: Number.isInteger(error.status) ? error.status : null, errorClass: error.name || "Error", fetched, ...diagnostics, latencyMs: Date.now() - started });
+    return { ok: false, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped, ...diagnostics, failureReason };
   }
 }
 
@@ -126,4 +206,4 @@ function startCalendarDiscovery(client) {
   return timer;
 }
 
-module.exports = { LOOKAHEAD_DAYS, CORRECTION_LOOKBACK_HOURS, POLL_INTERVAL_MS, windowFor, fetchWithLimits, runSource, runDiscovery, startCalendarDiscovery };
+module.exports = { LOOKAHEAD_DAYS, CORRECTION_LOOKBACK_HOURS, POLL_INTERVAL_MS, windowFor, fetchWithLimits, runSource, runDiscovery, startCalendarDiscovery, formatDiscoverySummary };

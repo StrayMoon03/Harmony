@@ -27,7 +27,14 @@ function recordArray(payload) {
   for (const key of ["data", "schedules", "items", "results"]) {
     if (Array.isArray(payload?.[key])) return payload[key];
   }
-  return [];
+  return null;
+}
+
+function sourceError(message, code, status = null) {
+  const error = new Error(message);
+  error.code = code;
+  if (Number.isInteger(status)) error.status = status;
+  return error;
 }
 
 function sourceUrlFor(record) {
@@ -100,9 +107,13 @@ async function fetchRecords({ startDate, endDate, fetchImpl = global.fetch, sign
     signal,
   });
   if (response?.status === 304) return { url, records: [], notModified: true, etag: null, lastModified: null };
-  if (!response?.ok) throw new Error(`JYP schedule request failed (${response?.status || "unknown"})`);
-  const payload = await response.json();
-  return { url, records: recordArray(payload), notModified: false, etag: response.headers?.get?.("etag") || null, lastModified: response.headers?.get?.("last-modified") || null };
+  if (!response?.ok) throw sourceError("JYP schedule request failed", "upstream-http-failure", response?.status);
+  let payload;
+  try { payload = await response.json(); }
+  catch { throw sourceError("JYP schedule response was not valid JSON", "invalid-json"); }
+  const records = recordArray(payload);
+  if (!records) throw sourceError("JYP schedule response did not contain a recognized record list", "unexpected-response-shape");
+  return { url, records, notModified: false, etag: response.headers?.get?.("etag") || null, lastModified: response.headers?.get?.("last-modified") || null };
 }
 
 module.exports = {

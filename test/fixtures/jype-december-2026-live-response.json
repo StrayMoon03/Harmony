@@ -1,0 +1,43 @@
+{
+  "schedules": [
+    {
+      "id": "9261",
+      "slug": "ifu7829h2q",
+      "title": "Stray Kids World Tour <RUN IT> HONG KONG",
+      "body": "Stray Kids World Tour <RUN IT> HONG KONG",
+      "category": "EVENT",
+      "isAllDay": true,
+      "scheduledAt": "2026-12-05T00:00:00+09:00",
+      "scheduledDate": "2026-12-05",
+      "location": null,
+      "artists": [],
+      "__typename": "Schedule"
+    },
+    {
+      "id": "9262",
+      "slug": "zmy9y4z1zf",
+      "title": "Stray Kids World Tour <RUN IT> TAIPEI",
+      "body": "Stray Kids World Tour <RUN IT> TAIPEI",
+      "category": "EVENT",
+      "isAllDay": true,
+      "scheduledAt": "2026-12-12T00:00:00+09:00",
+      "scheduledDate": "2026-12-12",
+      "location": null,
+      "artists": [],
+      "__typename": "Schedule"
+    },
+    {
+      "id": "9556",
+      "slug": "fuel5e4izc",
+      "title": "2026 뮤직뱅크 글로벌 페스티벌 IN JAPAN",
+      "body": "2026 뮤직뱅크 글로벌 페스티벌 IN JAPAN",
+      "category": "EVENT",
+      "isAllDay": true,
+      "scheduledAt": "2026-12-13T00:00:00+09:00",
+      "scheduledDate": "2026-12-13",
+      "location": null,
+      "artists": [],
+      "__typename": "Schedule"
+    }
+  ]
+}
