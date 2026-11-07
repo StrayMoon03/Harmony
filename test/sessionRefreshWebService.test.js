@@ -21,8 +21,16 @@ Object.assign(process.env, {
   HARMONY_CREDENTIAL_MANAGER_ROLE_IDS: "",
 });
 
-const { createSessionRefreshHttpHandler } = require("../src/services/sessionRefreshWebService");
+const { createSessionRefreshHttpHandler, isExpectedOrigin } = require("../src/services/sessionRefreshWebService");
 const { createRefreshWorkflow } = require("../src/services/sessionRefreshService");
+
+test("origin validation canonicalizes equivalent HTTPS origins and rejects other origins", () => {
+  assert.equal(isExpectedOrigin("https://refresh.example:443"), true);
+  assert.equal(isExpectedOrigin("https://refresh.example"), true);
+  assert.equal(isExpectedOrigin("http://refresh.example"), false);
+  assert.equal(isExpectedOrigin("https://untrusted.example"), false);
+  assert.equal(isExpectedOrigin("null"), false);
+});
 
 function createHarness({ actorId = "actor-1", identityId = actorId, authorized = true, expired = false, maintenanceType = "cookie_refresh", client = {}, useDefaultAuthorization = false, useRealInteractionWorkflow = false } = {}) {
   const record = {
@@ -73,7 +81,11 @@ function createHarness({ actorId = "actor-1", identityId = actorId, authorized =
     if (String(url).includes("/users/@me")) return new Response(JSON.stringify({ id: identityId }), { status: 200 });
     return new Response("not found", { status: 404 });
   };
-  const logger = { warn: (event, entry) => diagnostics.push({ event, ...entry }) };
+  const logger = { warn: (line) => {
+    const prefix = "session_refresh_failure ";
+    if (!String(line).startsWith(prefix)) return;
+    try { diagnostics.push(JSON.parse(String(line).slice(prefix.length))); } catch { /* test logger only */ }
+  } };
   const handlerOptions = { client, fetchImpl, requests, audit, workflow, interactionWorkflow, logger };
   if (!useDefaultAuthorization) handlerOptions.authorizeActor = authorizeActor;
   const handler = createSessionRefreshHttpHandler(handlerOptions);
@@ -143,6 +155,7 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
       headers: { Cookie: stateCookie.split(";")[0] },
     });
     assert.equal(callback.status, 200);
+    assert.equal(h.record.status, "consumed", "one-time OAuth redemption must still allow the scoped web session to submit");
     assert.match(callback.body, /href="\/session-refresh\/form"/);
     assert.doesNotMatch(callback.headers.location || "", /session-refresh\/form/);
     assert.doesNotMatch(callback.body, /oauth-access-token|test-client-secret|mock-project-token|existing-session/);
@@ -171,9 +184,20 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
     assert.equal(h.diagnostics.at(-1).stage, "form_csrf");
     assert.doesNotMatch(`${csrfRejected.body}${JSON.stringify(h.diagnostics)}`, /NEVER_LOG_THIS_CANDIDATE|PRIVATE_COOKIE_VALUE/);
     const formBody = new URLSearchParams({ csrf, candidate }).toString();
+    const rejectedOrigin = await request(server, "/session-refresh/submit", {
+      method: "POST",
+      headers: { Cookie: cookie, Origin: "https://untrusted.example", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(formBody) },
+      body: formBody,
+    });
+    assert.equal(rejectedOrigin.status, 403);
+    assert.match(rejectedOrigin.body, /Submit the form from the secure Harmony page/);
+    assert.equal(h.diagnostics.at(-1).stage, "form_origin");
+    assert.equal(h.diagnostics.at(-1).reason, "invalid_origin");
+    assert.equal(h.getCandidate(), "", "the candidate must not reach the workflow before origin validation");
+
     const submitted = await request(server, "/session-refresh/submit", {
       method: "POST",
-      headers: { Cookie: cookie, Origin: "https://refresh.example", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(formBody) },
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(formBody) },
       body: formBody,
     });
     assert.equal(submitted.status, 200);
@@ -222,6 +246,10 @@ test("OAuth CSRF, actor mismatch, removed capability, expired request, and HTTP 
   await withServer(expired.handler, async (server) => {
     const response = await request(server, `/session-refresh/${expired.record.request_id}`);
     assert.equal(response.status, 410);
+    assert.match(response.body, /expired or was already used/i);
+    assert.match(response.body, /Reference: [0-9a-f-]{36}/i);
+    assert.equal(expired.diagnostics.at(-1).stage, "request");
+    assert.equal(expired.diagnostics.at(-1).reason, "request_expired");
   });
 });
 

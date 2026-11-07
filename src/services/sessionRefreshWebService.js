@@ -68,6 +68,28 @@ const SAFE_STAGES = new Set(["https", "request", "oauth_config", "oauth_state", 
 const SAFE_REASONS = new Set(["https_required", "request_missing", "request_expired", "refresh_unavailable", "oauth_unavailable", "invalid_oauth_state", "oauth_exchange_failed", "oauth_identity_failed", "identity_mismatch", "actor_not_authorized", "redeem_failed", "web_session_invalid", "unsupported_form", "invalid_origin", "body_too_large", "body_read_failed", "session_sign_failed", "handler_failed", "route_not_found"]);
 const SAFE_SERVICES = new Set(["instagram", "facebook", "threads", "youtube"]);
 
+const SAFE_FAILURE_MESSAGES = Object.freeze({
+  https_required: "Open this page using the secure HTTPS link from Discord. No cookies were processed.",
+  request_missing: "This refresh request is no longer available. Start a new request from Discord Status.",
+  request_expired: "This refresh request expired or was already used. Start a new request from Discord Status.",
+  refresh_unavailable: "Secure refresh is not currently available for this service. No cookies were changed.",
+  oauth_unavailable: "Secure Discord sign-in is not currently available. No cookies were changed.",
+  invalid_oauth_state: "The secure sign-in or form session expired or could not be verified. Start a new request from Discord Status.",
+  oauth_exchange_failed: "Discord sign-in could not be completed. Start a new request from Discord Status.",
+  oauth_identity_failed: "Harmony could not confirm the Discord account. Start a new request from Discord Status.",
+  identity_mismatch: "This request was opened by a different Discord account. Start a new request while signed in as the account that initiated it.",
+  actor_not_authorized: "This Discord account is no longer authorized to manage sessions. Ask a server administrator to check access.",
+  redeem_failed: "This refresh request expired or was already used. Start a new request from Discord Status.",
+  web_session_invalid: "Your secure refresh session expired. Start a new request from Discord Status.",
+  unsupported_form: "The secure form could not be read. Reopen it from Discord Status and try again.",
+  invalid_origin: "Submit the form from the secure Harmony page opened through Discord. No cookies were processed.",
+  body_too_large: "This cookies.txt export is larger than Harmony can safely process. No cookies were changed.",
+  body_read_failed: "Harmony could not read the form submission. No cookies were changed. Start a new request and try again.",
+  session_sign_failed: "Harmony could not start a secure web session. No cookies were changed; contact the owner.",
+  handler_failed: "Harmony could not process this request. No cookies were changed; contact the owner if it continues.",
+  route_not_found: "This secure page is no longer available. Start a new request from Discord Status.",
+});
+
 function safeDiagnostic(logger, { referenceId, service, stage, reason, status }) {
   const entry = {
     referenceId: /^[0-9a-f-]{36}$/i.test(String(referenceId || "")) ? referenceId : crypto.randomUUID(),
@@ -76,13 +98,16 @@ function safeDiagnostic(logger, { referenceId, service, stage, reason, status })
     reason: SAFE_REASONS.has(reason) ? reason : "handler_failed",
     status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : 500,
   };
-  try { logger?.warn?.("session_refresh_failure", entry); } catch { /* logging cannot break the response */ }
+  // Keep the complete, allowlisted diagnostic in one log message. Some hosted
+  // log collectors discard console's second object argument, which otherwise
+  // leaves only a correlation ID and makes the failure stage impossible to find.
+  try { logger?.warn?.(`session_refresh_failure ${JSON.stringify(entry)}`); } catch { /* logging cannot break the response */ }
   return entry.referenceId;
 }
 
 function safeError(response, code = 400, diagnostic = {}, logger = console) {
   const referenceId = safeDiagnostic(logger, { ...diagnostic, status: code });
-  const message = `Harmony could not continue this request. Return to Discord Status and start a new refresh request. Reference: ${referenceId}`;
+  const message = `${SAFE_FAILURE_MESSAGES[diagnostic.reason] || SAFE_FAILURE_MESSAGES.handler_failed} Reference: ${referenceId}`;
   writeHtml(response, code, messagePage("Session refresh", message));
 }
 
@@ -99,6 +124,18 @@ function secureRequest(request) {
 
 function makeCookie(name, value, { path = "/session-refresh", maxAge = 900, sameSite = "Strict" } = {}) {
   return `${name}=${value}; Path=${path}; HttpOnly; Secure; SameSite=${sameSite}; Max-Age=${maxAge}`;
+}
+
+function isExpectedOrigin(origin) {
+  if (!origin) return false;
+  const expected = publicBaseUrl();
+  if (!expected) return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && parsed.origin === expected;
+  } catch {
+    return false;
+  }
 }
 
 function signPayload(payload) {
@@ -350,7 +387,13 @@ async function handleSubmit(request, response, { client, requests, workflow, aut
     return;
   }
   const origin = String(request.headers.origin || "");
-  if (origin !== publicBaseUrl()) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_origin", reason: "invalid_origin" }, logger); return; }
+  const fetchSite = String(request.headers["sec-fetch-site"] || "").toLowerCase();
+  const originMatches = isExpectedOrigin(origin);
+  // Some browser/webview form POSTs omit Origin despite being same-origin.
+  // Accept only that narrow case when Fetch Metadata confirms same-origin;
+  // the exact Host/HTTPS check and per-session CSRF token are still required.
+  const sameOriginFetchWithoutOrigin = !origin && fetchSite === "same-origin";
+  if (!originMatches && !sameOriginFetchWithoutOrigin) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_origin", reason: "invalid_origin" }, logger); return; }
 
   let body;
   let candidate = "";
@@ -481,6 +524,7 @@ function startSessionRefreshWebService(client, options = {}) {
 module.exports = {
   COOKIE_GUIDANCE,
   PAGE_HEADERS,
+  isExpectedOrigin,
   createSessionRefreshHttpHandler,
   startSessionRefreshWebService,
 };

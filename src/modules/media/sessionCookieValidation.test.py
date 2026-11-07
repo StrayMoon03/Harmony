@@ -26,6 +26,28 @@ class SessionCookieValidationTests(unittest.TestCase):
         self.assertIsNone(validator.parse_netscape_candidate("threads", jar))
         self.assertIsNone(validator.parse_netscape_candidate("instagram", "not a cookie export"))
 
+    def test_netscape_headers_comments_and_both_newline_styles_are_accepted(self):
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                jar = newline.join([
+                    "# Exported by a browser extension",
+                    "# Netscape HTTP Cookie File",
+                    "# additional harmless comment",
+                    cookie_line(".facebook.com", "c_user", "private-id"),
+                    cookie_line(".facebook.com", "xs", "private-session"),
+                ])
+                parsed, status = validator.parse_netscape_candidate_result("facebook", jar)
+                self.assertEqual(status, "OK")
+                self.assertEqual({item["name"] for item in parsed}, {"c_user", "xs"})
+
+    def test_facebook_missing_required_cookie_names_are_classified_without_values(self):
+        for present in ("c_user", "xs"):
+            jar = "# Netscape HTTP Cookie File\n" + cookie_line(".facebook.com", present, "PRIVATE_VALUE")
+            parsed, status = validator.parse_netscape_candidate_result("facebook", jar)
+            self.assertIsNone(parsed)
+            self.assertEqual(status, "MISSING_REQUIRED_COOKIES")
+        self.assertEqual(validator.validate("facebook", "# Netscape HTTP Cookie File\nnot-a-cookie-row"), "INVALID_FORMAT")
+
     def test_expired_required_cookie_is_not_accepted(self):
         jar = "\n".join([
             "# Netscape HTTP Cookie File",

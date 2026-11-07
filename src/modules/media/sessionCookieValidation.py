@@ -44,19 +44,21 @@ def normalize_instagram_username(value):
     return username
 
 
-def parse_netscape_candidate(service, contents, now=None):
+def parse_netscape_candidate_result(service, contents, now=None):
     config = SERVICE_CONFIG.get(service)
     if not config or not isinstance(contents, str):
-        return None
+        return None, "INVALID_FORMAT"
     lines = contents.lstrip("\ufeff").splitlines()
-    first = next((line.strip() for line in lines if line.strip()), "")
-    if first not in ("# Netscape HTTP Cookie File", "# HTTP Cookie File"):
-        return None
+    header_index = next((index for index, raw in enumerate(lines)
+                         if raw.strip() in ("# Netscape HTTP Cookie File", "# HTTP Cookie File")), None)
+    if header_index is None:
+        return None, "INVALID_FORMAT"
     allowed = config["domains"]
     cookies = []
     names = set()
     current_time = now if now is not None else time.time()
-    for raw in lines:
+    malformed_cookie_rows = False
+    for raw in lines[header_index + 1:]:
         line = raw.strip()
         if not line:
             continue
@@ -67,6 +69,7 @@ def parse_netscape_candidate(service, contents, now=None):
             line = line[len("#HttpOnly_"):]
         parts = line.split("\t")
         if len(parts) != 7:
+            malformed_cookie_rows = True
             continue
         domain, include_subdomains, cookie_path, secure, expires, name, value = parts
         normalized_domain = domain.lstrip(".").lower()
@@ -89,11 +92,21 @@ def parse_netscape_candidate(service, contents, now=None):
             "sameSite": "Lax",
         })
         names.add(name)
-    if not config["required"].issubset(names):
-        return None
-    if service == "youtube" and not names.intersection({"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}):
-        return None
-    return cookies
+    has_required = config["required"].issubset(names)
+    has_youtube_auth_cookie = service != "youtube" or bool(names.intersection({"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}))
+    if not has_required or not has_youtube_auth_cookie:
+        for cookie in cookies:
+            cookie["value"] = ""
+        cookies.clear()
+        if malformed_cookie_rows and not names:
+            return None, "INVALID_FORMAT"
+        return None, "MISSING_REQUIRED_COOKIES"
+    return cookies, "OK"
+
+
+def parse_netscape_candidate(service, contents, now=None):
+    cookies, status = parse_netscape_candidate_result(service, contents, now)
+    return cookies if status == "OK" else None
 
 
 def path_is_auth_challenge(url):
@@ -199,9 +212,9 @@ def inspect_with_browser(service, cookies):
 
 
 def validate(service, contents):
-    cookies = parse_netscape_candidate(service, contents)
-    if cookies is None:
-        return "INVALID_FORMAT"
+    cookies, parse_status = parse_netscape_candidate_result(service, contents)
+    if parse_status != "OK":
+        return parse_status
     try:
         return inspect_with_browser(service, cookies)
     except Exception:
