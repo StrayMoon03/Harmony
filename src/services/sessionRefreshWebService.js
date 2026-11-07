@@ -389,11 +389,13 @@ async function handleSubmit(request, response, { client, requests, workflow, aut
   const origin = String(request.headers.origin || "");
   const fetchSite = String(request.headers["sec-fetch-site"] || "").toLowerCase();
   const originMatches = isExpectedOrigin(origin);
-  // Some browser/webview form POSTs omit Origin despite being same-origin.
-  // Accept only that narrow case when Fetch Metadata confirms same-origin;
-  // the exact Host/HTTPS check and per-session CSRF token are still required.
-  const sameOriginFetchWithoutOrigin = !origin && fetchSite === "same-origin";
-  if (!originMatches && !sameOriginFetchWithoutOrigin) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_origin", reason: "invalid_origin" }, logger); return; }
+  // Discord's mobile/external browser handoff can submit with a missing or
+  // non-canonical Origin. Accept that only when Fetch Metadata confirms the
+  // browser considers the POST same-origin. HTTPS/Host, signed session, live
+  // authorization, and the per-session CSRF token remain independently
+  // required. Cross-site and unverified requests still fail closed.
+  const sameOriginFetch = fetchSite === "same-origin";
+  if (!originMatches && !sameOriginFetch) { safeError(response, 403, { requestId: existing.session.requestId, service: existing.session.service, stage: "form_origin", reason: "invalid_origin" }, logger); return; }
 
   let body;
   let candidate = "";

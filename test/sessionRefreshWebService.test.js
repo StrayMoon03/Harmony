@@ -197,7 +197,7 @@ test("Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form com
 
     const submitted = await request(server, "/session-refresh/submit", {
       method: "POST",
-      headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(formBody) },
+      headers: { Cookie: cookie, Origin: "https://discord-mobile-webview.invalid", "Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(formBody) },
       body: formBody,
     });
     assert.equal(submitted.status, 200);
