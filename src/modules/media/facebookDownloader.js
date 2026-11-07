@@ -444,6 +444,27 @@ function hasMp4ContainerSignature(bytes) {
     (boxes.has("moov") || boxes.has("moof"));
 }
 
+function hasImageContainerSignature(bytes, contentType) {
+  if (!Buffer.isBuffer(bytes)) return false;
+  const type = String(contentType || "").split(";", 1)[0].trim().toLowerCase();
+  if (type === "image/jpeg") {
+    return bytes.length >= 100 && bytes[0] === 0xff && bytes[1] === 0xd8 &&
+      bytes[2] === 0xff && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9;
+  }
+  if (type === "image/png") {
+    return bytes.length >= 57 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+      bytes.subarray(-8).equals(Buffer.from([73, 69, 78, 68, 174, 66, 96, 130]));
+  }
+  if (type === "image/webp") {
+    return bytes.length >= 30 && bytes.toString("ascii", 0, 4) === "RIFF" &&
+      bytes.toString("ascii", 8, 12) === "WEBP" && bytes.readUInt32LE(4) + 8 === bytes.length;
+  }
+  if (type === "image/gif") {
+    return bytes.length >= 35 && ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6)) && bytes.at(-1) === 0x3b;
+  }
+  return false;
+}
+
 async function fetchVerifiedFacebookAttachment(attachment, referer, cookie = "") {
   const urls = [...new Set([attachment.url, ...(Array.isArray(attachment.fallbackUrls) ? attachment.fallbackUrls : [])])]
     .filter(validFacebookCdnUrl).slice(0, 4);
@@ -469,7 +490,14 @@ async function fetchVerifiedFacebookAttachment(attachment, referer, cookie = "")
         failures.push("invalid or incomplete video file");
         continue;
       }
-      if (isImage && bytes.length < 30 * 1024) { failures.push("file below size threshold"); continue; }
+      // A Facebook CDN attachment already bound to the requested post may be
+      // a legitimate, highly compressed/small image. Keep rejecting tiny
+      // mislabeled error bodies, but verify the actual image container instead
+      // of imposing a 30 KiB minimum that discards valid post media.
+      if (isImage && bytes.length < 30 * 1024 && !hasImageContainerSignature(bytes, type)) {
+        failures.push("small image failed file-signature check");
+        continue;
+      }
       const ext = isVideo ? ".mp4" : type.includes("png") ? ".png" : type.includes("webp") ? ".webp" : ".jpg";
       return { bytes, ext };
     } catch {
@@ -521,6 +549,17 @@ async function runFacebookBrowser(url, jobDir, cookiesPath) {
         .sort((a, b) => Number(a.order) - Number(b.order))
         .slice(0, 10)
     : [];
+
+  const cookieHealth = ["ok", "missing", "missing-session-cookies"].includes(result.cookieHealth)
+    ? result.cookieHealth
+    : "unknown";
+  console.info("Facebook exact-post structure: " + JSON.stringify({
+    cookieHealth,
+    targetIdCount: Array.isArray(result.targetIds) ? result.targetIds.length : 0,
+    matchScore: Number.isFinite(Number(result.matchScore)) ? Number(result.matchScore) : 0,
+    attachmentCandidateCount: Array.isArray(result.attachments) ? result.attachments.length : 0,
+    allowedAttachmentCount: attachments.length,
+  }));
 
   if (!attachments.length) {
     throw new Error(
@@ -911,6 +950,15 @@ function scoreFiles(files, preferPhotos = false) {
     : images + videos * 3;
 }
 
+function isIdentitySensitiveFacebookPost(url, originalUrl = url) {
+  return /\/groups\/[^/]+\/(?:posts|permalink)\//i.test(url) ||
+    /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
+    /\/reels?\/[^/?#]+/i.test(url) ||
+    /\/videos\/\d+/i.test(url) ||
+    /[?&]v=\d+/i.test(url) ||
+    isFacebookShareAlias(originalUrl);
+}
+
 /**
  * Downloads Facebook media with multi-photo awareness.
  *
@@ -963,13 +1011,7 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     looksLikeFacebookPhotoPost(url) ||
     looksLikeFacebookPhotoPost(originalUrl);
   const photoPageUrl = originalUrl || url;
-  const identitySensitive =
-    /\/groups\/[^/]+\/(?:posts|permalink)\//i.test(url) ||
-    /\/posts\/(?:\d+|pfbid[a-z0-9]+)/i.test(url) ||
-    /\/reels?\/[^/?#]+/i.test(url) ||
-    /\/videos\/\d+/i.test(url) ||
-    /[?&]v=\d+/i.test(url) ||
-    isFacebookShareAlias(originalUrl);
+  const identitySensitive = isIdentitySensitiveFacebookPost(url, originalUrl);
   // Try both the canonical URL and the original /share/ URL. Facebook's
   // downloaders sometimes expose the video on only one of those forms.
   // Downloaders operate on the resolved canonical post URL. The original
@@ -1236,4 +1278,5 @@ module.exports = {
   isExplicitSinglePhotoFbid,
   buildFacebookUrlCandidates,
   fetchVerifiedFacebookAttachment,
+  isIdentitySensitiveFacebookPost,
 };
