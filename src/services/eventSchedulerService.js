@@ -1781,6 +1781,25 @@ function isExplicitDiscoveryAllDay(candidate) {
   }
 }
 
+function discoverySourceSummary(candidate) {
+  let sources = [];
+  try { sources = JSON.parse(candidate?.source_provenance || "[]"); } catch { /* Older rows have one provider only. */ }
+  const names = [...new Set((Array.isArray(sources) ? sources : []).map((item) => String(item?.sourceName || item?.provider || "").trim()).filter(Boolean))];
+  return (names.length ? names.join(" + ") : (candidate?.source_provider || "Official discovery")).slice(0, 140);
+}
+
+function discoverySourceEvidence(candidate) {
+  try {
+    const sources = JSON.parse(candidate?.source_provenance || "[]");
+    return (Array.isArray(sources) ? sources : []).slice(0, 3).map((item) => {
+      const name = String(item.sourceName || item.provider || "Source").slice(0, 60);
+      const title = String(item.originalTitle || "").replace(/https?:\/\/\S+/gi, "").slice(0, 85);
+      const url = /^https:\/\/[^\s]+$/i.test(item.sourceUrl || "") ? item.sourceUrl : null;
+      return `• ${name}${title ? ` — ${title}` : ""}${url ? `\n  ${url.slice(0, 140)}` : ""}`;
+    });
+  } catch { return []; }
+}
+
 // The browser reads durable candidates, never their Discord notice messages.
 function discoveryInboxPayload(guildId, requestedIndex = 0) {
   const candidates = store.listCalendarCandidates(guildId, "open").filter(isDiscoveryCandidate);
@@ -1800,7 +1819,7 @@ function discoveryInboxPayload(guildId, requestedIndex = 0) {
       `Event #${candidate.id}`, `${index + 1} of ${candidates.length} — ${text(candidate.title || "Untitled event", 180)}`,
       `📅 ${candidateDateLabel(candidate)}`,
       ...(metadata?.location ? [`📍 ${text(metadata.location, 150)}`] : []),
-      `Source: ${text(candidate.source_provider, 100)}`,
+      `Sources: ${text(discoverySourceSummary(candidate), 140)}`,
     ].join("\n"),
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:page:${index - 1}`).setLabel("◀ Previous").setStyle(ButtonStyle.Secondary).setDisabled(index === 0),
@@ -1846,7 +1865,7 @@ function candidateReviewComponents(candidate, matches) {
   ));
   if (isDiscoveryCandidate(candidate) && /^https:\/\/[^\s]+$/i.test(candidate.source_url || "")) {
     components.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setLabel("Official Source").setStyle(ButtonStyle.Link).setURL(candidate.source_url),
+      new ButtonBuilder().setLabel("View Source").setStyle(ButtonStyle.Link).setURL(candidate.source_url),
     ));
   }
   return components;
@@ -1856,7 +1875,8 @@ function candidateReviewPayload(candidate, matches) {
   const allDay = isExplicitDiscoveryAllDay(candidate);
   const details = [
     `**Potential Stray Kids event #${candidate.id}**`,
-    `Source: ${isDiscoveryCandidate(candidate) ? (candidate.source_provider || "Official discovery") + " (use Official Source button)" : (candidate.source_url || "Not provided")}`,
+    `Source: ${isDiscoveryCandidate(candidate) ? (candidate.source_provider || "Calendar discovery") + " (use View Source button)" : (candidate.source_url || "Not provided")}`,
+    ...(isDiscoveryCandidate(candidate) ? [`Sources: ${discoverySourceSummary(candidate)}`, ...discoverySourceEvidence(candidate)] : []),
     `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
     `Harmony extracted title: ${candidate.title || "Not available"}`,
     `Harmony extracted start date: ${candidate.proposed_event_date || "Not provided"}`,
@@ -1875,7 +1895,7 @@ function candidateReviewPayload(candidate, matches) {
 function candidateNoticePayload(candidate) {
   if (isDiscoveryCandidate(candidate)) {
     return {
-      content: `**Candidate #${candidate.id}**\n${candidate.proposed_event_date || "Date not provided"}\n${candidate.title || "Untitled event"}\nSource: ${candidate.source_provider === "jype-straykids-schedule" ? "JYP" : candidate.source_provider}`,
+      content: `**Candidate #${candidate.id}**\n${candidate.proposed_event_date || "Date not provided"}\n${candidate.title || "Untitled event"}\nSources: ${discoverySourceSummary(candidate)}`,
       components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-manager:candidate:review:${candidate.id}`).setLabel("Review Candidate").setStyle(ButtonStyle.Primary))],
       allowedMentions: { parse: [] },
     };

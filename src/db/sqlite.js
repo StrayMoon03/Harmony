@@ -502,6 +502,7 @@ function migrate(database) {
       source_provider            TEXT,
       discovery_key              TEXT,
       source_metadata            TEXT,
+      source_provenance           TEXT NOT NULL DEFAULT '[]',
       submitter_id               TEXT,
       submitted_note             TEXT,
       discord_event_id           TEXT,
@@ -677,6 +678,9 @@ function migrate(database) {
   }
   if (!candidateColumns.has("source_metadata")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_metadata TEXT");
+  }
+  if (!candidateColumns.has("source_provenance")) {
+    database.exec("ALTER TABLE calendar_candidates ADD COLUMN source_provenance TEXT NOT NULL DEFAULT '[]'");
   }
   if (!candidateColumns.has("proposed_event_end_date")) {
     database.exec("ALTER TABLE calendar_candidates ADD COLUMN proposed_event_end_date TEXT");

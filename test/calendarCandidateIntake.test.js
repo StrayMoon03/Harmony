@@ -437,7 +437,7 @@ test("discovered all-day candidate is compact, reviewed in-place, and preserves 
   assert.match(review.updatePayload.content, /Still missing: nothing obvious/);
   assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Add to Calendar")));
   assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Dismiss")));
-  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Official Source")));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "View Source")));
   assert.equal(store.listEvents(guildId).length, 0);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
   const dismiss = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
@@ -631,7 +631,7 @@ test("discovered review hides raw metadata while retaining details, matches, sou
   }
   assert.doesNotMatch(content, /explicitOffset|source_metadata|\+09:00/);
   assert.ok(!content.includes(candidate.source_metadata));
-  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data.label === "Official Source" && button.data.url === candidate.source_url)));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data.label === "View Source" && button.data.url === candidate.source_url)));
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_metadata, candidate.source_metadata);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
   assert.deepEqual(store.getEvent(guildId, eventId), existingEvent);

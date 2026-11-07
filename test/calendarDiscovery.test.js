@@ -4,14 +4,27 @@ const fs = require("node:fs");
 const path = require("node:path");
 const store = require("../src/stores/eventSchedulerStore");
 const adapter = require("../src/services/calendarDiscoverySources/strayKidsJypeScheduleAdapter");
+const comebackGuide = require("../src/services/calendarDiscoverySources/strayKidsComebackGuideIcsAdapter");
+const icsAdapter = require("../src/services/calendarDiscoverySources/googleCalendarIcsAdapter");
 const { runDiscovery, windowFor, fetchWithLimits, formatDiscoverySummary } = require("../src/services/calendarDiscoveryService");
 const calendarCandidateCommand = require("../src/commands/calendarCandidate");
 
 const liveDecemberPayload = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/jype-december-2026-live-response.json"), "utf8"));
 const expectedEventShapes = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/jype-december-2026-expected-event-shapes.json"), "utf8"));
+const comebackGuideIcs = fs.readFileSync(path.join(__dirname, "fixtures/skz-comeback-guide-december-2026.ics"), "utf8");
+const emptyCalendarIcs = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-TIMEZONE:Asia/Seoul\r\nEND:VCALENDAR\r\n";
 
 function response(payload, status = 200) {
-  return { ok: status >= 200 && status < 300, status, headers: new Map(), json: async () => payload };
+  return { ok: status >= 200 && status < 300, status, headers: new Map(), json: async () => payload, text: async () => emptyCalendarIcs };
+}
+
+function multiSourceFetch(jypePayload, { ics = emptyCalendarIcs, failJyp = false, failGuide = false } = {}) {
+  return async (url) => {
+    if (String(url).includes("calendar.google.com/calendar/ical")) {
+      return failGuide ? response(null, 503) : { ok: true, status: 200, headers: new Map(), text: async () => ics };
+    }
+    return failJyp ? response(null, 503) : response(jypePayload);
+  };
 }
 
 test("JYP adapter includes only official event/show/release records and preserves date semantics", () => {
@@ -80,6 +93,165 @@ test("current live JYP December response shape normalizes all three returned Str
   assert.deepEqual(result.records.map((record) => record.category), ["EVENT", "EVENT", "EVENT"]);
   for (const record of result.records) assert.ok(adapter.normalizeRecord(record).candidate);
   assert.deepEqual(result.records.map((record) => record.scheduledDate), ["2026-12-05", "2026-12-12", "2026-12-13"]);
+});
+
+test("public Comeback Guide iCalendar feed shape preserves UID, URLs, local time, and multi-day date range", async () => {
+  let request;
+  const result = await comebackGuide.fetchRecords({
+    startDate: "2026-12-01", endDate: "2026-12-31",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, status: 200, headers: new Map(), text: async () => comebackGuideIcs };
+    },
+  });
+  assert.equal(result.records.length, 5);
+  assert.equal(request.options.headers.accept, "text/calendar");
+  assert.equal(request.options.headers.cookie, undefined);
+  const normalized = result.records.map((record) => comebackGuide.normalizeRecord(record, { retrievedAt: "2026-11-07T00:00:00Z" }));
+  const fns = normalized.find((item) => item.candidate?.title.includes("FNS")).candidate;
+  assert.equal(fns.proposedEventDate, "2026-12-02");
+  assert.equal(fns.proposedEventAt, "2026-12-02T09:30:00.000Z");
+  assert.equal(fns.proposedEventTimezone, "Asia/Seoul");
+  assert.equal(fns.sourceProvenance[0].sourceId, "36ofp8beefffqrdi7q4aosj49s@google.com");
+  assert.equal(fns.sourceProvenance[0].retrievedAt, "2026-11-07T00:00:00Z");
+  assert.equal(fns.sourceProvenance[0].sourceName, "SKZ Comeback Guide");
+  const hk = normalized.find((item) => item.candidate?.title.includes("Hong Kong")).candidate;
+  assert.equal(hk.proposedEventTimezone, "Asia/Hong_Kong");
+  assert.equal(hk.proposedEventAt, "2026-12-05T09:00:00.000Z");
+  const taipei = normalized.find((item) => item.candidate?.title.includes("Taipei")).candidate;
+  assert.equal(taipei.proposedEventTimezone, "Asia/Taipei");
+  const sbs = normalized.find((item) => item.candidate?.title === "SBS Gayo Daejeon").candidate;
+  assert.equal(sbs.proposedEventDate, "2026-12-24");
+  assert.equal(sbs.proposedEventEndDate, "2026-12-25");
+  assert.equal(sbs.proposedEventTimezone, "Asia/Seoul");
+  assert.match(sbs.sourceUrl, /^https:\/\/news\.sbs\.co\.kr\//);
+});
+
+test("multi-source discovery deduplicates JYP and Comeback Guide coverage and retains provenance", async () => {
+  const guildId = `discovery-multisource-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const client = { guilds: { cache: new Map([[guildId, guild]]) } };
+  const result = await runDiscovery(client, {
+    now: new Date("2026-11-07T12:00:00Z"),
+    fetchImpl: multiSourceFetch(liveDecemberPayload, { ics: comebackGuideIcs }),
+  });
+  assert.equal(result.results.length, 2);
+  assert.deepEqual(result.results.map((item) => item.sourceName), ["JYP Official", "SKZ Comeback Guide"]);
+  assert.equal(result.results[0].newCount, 3);
+  assert.equal(result.results[1].newCount, 2);
+  assert.equal(result.results[1].crossSourceMatches, 3);
+  const candidates = store.listCalendarCandidates(guildId);
+  assert.equal(candidates.length, 5);
+  assert.equal(store.listEvents(guildId).length, 0);
+  const musicBank = candidates.find((candidate) => candidate.proposed_event_date === "2026-12-13");
+  assert.ok(musicBank);
+  assert.equal(musicBank.proposed_event_at, null, "explicit JYP all-day metadata is not overwritten by a secondary timed listing");
+  assert.equal(JSON.parse(musicBank.source_metadata).allDay, true);
+  assert.match(JSON.parse(musicBank.source_metadata).location, /Tokyo/);
+  const provenance = JSON.parse(musicBank.source_provenance);
+  assert.deepEqual(provenance.map((item) => item.sourceName).sort(), ["JYP Official", "SKZ Comeback Guide"]);
+  assert.ok(provenance.every((item) => item.sourceId && item.sourceUrl && item.originalTitle && item.sourceDateTime && item.retrievedAt));
+  const summary = formatDiscoverySummary(result.results);
+  assert.match(summary, /JYP Official — 3 fetched/);
+  assert.match(summary, /SKZ Comeback Guide — 5 fetched/);
+  assert.match(summary, /cross-source matches 3/);
+  assert.match(summary, /No calendar events were created automatically/);
+});
+
+test("secondary-source-only events are reviewable when JYP fails", async () => {
+  const guildId = `discovery-secondary-only-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const result = await runDiscovery({ guilds: { cache: new Map([[guildId, guild]]) } }, {
+    now: new Date("2026-11-07T12:00:00Z"),
+    fetchImpl: multiSourceFetch({ schedules: [] }, { ics: comebackGuideIcs, failJyp: true }),
+  });
+  assert.equal(result.results[0].ok, false);
+  assert.equal(result.results[1].ok, true);
+  assert.equal(result.results[1].newCount, 5);
+  assert.equal(store.listCalendarCandidates(guildId).length, 5);
+  assert.equal(store.listEvents(guildId).length, 0);
+  assert.match(formatDiscoverySummary(result.results), /JYP Official — unavailable/);
+});
+
+test("source identity matching is conservative across dates, separate days, and ambiguous same-day events", () => {
+  const guildId = `discovery-conservative-${Date.now()}`;
+  const create = (title, date, provider, id, at = null) => store.createOrGetCalendarCandidate({
+    guildId, title, proposedEventDate: date, proposedEventAt: at,
+    sourceUrl: `https://example.test/${provider}/${id}`, sourceType: "automatic_discovery",
+    sourceProvider: provider, discoveryKey: `${provider}:${id}`,
+    sourceProvenance: [{ provider, sourceName: provider, sourceId: id, sourceUrl: `https://example.test/${provider}/${id}`, originalTitle: title, sourceDateTime: at || date, retrievedAt: "2026-11-07T00:00:00Z" }],
+  });
+  create("Stray Kids World Tour <RUN IT> HONG KONG", "2026-12-05", "jype-straykids-schedule", "hk");
+  const hk = create("RUN IT World Tour - Hong Kong, China", "2026-12-05", "stray-kids-comeback-guide", "hk-ics");
+  assert.equal(hk.duplicate, true);
+  assert.equal(hk.crossSourceMatch, true);
+  create("Fuji TV 2026 FNS Music Festival Broadcast", "2026-12-02", "source-a", "fns-a");
+  const fns = create("2026 FNS Kayo Festival First Night", "2026-12-02", "source-b", "fns-b");
+  assert.equal(fns.duplicate, true);
+  assert.equal(fns.crossSourceMatch, true);
+  const taipei = create("RUN IT World Tour - Taipei, Taiwan", "2026-12-12", "stray-kids-comeback-guide", "taipei");
+  assert.equal(taipei.duplicate, false);
+  create("SBS Gayo Daejeon Day 1", "2026-12-24", "source-a", "sbs1");
+  const day2 = create("SBS Gayo Daejeon Day 2", "2026-12-25", "source-b", "sbs2");
+  assert.equal(day2.duplicate, false);
+  create("Music Bank Global Festival", "2026-12-13", "source-a", "mb1", "2026-12-13T08:00:00Z");
+  const ambiguous = create("Music Bank Awards Afterparty", "2026-12-13", "source-b", "mb2", "2026-12-13T08:00:00Z");
+  assert.equal(ambiguous.duplicate, false);
+  const hkCandidate = store.listCalendarCandidates(guildId).find((item) => item.proposed_event_date === "2026-12-05");
+  assert.equal(JSON.parse(hkCandidate.source_provenance).length, 2);
+});
+
+test("three providers retain provenance on one candidate and decided candidates are never recreated or reopened", () => {
+  const guildId = `discovery-provenance-decisions-${Date.now()}`;
+  const make = (provider, id, title = "2026 Music Bank Global Festival in Japan") => store.createOrGetCalendarCandidate({
+    guildId, title, proposedEventDate: "2026-12-13", proposedEventAt: "2026-12-13T08:00:00.000Z",
+    sourceUrl: `https://example.test/${provider}/${id}`, sourceType: "automatic_discovery", sourceProvider: provider,
+    discoveryKey: `${provider}:${id}`, sourceProvenance: [{ provider, sourceName: provider, sourceId: id, sourceUrl: `https://example.test/${provider}/${id}`, originalTitle: title, sourceDateTime: "2026-12-13T08:00:00Z", retrievedAt: "2026-11-07T00:00:00Z" }],
+  });
+  const first = make("jype-straykids-schedule", "mb");
+  assert.equal(first.duplicate, false);
+  const second = make("stray-kids-comeback-guide", "mb2", "MUSIC BANK GLOBAL FESTIVAL IN JAPAN 2026 x Stray Kids");
+  assert.equal(second.duplicate, true);
+  assert.equal(second.crossSourceMatch, true);
+  const third = make("trusted-third-calendar", "mb3", "2026 Music Bank Global Festival in Tokyo");
+  assert.equal(third.duplicate, true);
+  assert.equal(third.crossSourceMatch, true);
+  assert.equal(store.listCalendarCandidates(guildId).length, 1);
+  assert.equal(JSON.parse(store.getCalendarCandidate(guildId, first.candidate.id).source_provenance).length, 3);
+  store.decideCalendarCandidate(guildId, first.candidate.id, "dismissed", "admin");
+  const rediscovered = make("new-public-calendar", "mb4", "2026 Music Bank Global Festival in Tokyo");
+  assert.equal(rediscovered.duplicate, true);
+  assert.equal(rediscovered.candidate.status, "dismissed");
+  assert.equal(store.listCalendarCandidates(guildId).length, 1);
+  const linkedGuild = `${guildId}-linked`;
+  const linked = store.createOrGetCalendarCandidate({
+    guildId: linkedGuild, title: "SBS Gayo Daejeon", proposedEventDate: "2026-12-24",
+    sourceUrl: "https://example.test/sbs", sourceType: "automatic_discovery", sourceProvider: "skz-comeback-guide",
+    discoveryKey: "skz-comeback-guide:sbs", sourceProvenance: [{ provider: "skz-comeback-guide", sourceName: "Guide", sourceId: "sbs", sourceUrl: "https://example.test/sbs", originalTitle: "SBS Gayo Daejeon", sourceDateTime: "2026-12-24", retrievedAt: "2026-11-07T00:00:00Z" }],
+  });
+  store.decideCalendarCandidate(linkedGuild, linked.candidate.id, "linked", "admin", null, 456);
+  const linkedAgain = store.createOrGetCalendarCandidate({
+    guildId: linkedGuild, title: "SBS Gayo Daejeon", proposedEventDate: "2026-12-24",
+    sourceUrl: "https://example.test/sbs-new", sourceType: "automatic_discovery", sourceProvider: "second-guide",
+    discoveryKey: "second-guide:sbs", sourceProvenance: [{ provider: "second-guide", sourceName: "Second Guide", sourceId: "sbs2", sourceUrl: "https://example.test/sbs-new", originalTitle: "SBS Gayo Daejeon", sourceDateTime: "2026-12-24", retrievedAt: "2026-11-07T00:00:00Z" }],
+  });
+  assert.equal(linkedAgain.duplicate, true);
+  assert.equal(linkedAgain.candidate.status, "linked");
+  assert.equal(linkedAgain.candidate.calendar_event_id, 456);
+  assert.equal(store.listCalendarCandidates(linkedGuild).length, 1);
+});
+
+test("a source failure is isolated while successful source events are still processed", async () => {
+  const guildId = `discovery-failure-isolation-${Date.now()}`;
+  const guild = { id: guildId, channels: { cache: new Map(), fetch: async () => null } };
+  const result = await runDiscovery({ guilds: { cache: new Map([[guildId, guild]]) } }, {
+    now: new Date("2026-11-07T12:00:00Z"),
+    fetchImpl: multiSourceFetch({ schedules: [] }, { ics: comebackGuideIcs, failGuide: true }),
+  });
+  assert.equal(result.results[0].ok, true);
+  assert.equal(result.results[1].ok, false);
+  assert.equal(store.listCalendarCandidates(guildId).length, 0);
+  assert.match(formatDiscoverySummary(result.results), /SKZ Comeback Guide — unavailable/);
 });
 
 test("JYP-shaped fixture for reported December events reaches review candidates when returned by source", async () => {
@@ -282,10 +454,10 @@ test("automatic discovery defaults off, persists when enabled, and manual checks
   assert.equal(automaticOff.results.length, 0);
   store.setCalendarDiscoveryEnabled(guildId, true);
   const automaticOn = await runDiscovery(client, { automatic: true, fetchImpl });
-  assert.equal(automaticOn.results.length, 1);
+  assert.equal(automaticOn.results.length, 2);
   assert.equal(store.getCalendarDiscoveryConfig(guildId).enabled, 1);
   store.saveCalendarDiscoveryState(guildId, "future-official-source", { lastError: "test state" });
   assert.equal(store.isCalendarDiscoveryEnabled(guildId), true);
   const manual = await runDiscovery(client, { automatic: false, fetchImpl });
-  assert.equal(manual.results.length, 1);
+  assert.equal(manual.results.length, 2);
 });

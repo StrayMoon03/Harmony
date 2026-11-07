@@ -94,6 +94,24 @@ test('one private browser reopens persisted candidates with deleted notices and 
   assert.equal(f.sent.length, 0);
 });
 
+test('review inbox and review card display all corroborating source names and evidence', async () => {
+  const f = fixture();
+  const c = candidate(f, 'Music Bank Global Festival', {
+    sourceProvider: 'jype-straykids-schedule',
+    discoveryKey: 'jype:musicbank',
+    sourceProvenance: [
+      { provider: 'jype-straykids-schedule', sourceName: 'JYP Official', sourceId: '9556', sourceUrl: 'https://straykids.jype.com/schedule?scheduleId=9556', originalTitle: '2026 뮤직뱅크 글로벌 페스티벌 IN JAPAN', sourceDateTime: '2026-12-13', retrievedAt: '2026-11-07T00:00:00Z' },
+      { provider: 'stray-kids-comeback-guide', sourceName: 'SKZ Comeback Guide', sourceId: 'mb-uid', sourceUrl: 'https://music-bank.jp/', originalTitle: 'MUSIC BANK GLOBAL FESTIVAL IN JAPAN 2026 x Stray Kids', sourceDateTime: '2026-12-13T08:00:00Z', retrievedAt: '2026-11-07T00:00:00Z' },
+    ],
+  });
+  const inbox = (await open(f)).reply[0];
+  assert.match(inbox.content, /Sources: JYP Official \+ SKZ Comeback Guide/);
+  const review = (await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`)).update[0];
+  assert.match(review.content, /Sources: JYP Official \+ SKZ Comeback Guide/);
+  assert.match(review.content, /2026 뮤직뱅크 글로벌 페스티벌/);
+  assert.match(review.content, /MUSIC BANK GLOBAL FESTIVAL/);
+});
+
 test('empty inbox and stale selection recover without reposting or reopening candidates', async () => {
   const f = fixture(); const empty = (await open(f)).reply[0];
   assert.match(empty.content, /0 events awaiting review/);
@@ -213,7 +231,7 @@ test('Link Existing uses current review matching and preserves inbox context', a
 test('multiple newly discovered and already-known records never create per-candidate messages', async () => {
   const f = fixture();
   const records = [1, 2, 3].map(n => ({ id: `inbox-${n}`, title: `Discovered ${n}`, category: 'SHOW', isAllDay: true, scheduledDate: '2026-12-01' }));
-  const options = { now: new Date('2026-11-01T00:00:00Z'), fetchImpl: async () => ({ ok: true, status: 200, headers: new Map(), json: async () => ({ schedules: records }) }) };
+  const options = { now: new Date('2026-11-01T00:00:00Z'), fetchImpl: async (url) => ({ ok: true, status: 200, headers: new Map(), json: async () => ({ schedules: records }), text: async () => 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nX-WR-TIMEZONE:Asia/Seoul\r\nEND:VCALENDAR\r\n' }) };
   const first = await runDiscovery(f.client, options);
   assert.equal(first.results[0].newCount, 3); assert.equal(f.sent.length, 0);
   const repeat = await runDiscovery(f.client, options);

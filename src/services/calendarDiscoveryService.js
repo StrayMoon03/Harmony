@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const store = require("../stores/eventSchedulerStore");
 const { submitCalendarCandidate } = require("./eventSchedulerService");
 const jype = require("./calendarDiscoverySources/strayKidsJypeScheduleAdapter");
+const comebackGuide = require("./calendarDiscoverySources/strayKidsComebackGuideIcsAdapter");
 
 const LOOKAHEAD_DAYS = 120;
 const CORRECTION_LOOKBACK_HOURS = 48;
@@ -11,13 +12,16 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DECISION_STATUSES = new Set(["added", "linked", "dismissed"]);
 const DUPLICATE_REASONS = new Set(["same-discovery", "same-source", "same-title-date", "already-calendar"]);
 const locks = new Set();
-const sources = [jype];
+const sources = [jype, comebackGuide];
 
 function dateKey(date) { return date.toISOString().slice(0, 10); }
 function addDays(date, days) { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; }
 function addHours(date, hours) { return new Date(date.getTime() + hours * 60 * 60 * 1000); }
 
 function safeCategory(record) {
+  // iCalendar VEVENTs are event records; the publisher does not expose a
+  // Harmony/JYP category taxonomy in the feed.
+  if (record?.UID || record?.uid) return "EVENT";
   const value = String(record?.category || "").trim().toUpperCase();
   return ["EVENT", "SHOW", "RELEASE", "ANNIVERSARY", "ETC"].includes(value) ? value : "OTHER";
 }
@@ -27,11 +31,20 @@ function increment(counts, key, amount = 1) {
 }
 
 function safeSkipReason(reason) {
-  return ["missing-id", "excluded-category", "missing-date", "missing-time"].includes(reason) ? `normalization:${reason}` : "normalization:other";
+  return ["missing-id", "missing-title", "excluded-category", "missing-date", "missing-time", "cancelled"].includes(reason)
+    ? `normalization:${reason}`
+    : "normalization:other";
 }
 
 function safeDuplicateReason(reason) {
   return DUPLICATE_REASONS.has(reason) ? reason : "other";
+}
+
+function recordSourceIdentity(record) {
+  const uid = record?.UID?.[0]?.value || record?.uid || record?.id || null;
+  const modified = record?.updatedAt || record?.scheduledAt || record?.scheduledDate
+    || record?.["LAST-MODIFIED"]?.[0]?.value || record?.["DTSTART"]?.[0]?.value || null;
+  return [uid, modified];
 }
 
 function emptyDiagnostics() {
@@ -42,7 +55,7 @@ function formatDiscoverySummary(results = []) {
   const totals = {
     fetched: 0, normalized: 0, newCount: 0, updated: 0, duplicate: 0,
     skipped: 0, adminDecisionPreserved: 0, failures: 0, notModified: 0,
-    categories: {}, skipReasons: {}, failureReasons: {},
+    crossSourceMatches: 0, categories: {}, skipReasons: {}, failureReasons: {},
   };
   for (const item of results) {
     totals.fetched += item.fetched || 0;
@@ -52,6 +65,7 @@ function formatDiscoverySummary(results = []) {
     totals.duplicate += item.duplicate || 0;
     totals.skipped += item.skipped || 0;
     totals.adminDecisionPreserved += item.adminDecisionPreserved || 0;
+    totals.crossSourceMatches += item.crossSourceMatches || 0;
     if (item.notModified) totals.notModified += 1;
     if (!item.ok) {
       totals.failures += 1;
@@ -63,13 +77,18 @@ function formatDiscoverySummary(results = []) {
   const categoryText = Object.entries(totals.categories).map(([name, count]) => `${name} ${count}`).join(", ") || "none";
   const skippedText = Object.entries(totals.skipReasons).map(([name, count]) => `${name} ${count}`).join(", ");
   const failureText = Object.entries(totals.failureReasons).map(([name, count]) => `${name} ${count}`).join(", ");
-  const fetchedText = totals.fetched
-    ? `Fetched ${totals.fetched} (${categoryText})`
-    : totals.notModified ? "JYP source unchanged (HTTP 304)" : "JYP returned 0 records";
+  const perSource = results.map((item) => {
+    const name = item.sourceName || item.sourceKey || "Source";
+    return !item.ok
+      ? `${name} — unavailable (${item.failureReason || "source-failed"})`
+      : `${name} — ${item.fetched || 0} fetched, ${item.newCount || 0} new, ${item.crossSourceMatches || 0} corroborated`;
+  });
+  const fetchedText = `Combined ${totals.fetched} fetched (${categoryText})`;
   return [
-    `Official schedule check complete. ${fetchedText}; normalized ${totals.normalized}; new ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; skipped ${totals.skipped}${skippedText ? ` (${skippedText})` : ""}${totals.adminDecisionPreserved ? `; prior admin decisions preserved ${totals.adminDecisionPreserved}` : ""}${totals.failures ? `; source failures ${totals.failures} (${failureText})` : ""}.`,
+    `Stray Kids schedule check complete. ${fetchedText}; normalized ${totals.normalized}; unique new candidates ${totals.newCount}; updated ${totals.updated}; already known ${totals.duplicate}; cross-source matches ${totals.crossSourceMatches}; skipped ${totals.skipped}${skippedText ? ` (${skippedText})` : ""}${totals.adminDecisionPreserved ? `; prior admin decisions preserved ${totals.adminDecisionPreserved}` : ""}${totals.failures ? `; source failures ${totals.failures} (${failureText})` : ""}.`,
+    ...perSource,
     "No calendar events were created automatically.",
-  ].join(" ");
+  ].join("\n");
 }
 
 function sourceFailureReason(error) {
@@ -91,7 +110,7 @@ async function fetchWithLimits(url, options = {}) {
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     if (!response?.ok) return response;
-    if (typeof response.json !== "function") return response;
+    if (typeof response.text !== "function") return response;
     const raw = await response.text();
     if (Buffer.byteLength(raw, "utf8") > MAX_RESPONSE_BYTES) throw new Error("source response exceeded size limit");
     return {
@@ -99,6 +118,7 @@ async function fetchWithLimits(url, options = {}) {
       status: response.status,
       headers: response.headers,
       json: async () => JSON.parse(raw),
+      text: async () => raw,
     };
   } finally { clearTimeout(timer); }
 }
@@ -124,7 +144,7 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
   const runId = crypto.randomUUID();
   const started = Date.now();
   store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { lastRunAt: now.toISOString(), lastError: null });
-  let fetched = 0, newCount = 0, updated = 0, duplicate = 0, skipped = 0;
+  let fetched = 0, newCount = 0, updated = 0, duplicate = 0, skipped = 0, crossSourceMatches = 0;
   const diagnostics = emptyDiagnostics();
   try {
     const conditionalHeaders = {};
@@ -146,12 +166,12 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
         ...diagnostics,
         latencyMs: Date.now() - started,
       });
-      return { ok: true, notModified: true, sourceKey: source.SOURCE_KEY, runId, window, fetched: 0, newCount: 0, updated: 0, duplicate: 0, skipped: 0, ...diagnostics };
+      return { ok: true, notModified: true, sourceKey: source.SOURCE_KEY, sourceName: source.SOURCE_NAME, runId, window, fetched: 0, newCount: 0, updated: 0, duplicate: 0, crossSourceMatches: 0, skipped: 0, ...diagnostics };
     }
     fetched = result.records.length;
     for (const record of result.records) {
       increment(diagnostics.categories, safeCategory(record));
-      const normalized = source.normalizeRecord(record);
+      const normalized = source.normalizeRecord(record, { retrievedAt: now.toISOString() });
       if (!normalized.candidate) {
         skipped += 1;
         increment(diagnostics.skipReasons, safeSkipReason(normalized.reason));
@@ -164,6 +184,7 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
         continue;
       }
       const outcome = await submitCalendarCandidate(client, guildId ? { guildId, ...normalized.candidate } : normalized.candidate);
+      if (outcome.crossSourceMatch) crossSourceMatches += 1;
       if (outcome.duplicate) {
         duplicate += 1;
         if (outcome.updated) updated += 1;
@@ -172,15 +193,15 @@ async function runSource(client, guildId, source, { now = new Date(), fetchImpl 
         if (outcome.sourceChanged && !outcome.updated) console.warn("Calendar discovery source changed after admin decision", { sourceKey: source.SOURCE_KEY, guildId, discoveryKey: normalized.candidate.discoveryKey, status: outcome.candidate?.status });
       } else newCount += 1;
     }
-    const sourceHash = crypto.createHash("sha256").update(JSON.stringify(result.records.map((record) => [record.id, record.updatedAt || record.scheduledAt || record.scheduledDate]))).digest("hex");
+    const sourceHash = crypto.createHash("sha256").update(JSON.stringify(result.records.map(recordSourceIdentity))).digest("hex");
     store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { initialized: 1, lastSuccessAt: now.toISOString(), lastSourceHash: sourceHash, etag: result.etag || state?.etag || null, lastModified: result.lastModified || state?.last_modified || null, lastError: null });
-    console.log("Calendar discovery completed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, fetched, ...diagnostics, newCount, updated, duplicate, skipped, latencyMs: Date.now() - started });
-    return { ok: true, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped, ...diagnostics };
+    console.log("Calendar discovery completed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, fetched, ...diagnostics, newCount, updated, duplicate, crossSourceMatches, skipped, latencyMs: Date.now() - started });
+    return { ok: true, sourceKey: source.SOURCE_KEY, sourceName: source.SOURCE_NAME, runId, window, fetched, newCount, updated, duplicate, crossSourceMatches, skipped, ...diagnostics };
   } catch (error) {
     const failureReason = sourceFailureReason(error);
     store.saveCalendarDiscoveryState(guildId, source.SOURCE_KEY, { lastError: error.name || "source-error" });
     console.error("Calendar discovery failed", { sourceKey: source.SOURCE_KEY, runId, guildId, window, failureReason, httpStatus: Number.isInteger(error.status) ? error.status : null, errorClass: error.name || "Error", fetched, ...diagnostics, latencyMs: Date.now() - started });
-    return { ok: false, sourceKey: source.SOURCE_KEY, runId, window, fetched, newCount, updated, duplicate, skipped, ...diagnostics, failureReason };
+    return { ok: false, sourceKey: source.SOURCE_KEY, sourceName: source.SOURCE_NAME, runId, window, fetched, newCount, updated, duplicate, crossSourceMatches, skipped, ...diagnostics, failureReason };
   }
 }
 
