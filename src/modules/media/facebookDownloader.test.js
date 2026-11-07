@@ -62,3 +62,42 @@ test("rejects a small video response without a complete MP4 container", async (t
     /invalid or incomplete video file/
   );
 });
+
+test("accepts a small image with a valid container signature from an exact Facebook post attachment", async (t) => {
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  const smallPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/tT8AAAAASUVORK5CYII=", "base64");
+  assert.ok(smallPng.length < 30 * 1024);
+  global.fetch = async (_url, options) => {
+    assert.equal(options.headers.Referer, "https://www.facebook.com/share/p/1J6qEkk4N1/");
+    return new Response(smallPng, { headers: { "content-type": "image/png" } });
+  };
+
+  const media = await fetchVerifiedFacebookAttachment(
+    { type: "photo", url: "https://scontent-a.fbcdn.net/v/verified-post-photo.png" },
+    "https://www.facebook.com/share/p/1J6qEkk4N1/",
+    "c_user=redacted; xs=redacted"
+  );
+
+  assert.equal(media.bytes.length, smallPng.length);
+  assert.equal(media.ext, ".png");
+});
+
+test("small mislabeled Facebook image responses remain rejected without logging the URL or cookie", async (t) => {
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  global.fetch = async () => new Response("not an image", { headers: { "content-type": "image/jpeg" } });
+
+  await assert.rejects(
+    fetchVerifiedFacebookAttachment(
+      { type: "photo", url: "https://scontent-a.fbcdn.net/p?signature=private-token" },
+      "https://www.facebook.com/share/p/1J6qEkk4N1/",
+      "c_user=private-user; xs=private-cookie"
+    ),
+    (error) => {
+      assert.match(error.message, /small image failed file-signature check/);
+      assert.doesNotMatch(error.message, /private-token|private-user|private-cookie|https:/);
+      return true;
+    }
+  );
+});
