@@ -117,6 +117,23 @@ test("unresolved platform checkpoint rejects candidate without rotating or clear
   assert.deepEqual(require("../src/stores/socialHealthStore").get("instagram"), before);
 });
 
+test("missing Facebook c_user or xs cookies is reported safely before rotation", async () => {
+  let rotations = 0;
+  let completed = false;
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => ({ status: "MISSING_REQUIRED_COOKIES" }),
+    providerFactory: () => ({ rotate: async () => { rotations++; }, restore: async () => {} }),
+    requests: { completeRequest: () => { completed = true; } },
+    audit: { recordCredentialRefreshStage() {} },
+  });
+  const result = await workflow.submit({ ...context(), service: "facebook" }, "PRIVATE_FACEBOOK_COOKIE_EXPORT");
+  assert.equal(result.reason, "missing_required_cookies");
+  assert.equal(result.message, "The Facebook export must include both c_user and xs cookies. The existing Facebook session was kept.");
+  assert.equal(rotations, 0);
+  assert.equal(completed, true);
+  assert.doesNotMatch(result.message, /PRIVATE_FACEBOOK_COOKIE_EXPORT|token|secret/i);
+});
+
 test("Status offers cookie refresh only for explicit expiry and authorized Harmony admins", () => {
   const report = { checkedAt: "2026-10-28T00:00:00.000Z", rows: [
     { id: "social-instagram", name: "Instagram", status: STATUS.attention, explanation: "Sign-in required.", action: "Session refresh required." },

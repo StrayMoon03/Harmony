@@ -3,7 +3,7 @@ const path = require("node:path");
 const { expectedInstagramUsername } = require("./sessionRefreshConfig");
 
 const VALIDATION_HELPER = path.resolve(__dirname, "../modules/media/sessionCookieValidation.py");
-const VALIDATION_STATUSES = new Set(["AUTHENTICATED", "UNAUTHENTICATED", "OWNER_REQUIRED", "INCONCLUSIVE", "INVALID_FORMAT", "IDENTITY_MISMATCH", "IDENTITY_UNVERIFIABLE"]);
+const VALIDATION_STATUSES = new Set(["AUTHENTICATED", "UNAUTHENTICATED", "OWNER_REQUIRED", "INCONCLUSIVE", "INVALID_FORMAT", "MISSING_REQUIRED_COOKIES", "IDENTITY_MISMATCH", "IDENTITY_UNVERIFIABLE"]);
 
 function validateSessionCookie(service, candidate, {
   spawnProcess = spawn,

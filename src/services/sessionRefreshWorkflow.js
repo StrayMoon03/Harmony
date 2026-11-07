@@ -7,8 +7,9 @@ const { SECRET_VARIABLES, expectedInstagramUsername } = require("./sessionRefres
 const { recordSocialMaintenanceSuccess } = require("./operationsStatusService");
 
 const RESULT_MESSAGES = Object.freeze({
-  invalid_format: "That does not look like a supported cookie export. The existing session was kept.",
-  invalid_session: "The platform did not confirm an active signed-in session. The existing session was kept.",
+  invalid_format: "That does not look like a valid Netscape cookies.txt export. The existing session was kept.",
+  missing_required_cookies: "The export is missing cookies required for this service. The existing session was kept.",
+  invalid_session: "The platform did not accept the supplied signed-in session. The existing session was kept.",
   owner_required: "The platform still requires account verification. Complete that directly with the platform, then export a fresh session and try again. The existing session was kept.",
   validation_unavailable: "Harmony could not safely verify that session. The existing session was kept.",
   rotation_failure: "Harmony could not update the session setting. The existing session was preserved.",
@@ -17,6 +18,16 @@ const RESULT_MESSAGES = Object.freeze({
   activation_rollback_attention: "Session activation failed and the previous setting could not be confirmed. Contact the owner before retrying.",
   success: "Cookies refreshed, activated, and verified. No restart was required.",
 });
+
+function resultMessage(reason, service) {
+  if (reason === "missing_required_cookies" && service === "facebook") {
+    return "The Facebook export must include both c_user and xs cookies. The existing Facebook session was kept.";
+  }
+  if (reason === "invalid_session" && service === "facebook") {
+    return "Facebook did not accept the supplied session. The existing Facebook cookies were kept.";
+  }
+  return RESULT_MESSAGES[reason] || "The secure cookie refresh could not be completed. The existing session was kept.";
+}
 
 function base64Buffer(buffer) {
   return buffer.toString("base64");
@@ -60,7 +71,7 @@ function createSessionRefreshWorkflow({
     if (!SECRET_VARIABLES[service] || typeof candidate !== "string" || Buffer.byteLength(candidate, "utf8") > 1024 * 1024) {
       record(context, service, "validation", false);
       complete(context, service);
-      return { ok: false, reason: "invalid_format", message: RESULT_MESSAGES.invalid_format };
+      return { ok: false, reason: "invalid_format", message: resultMessage("invalid_format", service) };
     }
 
     if (service === "instagram" && !expectedInstagramUsername()) {
@@ -78,10 +89,11 @@ function createSessionRefreshWorkflow({
     if (validation?.status !== "AUTHENTICATED") {
       const reason = validation?.status === "INVALID_FORMAT" ? "invalid_format"
         : validation?.status === "OWNER_REQUIRED" ? "owner_required"
+        : validation?.status === "MISSING_REQUIRED_COOKIES" ? "missing_required_cookies"
           : validation?.status === "UNAUTHENTICATED" ? "invalid_session" : "validation_unavailable";
       record(context, service, "validation", false);
       complete(context, service);
-      return { ok: false, reason, message: RESULT_MESSAGES[reason] };
+      return { ok: false, reason, message: resultMessage(reason, service) };
     }
     record(context, service, "validation", true);
 
@@ -170,4 +182,4 @@ function createSessionRefreshWorkflow({
   return { submit };
 }
 
-module.exports = { RESULT_MESSAGES, createSessionRefreshWorkflow };
+module.exports = { RESULT_MESSAGES, createSessionRefreshWorkflow, resultMessage };
