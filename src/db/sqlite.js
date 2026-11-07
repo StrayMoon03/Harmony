@@ -273,9 +273,19 @@ function migrate(database) {
       state          TEXT NOT NULL CHECK (state IN ('success', 'failure')),
       failure_kind   TEXT CHECK (failure_kind IN ('session', 'owner')),
       last_success_at TEXT,
+      success_kind  TEXT CHECK (success_kind IN ('media', 'authenticated_media', 'verification', 'refresh')),
+      last_verified_at TEXT,
+      last_failure_at TEXT,
+      diagnostic_category TEXT CHECK (diagnostic_category IN ('login_required', 'session_invalid', 'checkpoint', 'challenge', 'identity_mismatch', 'identity_unverified', 'missing_required_cookies', 'provider_auth_failure')),
       updated_at     TEXT NOT NULL,
       CHECK ((state = 'success' AND failure_kind IS NULL AND last_success_at IS NOT NULL) OR
              (state = 'failure' AND failure_kind IS NOT NULL))
+    );
+
+    CREATE TABLE IF NOT EXISTS social_health_verification_attempts (
+      platform TEXT PRIMARY KEY CHECK (platform IN ('instagram', 'facebook', 'youtube', 'threads')),
+      last_attempt_at TEXT NOT NULL,
+      last_result TEXT NOT NULL CHECK (last_result IN ('verified', 'session', 'owner', 'unknown'))
     );
 
     CREATE TABLE IF NOT EXISTS member_count_settings (
@@ -548,6 +558,14 @@ function migrate(database) {
   `);
 
   migrateBirthdayHistoryForNonMembers(database);
+
+  const socialHealthColumns = new Set(
+    database.prepare("PRAGMA table_info(social_health_state)").all().map((column) => column.name)
+  );
+  if (!socialHealthColumns.has("success_kind")) database.exec("ALTER TABLE social_health_state ADD COLUMN success_kind TEXT CHECK (success_kind IN ('media', 'authenticated_media', 'verification', 'refresh'))");
+  if (!socialHealthColumns.has("last_verified_at")) database.exec("ALTER TABLE social_health_state ADD COLUMN last_verified_at TEXT");
+  if (!socialHealthColumns.has("last_failure_at")) database.exec("ALTER TABLE social_health_state ADD COLUMN last_failure_at TEXT");
+  if (!socialHealthColumns.has("diagnostic_category")) database.exec("ALTER TABLE social_health_state ADD COLUMN diagnostic_category TEXT CHECK (diagnostic_category IN ('login_required', 'session_invalid', 'checkpoint', 'challenge', 'identity_mismatch', 'identity_unverified', 'missing_required_cookies', 'provider_auth_failure'))");
 
   const credentialRefreshColumns = new Set(
     database.prepare("PRAGMA table_info(credential_refresh_requests)").all().map((column) => column.name)

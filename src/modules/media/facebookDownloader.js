@@ -7,6 +7,7 @@ const { promisify } = require("node:util");
 const { probeFile } = require("./downloader");
 const { withBrowserLock } = require("./browserLock");
 const { isFacebookShareAlias } = require("./facebook");
+const { classifyAuthenticatedProviderFailure } = require("../../services/socialAuthEvidence");
 
 const execFileAsync = promisify(execFile);
 
@@ -926,11 +927,8 @@ async function getGalleryDlCreator(url, cookiesPath = null) {
     }
 
     return findCreator(data);
-  } catch (error) {
-    console.warn(
-      "Facebook gallery-dl creator lookup failed:",
-      error.message
-    );
+  } catch {
+    console.warn("Facebook gallery-dl creator lookup failed.");
     return null;
   }
 }
@@ -1103,6 +1101,7 @@ async function downloadFacebookMedia(url, originalUrl = url) {
   }
 
   const errors = [];
+  let authFailure = null;
   let bestScore = -1;
   let bestStrategyName = null;
 
@@ -1179,6 +1178,9 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         break;
       }
     } catch (error) {
+      if (strategy.name.includes("+cookies")) {
+        authFailure ||= classifyAuthenticatedProviderFailure(error, { authenticatedRequest: true });
+      }
       const details = [
         error.stderr || "",
         error.stdout || "",
@@ -1188,10 +1190,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         .trim();
 
       errors.push(`${strategy.name}: ${details}`);
-      console.warn(
-        `Facebook download failed with ${strategy.name}:`,
-        (error && error.message) || error
-      );
+      console.warn("Facebook media strategy failed.", {
+        strategy: strategy.name,
+        category: authFailure?.kind || "media_or_extraction_failure",
+      });
     }
   }
 
@@ -1232,14 +1234,23 @@ async function downloadFacebookMedia(url, originalUrl = url) {
         linkOnly: true,
         failureReason: cookiesUsable
           ? `FACEBOOK_EXACT_POST_FAILED: ${errors.join(" | ")}`
-          : "FACEBOOK_AUTH_REQUIRED: Facebook login cookies are missing or expired.",
+          : "FACEBOOK_EXACT_POST_FAILED: no authenticated session is configured and exact-post media could not be retrieved.",
+        ...(authFailure ? {
+          socialAuthFailureKind: authFailure.kind,
+          socialAuthFailureCategory: authFailure.category,
+        } : {}),
       };
     }
 
-    throw new Error(
+    const failure = new Error(
       "Harmony could not retrieve this Facebook post after trying every available download method.\n\n" +
         errors.join("\n")
     );
+    if (authFailure) {
+      failure.socialAuthFailureKind = authFailure.kind;
+      failure.socialAuthFailureCategory = authFailure.category;
+    }
+    throw failure;
   }
 
   let creator = null;
@@ -1269,6 +1280,10 @@ async function downloadFacebookMedia(url, originalUrl = url) {
     rawDir: jobDir,
     platform: "facebook",
     creator,
+    ...(authFailure ? {
+      socialAuthFailureKind: authFailure.kind,
+      socialAuthFailureCategory: authFailure.category,
+    } : {}),
   };
 }
 

@@ -35,9 +35,11 @@ function safeReason(error) {
   if (/requested format is not available|no formats found/i.test(text)) {
     return "The platform did not provide a downloadable media format Harmony could use.";
   }
-  if (/cookies?|sign in|login|authentication|checkpoint/i.test(text)) {
-    return "The platform requires refreshed access or login cookies.";
+  if (/below.{0,20}(?:size|byte) threshold|too small|file size|signature rejection/i.test(text)) {
+    return "The retrieved media could not be used for posting.";
   }
+  if (error?.socialAuthFailureKind === "owner") return "The platform requires an account security check by its owner.";
+  if (error?.socialAuthFailureKind === "session") return "The platform session needs to be refreshed.";
   if (/compress|too large|size limit|under Discord limit/i.test(text)) {
     return "The media could not be reduced safely to Discord’s upload limit.";
   }
@@ -75,7 +77,7 @@ async function resolveDestination(client, settings) {
 async function logMediaError(message, error) {
   const platform = platformFromLink(firstLink(message?.content)).toLowerCase();
   if (SOCIAL_PLATFORMS.has(platform) && isExplicitAuthenticationFailure(error)) {
-    recordSocialAuthFailure(platform, new Date().toISOString(), authenticationFailureKind(error));
+    recordSocialAuthFailure(platform, new Date().toISOString(), authenticationFailureKind(error), error.socialAuthFailureCategory);
   }
   const githubReport = await reportMediaErrorToGitHub(message, error).catch((reportError) => {
     console.error(
@@ -154,9 +156,7 @@ async function logMediaError(message, error) {
     allowedMentions: { parse: [] },
   });
 
-  console.log(
-    `Harmony media error reported as ${errorId}: ${error?.message || String(error)}`
-  );
+  console.log(`Harmony media error reported as ${errorId} (${platform.toLowerCase()}).`);
   return true;
 }
 
@@ -194,4 +194,5 @@ module.exports = {
   sendErrorInboxTest,
   sendErrorInboxTestToChannel,
   resolveDestination,
+  safeReason,
 };

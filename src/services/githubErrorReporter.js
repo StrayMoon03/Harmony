@@ -32,6 +32,8 @@ function sanitizedErrorText(error) {
   value = value
     .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => safeUrl(url) || "[URL removed]")
     .replace(/(authorization|token|cookie|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/\b(c_user|xs|sessionid|csrftoken|login_info|sapISID|__secure-1papISID|__secure-3papISID)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/^.*\t(?:TRUE|FALSE)\t\/\t(?:TRUE|FALSE)\t\d+\t(?:c_user|xs|sessionid|csrftoken|login_info|sapISID|__secure-1papISID|__secure-3papISID)\t.*$/gim, "[SESSION COOKIE ROW REDACTED]")
     .replace(/\b(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED_TOKEN]")
     .replace(/[A-Za-z0-9_-]{80,}/g, "[REDACTED_LONG_VALUE]");
 

@@ -7,6 +7,8 @@ const eventStore = require("../stores/eventSchedulerStore");
 const guardStore = require("../stores/communityGuardStore");
 const guardService = require("./communityGuardService");
 const auditStore = require("../stores/operationsAuditStore");
+const { validateSessionCookie } = require("./sessionCookieValidator");
+const { classifyAuthenticatedProviderFailure } = require("./socialAuthEvidence");
 
 const STATUS = Object.freeze({
   healthy: "healthy",
@@ -24,17 +26,14 @@ const SOCIAL = Object.freeze({
 });
 const COOKIE_SERVICES = new Set(["instagram", "threads", "facebook", "youtube"]);
 const SOCIAL_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
+const SOCIAL_VERIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
 function isExplicitAuthenticationFailure(error) {
-  const text = [error?.message, error?.stderr, typeof error === "string" ? error : ""]
-    .filter(Boolean).join(" ").toLowerCase();
-  return /(?:auth_required|authentication required|session (?:has )?expired|sign[ -]?in (?:is )?required|login (?:is )?required|opened a login|login page|checkpoint (?:page|required|blocked)|\/checkpoint\/|\/challenge\/)/i.test(text);
+  return ["session", "owner"].includes(error?.socialAuthFailureKind);
 }
 
 function authenticationFailureKind(error) {
-  const text = [error?.message, error?.stderr, typeof error === "string" ? error : ""]
-    .filter(Boolean).join(" ").toLowerCase();
-  return /checkpoint|challenge|security verification|suspicious login/.test(text) ? "owner" : "session";
+  return error?.socialAuthFailureKind === "owner" ? "owner" : "session";
 }
 
 function statusRow(id, name, status, explanation, action = "No action available.", lastChecked = new Date().toISOString()) {
@@ -108,23 +107,24 @@ async function resolveAdminCapabilities(context = {}) {
   };
 }
 
-function recordSocialAuthFailure(platform, at = new Date().toISOString(), kind = "session") {
+function recordSocialAuthFailure(platform, at = new Date().toISOString(), kind = "session", diagnosticCategory = "provider_auth_failure") {
   const key = String(platform || "").toLowerCase();
   if (!SOCIAL[key]) return;
   try {
-    socialHealthStore.recordFailure(key, kind === "owner" ? "owner" : "session", at);
+    socialHealthStore.recordFailure(key, kind === "owner" ? "owner" : "session", at, diagnosticCategory);
   } catch {
     // A health-signal write must not break the media failure/reporting path.
   }
 }
 
-function recordSocialSuccess(platform, at = new Date().toISOString()) {
+function recordSocialSuccess(platform, at = new Date().toISOString(), evidence = {}) {
   const key = String(platform || "").toLowerCase();
   if (!SOCIAL[key]) return;
-  // The store preserves an unresolved owner/checkpoint failure while recording
-  // the successful retrieval for diagnostics. Other stale failures are cleared.
+  // Anonymous retrieval says nothing about the health of an authenticated
+  // cookie session. Cookie-managed services need authenticated evidence.
+  if (COOKIE_SERVICES.has(key) && evidence?.authenticated !== true) return;
   try {
-    socialHealthStore.recordSuccess(key, at);
+    socialHealthStore.recordSuccess(key, at, COOKIE_SERVICES.has(key) ? "authenticated_media" : "media");
   } catch {
     // A health-signal write must not turn a successful media request into a failure.
   }
@@ -136,7 +136,7 @@ function recordSocialMaintenanceSuccess(platform, at = new Date().toISOString())
   // Called only after a submitted session passed pre-rotation validation and
   // post-activation verification. Ordinary media success keeps checkpoint state.
   try {
-    socialHealthStore.recordVerifiedSuccess(key, at);
+    socialHealthStore.recordVerifiedSuccess(key, at, "refresh");
   } catch {
     // A health-signal write must not turn a verified refresh into a failure.
   }
@@ -171,23 +171,32 @@ async function checkSocial(platform) {
   const name = SOCIAL[platform];
   if (!name) return statusRow(`social-${platform}`, String(platform), STATUS.unknown, "This platform is not supported.");
   const health = socialHealthStore.get(platform);
-  if (health?.state === "failure" && health.failure_kind === "owner") return statusRow(
-    `social-${platform}`,
-    name,
-    STATUS.owner,
-    "The platform returned a security checkpoint or verification page. Harmony cannot complete that account check.",
-    "Owner attention required; resolve the account check with the platform.",
-    health.updated_at
-  );
-  if (health?.state === "failure" && health.failure_kind === "session" && COOKIE_SERVICES.has(platform)) return statusRow(
+  if (health?.state === "failure" && health.failure_kind === "owner") {
+    const identityIssue = ["identity_mismatch", "identity_unverified"].includes(health.diagnostic_category);
+    return statusRow(
+      `social-${platform}`,
+      name,
+      STATUS.owner,
+      identityIssue
+        ? "The authenticated account identity could not be confirmed. Owner attention is required."
+        : "The platform returned a security checkpoint or verification page. Harmony cannot complete that account check.",
+      identityIssue
+        ? "Confirm the configured account identity with the owner before continuing."
+        : "Owner attention required; resolve the account check with the platform.",
+      health.updated_at
+    );
+  }
+  const confirmedSessionFailure = health?.state === "failure" && health.failure_kind === "session" &&
+    ["login_required", "session_invalid", "missing_required_cookies", "provider_auth_failure"].includes(health.diagnostic_category);
+  if (confirmedSessionFailure && COOKIE_SERVICES.has(platform)) return statusRow(
     `social-${platform}`,
     name,
     STATUS.attention,
-    `${name} cookies need to be refreshed. A media request reported that sign-in or a renewed session is required.`,
+    `${name} cookies need to be refreshed. An authenticated check confirmed that sign-in is required.`,
     `${name} cookies need to be refreshed.`,
     health.updated_at
   );
-  if (health?.state === "failure" && health.failure_kind === "session") return statusRow(
+  if (confirmedSessionFailure) return statusRow(
     `social-${platform}`,
     name,
     STATUS.attention,
@@ -195,16 +204,20 @@ async function checkSocial(platform) {
     "Try the platform again; if the problem continues, ask the owner.",
     health.updated_at
   );
-  const successAt = health?.last_success_at;
+  const acceptableCookieSuccess = !COOKIE_SERVICES.has(platform) ||
+    ["authenticated_media", "verification", "refresh"].includes(health?.success_kind);
+  const successAt = acceptableCookieSuccess ? health?.last_success_at : null;
   const successAge = successAt ? Date.now() - new Date(successAt).getTime() : Infinity;
   if (Number.isFinite(successAge) && successAge >= 0 && successAge <= SOCIAL_SUCCESS_TTL_MS) {
     return statusRow(
       `social-${platform}`,
       name,
       STATUS.healthy,
-      "A recent media retrieval succeeded.",
+      health?.success_kind === "verification" || health?.success_kind === "refresh"
+        ? "The authenticated session was explicitly verified recently."
+        : "A recent authenticated request succeeded.",
       "No action needed.",
-      successAt
+      health?.last_verified_at || successAt
     );
   }
   const configured = COOKIE_SERVICES.has(platform) ? await sessionConfigured(platform) : false;
@@ -213,10 +226,70 @@ async function checkSocial(platform) {
     name,
     STATUS.unknown,
     configured
-      ? "A session file is present, but Harmony cannot confirm that the platform still accepts it without a media request."
-      : "No saved session is configured. Public media may still work; some content may require sign-in.",
-    configured ? "No action unless a media request reports a sign-in problem." : "Owner/Developer attention only if authenticated content is needed."
+      ? "The authenticated session has not been recently verified."
+      : "No saved authenticated session is configured. Public media may still work.",
+    configured ? `Use Verify ${name} to check the saved session.` : "No action unless authenticated content is needed.",
+    socialHealthStore.getVerificationAttempt(platform)?.last_attempt_at || undefined
   );
+}
+
+function verificationRow(platform, state, explanation, action, at) {
+  return { platform, state, explanation, action, checkedAt: at || null };
+}
+
+async function verifySocialSession(platform, options = {}) {
+  const key = String(platform || "").toLowerCase();
+  const name = SOCIAL[key];
+  if (!name || !COOKIE_SERVICES.has(key)) return verificationRow(key, "unknown", "This service cannot be verified here.", "No action available.");
+  const clock = options.clock || (() => new Date());
+  const timestamp = new Date(clock()).toISOString();
+  const filePath = sessionPath(key);
+  if (!filePath || !(await (options.isConfigured || sessionConfigured)(key))) {
+    return verificationRow(key, "not_configured", `${name} has no saved session to verify.`, "Ask an administrator to configure the secure session.");
+  }
+  const priorAttempt = socialHealthStore.getVerificationAttempt(key);
+  if (priorAttempt && Date.parse(timestamp) - Date.parse(priorAttempt.last_attempt_at) < SOCIAL_VERIFY_COOLDOWN_MS) {
+    return verificationRow(key, "rate_limited", `${name} was checked recently.`, "Wait a few minutes before verifying again.", priorAttempt.last_attempt_at);
+  }
+
+  // Persist the start before the network call to bound simultaneous clicks and
+  // avoid repeatedly contacting provider auth pages.
+  socialHealthStore.recordVerificationAttempt(key, timestamp, "unknown");
+  let contents = null;
+  let validation = { status: "INCONCLUSIVE" };
+  try {
+    contents = await (options.readFile || fs.readFile)(filePath, "utf8");
+    validation = await (options.validator || validateSessionCookie)(key, contents);
+  } catch {
+    validation = { status: "INCONCLUSIVE" };
+  } finally {
+    contents = null;
+  }
+
+  const result = String(validation?.status || "INCONCLUSIVE");
+  let outcome = "unknown";
+  let response;
+  if (result === "AUTHENTICATED") {
+    socialHealthStore.recordVerifiedSuccess(key, timestamp, "verification");
+    outcome = "verified";
+    response = verificationRow(key, "verified", `${name} authenticated session is working.`, "No action needed.", timestamp);
+  } else if (["UNAUTHENTICATED", "MISSING_REQUIRED_COOKIES"].includes(result)) {
+    const category = result === "MISSING_REQUIRED_COOKIES" ? "missing_required_cookies" : "login_required";
+    recordSocialAuthFailure(key, timestamp, "session", category);
+    outcome = "session";
+    response = verificationRow(key, "session", `${name} session needs refresh.`, "Use the secure cookie refresh action.", timestamp);
+  } else if (["OWNER_REQUIRED", "IDENTITY_MISMATCH", "IDENTITY_UNVERIFIABLE"].includes(result)) {
+    const category = result === "IDENTITY_MISMATCH" ? "identity_mismatch"
+      : result === "IDENTITY_UNVERIFIABLE" ? "identity_unverified"
+        : /challenge|checkpoint/i.test(String(validation?.category || "")) ? "challenge" : "checkpoint";
+    recordSocialAuthFailure(key, timestamp, "owner", category);
+    outcome = "owner";
+    response = verificationRow(key, "owner", `${name} requires owner attention.`, "Resolve the platform account check before retrying.", timestamp);
+  } else {
+    response = verificationRow(key, "unknown", `${name} session could not be verified right now.`, "Try again later; no session problem was inferred.", timestamp);
+  }
+  socialHealthStore.recordVerificationAttempt(key, timestamp, outcome);
+  return response;
 }
 
 function shortDate(value) {
@@ -326,12 +399,15 @@ module.exports = {
   isCookieRefreshRequired,
   isAccountVerificationRequired,
   SOCIAL_SUCCESS_TTL_MS,
+  SOCIAL_VERIFY_COOLDOWN_MS,
   getAdminCapabilities,
   resolveAdminCapabilities,
   parseConfiguredRoleIds,
   recordSocialAuthFailure,
   recordSocialSuccess,
   recordSocialMaintenanceSuccess,
+  verifySocialSession,
+  classifyAuthenticatedProviderFailure,
   isExplicitAuthenticationFailure,
   authenticationFailureKind,
   sessionConfigured,

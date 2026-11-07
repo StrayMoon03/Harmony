@@ -4,6 +4,7 @@ const { randomUUID } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { probeFile } = require("./downloader");
+const { classifyAuthenticatedProviderFailure } = require("../../services/socialAuthEvidence");
 
 const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
@@ -68,6 +69,7 @@ async function downloadYouTubeMedia(url) {
   ];
 
   const cookiesPath = process.env.YOUTUBE_COOKIES;
+  let authFailure = null;
   if (cookiesPath) {
     console.log("YouTube cookies: ready (public retry is enabled if they are stale).");
   } else {
@@ -94,6 +96,7 @@ async function downloadYouTubeMedia(url) {
       } catch (error) {
         failures.push(error);
         if (mode === "cookies") {
+          authFailure ||= classifyAuthenticatedProviderFailure(error, { authenticatedRequest: true });
           console.warn("YouTube cookie attempt failed; retrying publicly.");
         }
       }
@@ -174,6 +177,7 @@ async function downloadYouTubeMedia(url) {
         linkOnly: true,
         linkOnlyReason: "long-video",
         durationSeconds,
+        ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
       };
     }
 
@@ -238,6 +242,7 @@ async function downloadYouTubeMedia(url) {
       platform: "youtube",
       creator,
       durationSeconds,
+      ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
     };
   } catch (error) {
     await fs.rm(jobDir, {
@@ -257,10 +262,9 @@ async function downloadYouTubeMedia(url) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isUpcomingLiveEvent = /This live event will begin/i.test(errorMessage);
 
-    console.warn(
-      "YouTube download was unavailable; using the original YouTube player instead:",
-      errorMessage
-    );
+    console.warn("YouTube download was unavailable; preserving the original platform link.", {
+      category: authFailure ? "authenticated_session_failure" : isUpcomingLiveEvent ? "upcoming_live" : "download_unavailable",
+    });
     return {
       files: [],
       rawDir: null,
@@ -271,6 +275,7 @@ async function downloadYouTubeMedia(url) {
         ? "upcoming-live"
         : "download-unavailable",
       durationSeconds: null,
+      ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
     };
   }
 }

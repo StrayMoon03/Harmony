@@ -3,6 +3,7 @@ const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
+const { classifyAuthenticatedProviderFailure } = require("../../services/socialAuthEvidence");
 
 const execFileAsync = promisify(execFile);
 
@@ -143,16 +144,27 @@ async function downloadMedia(url, options = {}) {
   signal?.throwIfAborted();
   const jobDir = await createJobDirectory();
   const errors = [];
+  let authFailure = null;
+  const cookiePath = process.env.INSTAGRAM_COOKIES || path.resolve(__dirname, "../../instagram-cookies.txt");
+  let cookiesAvailable = false;
+  try { await fs.access(cookiePath); cookiesAvailable = true; } catch { /* public-only attempt */ }
 
   for (const useCookies of [true, false]) {
     try {
-      return await downloadWithYtDlp(url, jobDir, { useCookies, signal });
+      const result = await downloadWithYtDlp(url, jobDir, { useCookies, signal });
+      return {
+        ...result,
+        ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
+      };
     } catch (error) {
       if (signal?.aborted) {
         await fs.rm(jobDir, { recursive: true, force: true });
         throw signal.reason || error;
       }
       errors.push(error);
+      if (useCookies && cookiesAvailable) {
+        authFailure ||= classifyAuthenticatedProviderFailure(error, { authenticatedRequest: true });
+      }
       console.warn(
         `Instagram yt-dlp ${useCookies ? "cookie" : "public"} attempt failed; ` +
           `${useCookies ? "retrying without cookies" : "trying gallery-dl"}.`
@@ -164,18 +176,20 @@ async function downloadMedia(url, options = {}) {
 
   try {
     console.log("Instagram falling back to gallery-dl for the exact post.");
-    return await downloadWithGalleryDl(url, jobDir, {
+    const result = await downloadWithGalleryDl(url, jobDir, {
       requireAudio: errors.some((error) =>
         String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")
       ),
       signal,
     });
+    return { ...result, ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}) };
   } catch (galleryError) {
     if (signal?.aborted) {
       await fs.rm(jobDir, { recursive: true, force: true });
       throw signal.reason || galleryError;
     }
     errors.push(galleryError);
+    if (cookiesAvailable) authFailure ||= classifyAuthenticatedProviderFailure(galleryError, { authenticatedRequest: true });
     await fs.rm(jobDir, { recursive: true, force: true });
     await fs.mkdir(jobDir, { recursive: true });
     try {
@@ -184,20 +198,31 @@ async function downloadMedia(url, options = {}) {
       const result = isReel
         ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir, { signal })
         : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir, { signal });
-      return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram" };
+      return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram", ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}) };
     } catch (browserError) {
       if (signal?.aborted) {
         await fs.rm(jobDir, { recursive: true, force: true });
         throw signal.reason || browserError;
       }
       errors.push(browserError);
+      if (["session", "owner"].includes(browserError?.socialAuthFailureKind)) {
+        authFailure ||= {
+          kind: browserError.socialAuthFailureKind,
+          category: browserError.socialAuthFailureCategory,
+        };
+      }
       await fs.rm(jobDir, { recursive: true, force: true });
     }
     const summary = errors
       .map((error) => String(error?.stderr || error?.message || error))
       .filter(Boolean)
       .join(" | ");
-    throw new Error(`Instagram exhausted its safe download methods: ${summary}`);
+    const failure = new Error(`Instagram exhausted its safe download methods: ${summary}`);
+    if (authFailure) {
+      failure.socialAuthFailureKind = authFailure.kind;
+      failure.socialAuthFailureCategory = authFailure.category;
+    }
+    throw failure;
   }
 }
 
@@ -355,10 +380,7 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
         );
       }
     } catch (error) {
-      console.warn(
-        "Instagram audio retry failed:",
-        error instanceof Error ? error.message : error
-      );
+      console.warn("Instagram audio retry failed during media processing.");
     }
   }
 
