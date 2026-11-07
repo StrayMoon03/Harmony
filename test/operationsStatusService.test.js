@@ -43,14 +43,15 @@ function reloadStatusService() {
 
 test.beforeEach(() => {
   getDb().prepare("DELETE FROM social_health_state").run();
+  getDb().prepare("DELETE FROM social_health_verification_attempts").run();
 });
 
 test("social health signals survive a database close and status-service reload", async () => {
   const now = new Date().toISOString();
-  statusService.recordSocialSuccess("facebook", now);
+  statusService.recordSocialMaintenanceSuccess("facebook", now);
   statusService.recordSocialAuthFailure("facebook", now, "session");
   assert.equal(getDb().prepare("SELECT last_success_at FROM social_health_state WHERE platform = 'facebook'").get().last_success_at, null);
-  for (const platform of ["instagram", "youtube", "threads"]) statusService.recordSocialSuccess(platform, now);
+  for (const platform of ["instagram", "youtube", "threads"]) statusService.recordSocialMaintenanceSuccess(platform, now);
 
   statusService = reloadStatusService();
   assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
@@ -59,22 +60,31 @@ test("social health signals survive a database close and status-service reload",
     assert.equal((await statusService.checkSocial(platform)).status, statusService.STATUS.healthy, platform);
   }
 
-  statusService.recordSocialSuccess("facebook", new Date().toISOString());
+  statusService.recordSocialMaintenanceSuccess("facebook", new Date().toISOString());
   statusService = reloadStatusService();
   assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.healthy);
 });
 
 test("expired persisted success returns Unable to Verify after restart", async () => {
   const expiredAt = new Date(Date.now() - statusService.SOCIAL_SUCCESS_TTL_MS - 1).toISOString();
-  statusService.recordSocialSuccess("instagram", expiredAt);
+  statusService.recordSocialMaintenanceSuccess("instagram", expiredAt);
   statusService = reloadStatusService();
   assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.unknown);
+});
+
+test("legacy unclassified session failure is not presented as a cookie diagnosis", async () => {
+  getDb().prepare(`INSERT INTO social_health_state (platform, state, failure_kind, last_success_at, updated_at)
+    VALUES ('facebook', 'failure', 'session', NULL, '2026-11-06T00:00:00.000Z')`).run();
+  statusService = reloadStatusService();
+  const row = await statusService.checkSocial("facebook");
+  assert.equal(row.status, statusService.STATUS.unknown);
+  assert.doesNotMatch(row.action, /cookies need to be refreshed/i);
 });
 
 test("checkpoint state survives restart and ordinary success does not clear it", async () => {
   const checkpointAt = "2026-11-02T12:00:00.000Z";
   statusService.recordSocialAuthFailure("youtube", checkpointAt, "owner");
-  statusService.recordSocialSuccess("youtube", new Date().toISOString());
+  statusService.recordSocialSuccess("youtube", new Date().toISOString(), { authenticated: true });
   statusService = reloadStatusService();
   const row = await statusService.checkSocial("youtube");
   assert.equal(row.status, statusService.STATUS.owner);
@@ -113,19 +123,20 @@ test("a failed check does not prevent other systems from rendering", async () =>
   assert.equal(JSON.stringify(rows).includes("SECRET_VALUE"), false);
 });
 
-test("unconfigured session is reported honestly and explicit auth failure requests refresh", async () => {
+test("unconfigured session is reported honestly and only structured auth evidence requests refresh", async () => {
   delete process.env.THREADS_COOKIES;
   const initial = await statusService.checkSocial("youtube");
   assert.equal(initial.status, statusService.STATUS.unknown);
-  assert.match(initial.explanation, /No saved session is configured/);
+  assert.match(initial.explanation, /No saved authenticated session is configured/);
 
   statusService.recordSocialAuthFailure("youtube", "2026-10-27T00:00:00.000Z");
   const failed = await statusService.checkSocial("youtube");
   assert.equal(failed.status, statusService.STATUS.attention);
   assert.match(failed.action, /YouTube cookies need to be refreshed/);
-  statusService.recordSocialSuccess("youtube");
+  statusService.recordSocialSuccess("youtube", new Date().toISOString(), { authenticated: true });
   assert.equal((await statusService.checkSocial("youtube")).status, statusService.STATUS.healthy);
-  assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Login required to view this post")), true);
+  assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Login required to view this post")), false);
+  assert.equal(statusService.isExplicitAuthenticationFailure({ message: "Login required", socialAuthFailureKind: "session" }), true);
   assert.equal(statusService.isExplicitAuthenticationFailure(new Error("Cookie file could not be read")), false);
   statusService.recordSocialAuthFailure("threads", "2026-10-27T00:00:00.000Z", "owner");
   const checkpoint = await statusService.checkSocial("threads");
@@ -136,13 +147,38 @@ test("unconfigured session is reported honestly and explicit auth failure reques
   statusService.recordSocialSuccess("threads");
 });
 
-test("a successful Instagram media retrieval clears the prior expiry signal and records current working evidence", async () => {
+test("anonymous Instagram success cannot clear a stale cookie failure; authenticated evidence can", async () => {
   statusService.recordSocialAuthFailure("instagram", "2026-10-28T08:00:00.000Z", "session");
   assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.attention);
   statusService.recordSocialSuccess("instagram", new Date().toISOString());
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.attention);
+  statusService.recordSocialSuccess("instagram", new Date().toISOString(), { authenticated: true });
   const row = await statusService.checkSocial("instagram");
   assert.equal(row.status, statusService.STATUS.healthy);
-  assert.match(row.explanation, /recent media retrieval succeeded/i);
+  assert.match(row.explanation, /recent authenticated request succeeded/i);
+});
+
+test("Facebook authenticated exact-post media delivery failures do not mark cookies bad; explicit auth failures do", async () => {
+  const { logMediaError } = require("../src/services/errorInboxService");
+  await logMediaError({ content: "https://www.facebook.com/share/p/example/", client: {} },
+    new Error("Facebook verified post attachment failed at CDN: image below old 30 KiB threshold"));
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.unknown);
+
+  const loginFailure = new Error("Facebook opened a login page after an authenticated post request");
+  loginFailure.socialAuthFailureKind = "session";
+  loginFailure.socialAuthFailureCategory = "login_required";
+  await logMediaError({ content: "https://www.facebook.com/share/p/example/", client: {} }, loginFailure);
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
+  assert.match((await statusService.checkSocial("facebook")).action, /Facebook cookies need to be refreshed/);
+
+  const instagramEvidence = statusService.classifyAuthenticatedProviderFailure(
+    new Error("Instagram login required to view this media"), { authenticatedRequest: true }
+  );
+  assert.deepEqual(instagramEvidence, { kind: "session", category: "login_required" });
+  statusService.recordSocialAuthFailure("instagram", new Date().toISOString(), instagramEvidence.kind, instagramEvidence.category);
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.attention);
+  statusService.recordSocialSuccess("instagram");
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.attention);
 });
 
 test("session file presence never exposes its path or contents or claims authentication", async () => {
@@ -152,9 +188,82 @@ test("session file presence never exposes its path or contents or claims authent
   process.env.INSTAGRAM_COOKIES = secretPath;
   const row = await statusService.checkSocial("instagram");
   assert.equal(row.status, statusService.STATUS.unknown);
-  assert.match(row.explanation, /cannot confirm/);
+  assert.match(row.explanation, /has not been recently verified/);
   assert.equal(JSON.stringify(row).includes(secretPath), false);
   assert.equal(JSON.stringify(row).includes("SESSION_COOKIE_VALUE_NEVER_OUTPUT"), false);
+});
+
+test("explicit Facebook and Instagram verification persist verified healthy state across service reload", async () => {
+  const now = "2026-11-07T12:00:00.000Z";
+  for (const platform of ["facebook", "instagram"]) {
+    const result = await statusService.verifySocialSession(platform, {
+      clock: () => now,
+      isConfigured: async () => true,
+      readFile: async () => "SESSION_SECRET_SENTINEL",
+      validator: async (service, candidate) => {
+        assert.equal(candidate, "SESSION_SECRET_SENTINEL");
+        return { status: "AUTHENTICATED" };
+      },
+    });
+    assert.equal(result.state, "verified");
+    assert.equal((await statusService.checkSocial(platform)).status, statusService.STATUS.healthy);
+  }
+  statusService = reloadStatusService();
+  for (const platform of ["facebook", "instagram"]) {
+    assert.equal((await statusService.checkSocial(platform)).status, statusService.STATUS.healthy);
+  }
+  const stored = JSON.stringify(getDb().prepare("SELECT * FROM social_health_state").all());
+  assert.doesNotMatch(stored, /SESSION_SECRET_SENTINEL|cookie|token|password/i);
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM social_health_verification_attempts WHERE last_result = 'verified'").get().n, 2);
+});
+
+test("indeterminate verification stays unknown and does not infer cookie failure", async () => {
+  const result = await statusService.verifySocialSession("instagram", {
+    clock: () => "2026-11-07T12:00:00.000Z",
+    isConfigured: async () => true,
+    readFile: async () => "opaque candidate",
+    validator: async () => ({ status: "INCONCLUSIVE" }),
+  });
+  assert.equal(result.state, "unknown");
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.unknown);
+  assert.equal(getDb().prepare("SELECT state FROM social_health_state WHERE platform = 'instagram'").get(), undefined);
+});
+
+test("live verification distinguishes rejected session from security checkpoint", async () => {
+  const run = (platform, status, at) => statusService.verifySocialSession(platform, {
+    clock: () => at,
+    isConfigured: async () => true,
+    readFile: async () => "opaque candidate",
+    validator: async () => ({ status }),
+  });
+  assert.equal((await run("facebook", "UNAUTHENTICATED", "2026-11-07T12:00:00.000Z")).state, "session");
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
+  assert.equal((await run("instagram", "OWNER_REQUIRED", "2026-11-07T12:10:00.000Z")).state, "owner");
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.owner);
+  statusService = reloadStatusService();
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
+  assert.equal((await statusService.checkSocial("instagram")).status, statusService.STATUS.owner);
+});
+
+test("verification cooldown prevents repeated provider checks and missing sessions remain unconfigured", async () => {
+  const time = "2026-11-07T12:00:00.000Z";
+  let calls = 0;
+  const options = { clock: () => time, isConfigured: async () => true, readFile: async () => "candidate", validator: async () => { calls++; return { status: "INCONCLUSIVE" }; } };
+  assert.equal((await statusService.verifySocialSession("facebook", options)).state, "unknown");
+  assert.equal((await statusService.verifySocialSession("facebook", options)).state, "rate_limited");
+  assert.equal(calls, 1);
+  const absent = await statusService.verifySocialSession("youtube", { isConfigured: async () => false });
+  assert.equal(absent.state, "not_configured");
+});
+
+test("secure refresh records an explicit verified checkpoint and legacy media success is not enough for cookie services", async () => {
+  statusService.recordSocialSuccess("facebook", "2026-11-07T12:00:00.000Z");
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.unknown);
+  statusService.recordSocialMaintenanceSuccess("facebook", "2026-11-07T12:05:00.000Z");
+  const stored = getDb().prepare("SELECT success_kind, last_verified_at FROM social_health_state WHERE platform = 'facebook'").get();
+  assert.equal(stored.success_kind, "refresh");
+  assert.equal(stored.last_verified_at, "2026-11-07T12:05:00.000Z");
+  assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.healthy);
 });
 
 test("Manage Server admins can refresh credentials while owner diagnostics remain owner-only", () => {
@@ -384,6 +493,46 @@ test("owner diagnostics component rejects credential managers and regular admins
   assert.doesNotMatch(JSON.stringify(response), /Database|Owner Diagnostics/);
 });
 
+test("Verify Social Sessions component rechecks admin permission server-side", async () => {
+  let response;
+  const interaction = {
+    customId: "harmony-status:verify:facebook",
+    isButton: () => true,
+    message: {},
+    guild: guild("verify-authorization"),
+    member: { permissions: { has: () => false } },
+    user: { id: "ordinary-member" },
+    update: async (payload) => { response = payload; },
+  };
+  assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
+  assert.match(response.content, /Only authorized server admins/);
+  assert.deepEqual(response.embeds, []);
+});
+
+test("authorized admin Verify button returns a safe unconfigured result without exposing paths or secrets", async () => {
+  const oldPath = process.env.FACEBOOK_COOKIES;
+  process.env.FACEBOOK_COOKIES = path.join(tempDir, "verify-button-missing-cookie-file.txt");
+  let response;
+  const interaction = {
+    customId: "harmony-status:verify:facebook",
+    isButton: () => true,
+    message: {},
+    guild: guild("verify-button-admin"),
+    member: { permissions: { has: (permission) => permission === PermissionFlagsBits.ManageGuild } },
+    user: { id: "manage-server-admin" },
+    client: client(),
+    update: async (payload) => { response = payload; },
+  };
+  try {
+    assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
+    assert.match(response.content, /Facebook has no saved session to verify/);
+    assert.doesNotMatch(JSON.stringify(response), /verify-button-missing-cookie-file|SECRET|token|cookie file path/i);
+  } finally {
+    if (oldPath === undefined) delete process.env.FACEBOOK_COOKIES;
+    else process.env.FACEBOOK_COOKIES = oldPath;
+  }
+});
+
 test("Guard status includes monitoring, active rules, and Review Room visibility", async () => {
   const id = "guard-status-test";
   const everyone = { id: id, permissions: { has: () => false } };
@@ -418,7 +567,11 @@ test("status response is ephemeral and includes a fresh-check control without se
     ],
   }, { canManageCredentials: false });
   assert.equal(payload.flags, 64);
-  assert.ok(payload.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:refresh"));
+  const buttons = payload.components.flatMap((row) => row.components);
+  assert.ok(buttons.some((button) => button.data.custom_id === "harmony-status:refresh"));
+  for (const platform of ["instagram", "facebook", "youtube", "threads"]) {
+    assert.ok(buttons.some((button) => button.data.custom_id === `harmony-status:verify:${platform}`));
+  }
   assert.equal(JSON.stringify(payload).includes("COOKIE"), false);
 });
 

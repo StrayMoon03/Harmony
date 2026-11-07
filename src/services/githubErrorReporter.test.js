@@ -35,3 +35,25 @@ test('retains numbers on repeats and separates different links with identical er
     if (oldToken === undefined) delete process.env.HARMONY_ERROR_GITHUB_TOKEN; else process.env.HARMONY_ERROR_GITHUB_TOKEN = oldToken;
   }
 });
+
+test('sanitizes session cookie values and signed attachment parameters before private reporting', async () => {
+  const originalFetch = global.fetch;
+  const oldRepo = process.env.HARMONY_ERROR_GITHUB_REPO;
+  const oldToken = process.env.HARMONY_ERROR_GITHUB_TOKEN;
+  process.env.HARMONY_ERROR_GITHUB_REPO = 'test/errors';
+  process.env.HARMONY_ERROR_GITHUB_TOKEN = 'fake-test-token';
+  let body;
+  global.fetch = async (_url, options) => {
+    body = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ number: 1, html_url: 'https://github.com/test/errors/issues/1' }));
+  };
+  const privateValues = 'c_user=FACEBOOK_USER_SECRET xs=FACEBOOK_SESSION_SECRET https://cdn.example/image?token=SIGNED_CDN_SECRET\n.facebook.com\tTRUE\t/\tTRUE\t9999999999\txs\tNETSCAPE_SESSION_SECRET';
+  try {
+    await reportMediaErrorToGitHub({ content: 'https://www.facebook.com/share/p/post-id/' }, new Error(privateValues));
+    assert.doesNotMatch(body, /FACEBOOK_USER_SECRET|FACEBOOK_SESSION_SECRET|SIGNED_CDN_SECRET|NETSCAPE_SESSION_SECRET/);
+  } finally {
+    global.fetch = originalFetch;
+    if (oldRepo === undefined) delete process.env.HARMONY_ERROR_GITHUB_REPO; else process.env.HARMONY_ERROR_GITHUB_REPO = oldRepo;
+    if (oldToken === undefined) delete process.env.HARMONY_ERROR_GITHUB_TOKEN; else process.env.HARMONY_ERROR_GITHUB_TOKEN = oldToken;
+  }
+});

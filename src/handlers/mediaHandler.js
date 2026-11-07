@@ -74,7 +74,17 @@ const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 const { formatDiscordTimestamp } = require("../utils/discordTimestamp");
 const { logMediaError } = require("../services/errorInboxService");
-const { recordSocialSuccess } = require("../services/operationsStatusService");
+const { recordSocialSuccess, recordSocialAuthFailure } = require("../services/operationsStatusService");
+
+function recordMediaHealth(platform, result) {
+  const hasAuthFailure = ["session", "owner"].includes(result?.socialAuthFailureKind);
+  if (hasAuthFailure) {
+    recordSocialAuthFailure(platform, new Date().toISOString(), result.socialAuthFailureKind, result.socialAuthFailureCategory);
+  }
+  if (!hasAuthFailure) {
+    recordSocialSuccess(platform, new Date().toISOString(), { authenticated: result?.authenticated === true });
+  }
+}
 
 function buildSuccessfulCard(message, processedUrl, options) {
   const preservation = extractMemberComment(message.content, processedUrl);
@@ -183,10 +193,13 @@ async function replyWithHarmonyError(message, error, lifecycle) {
   // here; returning first prevents a duplicate private incident.
   if (isHandledMediaTimeout(error, lifecycle)) return;
 
-  console.error("Harmony Error:", error);
+  console.error("Harmony media processing failed.", {
+    category: error?.socialAuthFailureKind || "media_processing",
+    name: error?.name === "AbortError" ? "AbortError" : "Error",
+  });
 
-  await logMediaError(message, error).catch((reportError) => {
-    console.error("Could not send media failure to Harmony’s error inbox:", reportError);
+  await logMediaError(message, error).catch(() => {
+    console.error("Could not send the sanitized media failure report to Harmony’s error inbox.");
   });
 
   if (lifecycle && !(await lifecycle.finishFailure())) return;
@@ -482,7 +495,7 @@ async function processMediaMessage(message, lifecycle) {
           "No media files were downloaded."
         );
       }
-      recordSocialSuccess(platform);
+      recordMediaHealth(platform, downloadResult);
 
       const creator = downloadResult.creator || resolveCreator(
         info,
@@ -595,7 +608,12 @@ async function processMediaMessage(message, lifecycle) {
         );
 
       if (downloadResult.linkOnly) {
-        throw new Error(downloadResult.failureReason || "FACEBOOK_UNVERIFIED_MEDIA");
+        const failure = new Error(downloadResult.failureReason || "FACEBOOK_UNVERIFIED_MEDIA");
+        if (["session", "owner"].includes(downloadResult.socialAuthFailureKind)) {
+          failure.socialAuthFailureKind = downloadResult.socialAuthFailureKind;
+          failure.socialAuthFailureCategory = downloadResult.socialAuthFailureCategory;
+        }
+        throw failure;
       }
 
       const classification = classify(
@@ -608,7 +626,7 @@ async function processMediaMessage(message, lifecycle) {
           "No media files were downloaded."
         );
       }
-      recordSocialSuccess("facebook");
+      recordMediaHealth("facebook", downloadResult);
 
       const creator =
         downloadResult.creator ||
@@ -1010,7 +1028,7 @@ async function processMediaMessage(message, lifecycle) {
       if (downloadResult.linkOnly) {
         if (shouldKeepOriginalYouTubePreview(downloadResult)) {
           await lifecycle.markRetrieved();
-          recordSocialSuccess("youtube");
+          recordMediaHealth("youtube", downloadResult);
           console.log(
             "YouTube long video left as its original streaming preview."
           );
@@ -1029,7 +1047,7 @@ async function processMediaMessage(message, lifecycle) {
           "No YouTube media files were downloaded."
         );
       }
-      recordSocialSuccess("youtube");
+      recordMediaHealth("youtube", downloadResult);
 
       const creator =
         downloadResult.creator ||
@@ -1148,7 +1166,7 @@ async function processMediaMessage(message, lifecycle) {
           "No Threads media files were downloaded."
         );
       }
-      recordSocialSuccess("threads");
+      recordMediaHealth("threads", downloadResult);
 
       const creator =
         downloadResult.creator ||

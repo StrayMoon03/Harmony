@@ -75,7 +75,10 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
   assert.equal(requests.getRequest(context().requestId).status, "completed");
   const refreshedStatus = await statusService.checkSocial("instagram");
   assert.equal(refreshedStatus.status, STATUS.healthy);
-  assert.match(refreshedStatus.explanation, /recent media retrieval succeeded/i);
+  assert.match(refreshedStatus.explanation, /authenticated session was explicitly verified recently/i);
+  const health = require("../src/stores/socialHealthStore").get("instagram");
+  assert.equal(health.success_kind, "refresh");
+  assert.ok(Date.now() - Date.parse(health.last_verified_at) < 5_000);
 });
 
 test("verified authorized maintenance clears a persisted checkpoint only after activation verification", async () => {

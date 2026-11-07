@@ -105,8 +105,17 @@ async function downloadInstagramReel(url, jobDir, options = {}) {
     stdout = output.stdout;
     logBrowserDiagnostics(output.stderr);
   } catch (error) {
+    const diagnostics = sanitizedBrowserDiagnostics(error.stderr);
     logBrowserDiagnostics(error.stderr);
-    throw new Error("Instagram browser could not verify the requested reel");
+    const failure = new Error("Instagram browser could not verify the requested reel");
+    if (diagnostics?.cookiesLoaded && diagnostics.checkpointRoute) {
+      failure.socialAuthFailureKind = "owner";
+      failure.socialAuthFailureCategory = "checkpoint";
+    } else if (diagnostics?.cookiesLoaded && diagnostics.loginRoute) {
+      failure.socialAuthFailureKind = "session";
+      failure.socialAuthFailureCategory = "login_required";
+    }
+    throw failure;
   }
   const line = stdout.split(/\r?\n/).find(x => x.startsWith("HARMONY_INSTAGRAM_REEL:"));
   if (!line) throw new Error("Instagram browser returned no verified reel");

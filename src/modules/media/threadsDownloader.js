@@ -91,11 +91,8 @@ async function readThreadsCookieHeader(hostname) {
     }
 
     return cookies.join("; ");
-  } catch (error) {
-    console.warn(
-      "Threads cookies could not be read:",
-      error instanceof Error ? error.message : error
-    );
+  } catch {
+    console.warn("Threads session file could not be read.");
     return "";
   }
 }
@@ -426,11 +423,8 @@ async function resolveThreadsShareRedirect(url) {
             return canonicalUrl;
           }
         }
-      } catch (error) {
-        console.warn(
-          `Threads share ${method} resolution attempt failed:`,
-          error instanceof Error ? error.message : error
-        );
+      } catch {
+        console.warn(`Threads share ${method} resolution attempt failed.`);
       }
 
       return null;
@@ -476,10 +470,16 @@ async function inspectThreadsWithBrowser(url) {
       );
     }
 
-    logThreadsBrowserDiagnostics(stdout);
+    const diagnostics = logThreadsBrowserDiagnostics(stdout);
     const result = JSON.parse(
       line.slice("HARMONY_THREADS_BROWSER:".length)
     );
+    const cookieCount = Number(result.cookieCount) || 0;
+    const authFailure = cookieCount > 0 && diagnostics.checkpointRoute
+      ? { kind: "owner", category: "checkpoint" }
+      : cookieCount > 0 && (diagnostics.loginRoute || diagnostics.loginPromptVisible)
+        ? { kind: "session", category: "login_required" }
+        : null;
     const candidates = Array.isArray(result.candidates)
       ? result.candidates
           .map(validCdnUrl)
@@ -488,7 +488,7 @@ async function inspectThreadsWithBrowser(url) {
       : [];
 
     console.log("Threads browser fallback complete:", {
-      cookieCount: Number(result.cookieCount) || 0,
+      cookieCount,
       candidateCount: candidates.length,
       finalPath: (() => {
         try {
@@ -507,6 +507,7 @@ async function inspectThreadsWithBrowser(url) {
         typeof result.finalUrl === "string"
           ? result.finalUrl
           : url,
+      authFailure,
     };
   } catch (error) {
     logThreadsBrowserDiagnostics(error?.stdout);
@@ -527,18 +528,12 @@ async function inspectThreadsWithBrowser(url) {
           "HARMONY_THREADS_BROWSER_ERROR:"
         )
       ) || "";
-    const firstErrorLine = stderrText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean) || "";
-
     console.error("Threads browser helper failed:", {
       exitCode: Number.isInteger(error?.code)
         ? error.code
         : null,
       signal: error?.signal || null,
       hasStructuredError: Boolean(stderr),
-      firstErrorLine: firstErrorLine.slice(0, 240),
     });
 
     throw new Error(
@@ -745,10 +740,8 @@ async function fetchThreadsPage(url) {
           bestPage = page;
         }
       }
-    } catch (error) {
-      errors.push(
-        `${candidate}: ${error instanceof Error ? error.message : error}`
-      );
+    } catch {
+      errors.push("request failed or timed out");
     }
   }
 
@@ -781,6 +774,7 @@ async function downloadThreadsMedia(url, options = {}) {
     `threads-${Date.now()}-${randomUUID()}`
   );
   await fs.mkdir(jobDir, { recursive: true });
+  let authFailure = null;
 
   try {
     console.log("Threads page inspection starting.");
@@ -819,12 +813,9 @@ async function downloadThreadsMedia(url, options = {}) {
         status = pageResult.status;
         finalUrl = pageResult.finalUrl;
         scopedCandidates = pageResult.scopedCandidates || [];
-      } catch (error) {
+      } catch {
         pageFetchFailed = true;
-        console.warn(
-          "Threads static page fetch failed; continuing with browser:",
-          error instanceof Error ? error.message : error
-        );
+        console.warn("Threads static page fetch failed; continuing with browser.");
       }
     }
 
@@ -869,6 +860,7 @@ async function downloadThreadsMedia(url, options = {}) {
       try {
         const browserResult =
           await inspectThreadsWithBrowser(finalUrl);
+        authFailure ||= browserResult.authFailure;
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
         if (candidates.length === 0) {
@@ -1060,12 +1052,17 @@ async function downloadThreadsMedia(url, options = {}) {
         options.discordEmbedFallback?.creator ||
         extractThreadsCreator(finalUrl) ||
         extractThreadsCreator(url),
+      ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
     };
   } catch (error) {
     await fs.rm(jobDir, {
       recursive: true,
       force: true,
     });
+    if (authFailure) {
+      error.socialAuthFailureKind = authFailure.kind;
+      error.socialAuthFailureCategory = authFailure.category;
+    }
     throw error;
   }
 }

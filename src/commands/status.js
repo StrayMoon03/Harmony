@@ -7,7 +7,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES, isCookieRefreshRequired, isAccountVerificationRequired } = require("../services/operationsStatusService");
+const { runStatusCheck, resolveAdminCapabilities, STATUS, SOCIAL, COOKIE_SERVICES, isCookieRefreshRequired, isAccountVerificationRequired, verifySocialSession } = require("../services/operationsStatusService");
 const { isServiceRefreshAvailable } = require("../services/sessionRefreshConfig");
 
 const data = new SlashCommandBuilder()
@@ -76,6 +76,7 @@ function adminPresentationRows(report) {
     const cookiesNeedRefresh = hasCookieRefreshEvidence(row);
     if (cookiesNeedRefresh) label = "Cookies Need Refresh";
     else if (hasAccountVerificationEvidence(row)) label = "Account Verification Required";
+    else if (COOKIE_SERVICES.has(platform) && row.status === STATUS.unknown && /Verify/i.test(row.action || "")) label = "Not Recently Verified";
     rows.push(present(row, SOCIAL[platform], label, cookiesNeedRefresh ? STATUS.attention : row.status));
   }
 
@@ -155,9 +156,16 @@ function makeStatusPayload(report, capabilities = {}) {
       .setLabel("Owner Diagnostics")
       .setStyle(ButtonStyle.Secondary)] : []),
   ];
+  const verificationButtons = ["instagram", "facebook", "youtube", "threads"].map((service) =>
+    new ButtonBuilder()
+      .setCustomId(`harmony-status:verify:${service}`)
+      .setLabel(`Verify ${SOCIAL[service]}`)
+      .setStyle(ButtonStyle.Secondary)
+  );
   const components = [];
   if (refreshButtons.length) components.push(new ActionRowBuilder().addComponents(...refreshButtons));
   if (accountMaintenanceButtons.length) components.push(new ActionRowBuilder().addComponents(...accountMaintenanceButtons));
+  components.push(new ActionRowBuilder().addComponents(...verificationButtons));
   components.push(new ActionRowBuilder().addComponents(...statusButtons));
   return {
     embeds: [embed],
@@ -186,7 +194,7 @@ function makeOwnerDiagnosticsPayload(report) {
   const embed = new EmbedBuilder()
     .setTitle("Harmony Owner Diagnostics")
     .setColor(0x5865f2)
-    .setDescription(`Detailed local system signals · checked ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}. Social platforms are not actively logged into by this check.`)
+    .setDescription(`Detailed local system signals · checked ${new Date(report.checkedAt).toLocaleString("en-US", { timeZone: "UTC", timeZoneName: "short" })}. This report uses persisted session evidence; use Verify in Status for an explicit platform check.`)
     .addFields(detailFields)
     .addFields({ name: "Secure Cookie Refresh Readiness", value: refreshReadiness, inline: false })
     .setFooter({ text: "No cookie contents, credential values, OAuth secrets, or Railway tokens are shown." });
@@ -205,7 +213,7 @@ async function capabilitiesFor(interaction) {
   return resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
 }
 
-async function respondWithStatus(interaction, { update = false } = {}) {
+async function respondWithStatus(interaction, { update = false, notice = null } = {}) {
   const capabilities = await capabilitiesFor(interaction);
   if (!capabilities.canDiagnose) {
     const payload = { content: "Only authorized server admins can view Harmony Status.", flags: MessageFlags.Ephemeral };
@@ -215,9 +223,9 @@ async function respondWithStatus(interaction, { update = false } = {}) {
   }
   const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
   const payload = makeStatusPayload(report, capabilities);
-  if (update && interaction.message) return interaction.update({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
-  if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
-  return interaction.reply(payload);
+  if (update && interaction.message) return interaction.update({ content: notice || null, embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
+  if (interaction.deferred || interaction.replied) return interaction.editReply({ content: notice || null, embeds: payload.embeds, components: payload.components, allowedMentions: payload.allowedMentions });
+  return interaction.reply({ ...payload, content: notice || undefined });
 }
 
 async function respondWithOwnerDiagnostics(interaction, { update = false } = {}) {
@@ -248,7 +256,19 @@ async function handleStatusInteraction(interaction) {
     "harmony-status:diagnostics-refresh",
     "harmony-status:back",
   ]);
-  if (!interaction.isButton?.() || !actions.has(interaction.customId)) return false;
+  const verificationMatch = /^harmony-status:verify:(instagram|facebook|youtube|threads)$/.exec(interaction.customId || "");
+  if (!interaction.isButton?.() || (!actions.has(interaction.customId) && !verificationMatch)) return false;
+  if (verificationMatch) {
+    const capabilities = await capabilitiesFor(interaction);
+    if (!capabilities.canDiagnose) {
+      await interaction.update({ content: "Only authorized server admins can verify social sessions.", embeds: [], components: [] });
+      return true;
+    }
+    const result = await verifySocialSession(verificationMatch[1]);
+    const message = `${result.explanation} ${result.action}`;
+    await respondWithStatus(interaction, { update: true, notice: message });
+    return true;
+  }
   if (interaction.customId === "harmony-status:diagnostics" || interaction.customId === "harmony-status:diagnostics-refresh") {
     await respondWithOwnerDiagnostics(interaction, { update: true });
   } else {
