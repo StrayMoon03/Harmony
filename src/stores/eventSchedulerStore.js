@@ -30,6 +30,70 @@ function candidateTitleSimilarity(left, right) {
   return overlap / new Set([...a, ...b]).size;
 }
 
+function canonicalDiscoveryTitle(value) {
+  let title = normalizeCandidateTitle(value);
+  if (!title) return "";
+  title = title.replace(/뮤직뱅크/g, "music bank").replace(/글로벌 페스티벌/g, "global festival").replace(/재팬/g, "japan");
+  const compact = title.replace(/\bstray kids\b/g, " ").replace(/\b202\d\b/g, " ").replace(/\s+/g, " ").trim();
+  if (compact.includes("music bank") && compact.includes("global festival")) return "music bank global festival japan";
+  if (compact.includes("fns") && (compact.includes("kayo") || compact.includes("music festival"))) return "fns music festival first night";
+  return compact
+    .replace(/\bworld tour\b/g, " ")
+    .replace(/\bchina\b/g, " ")
+    .replace(/\btaiwan\b/g, " ")
+    .replace(/\bstray kids\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+function parseProvenance(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value || "[]") : value;
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+  } catch { return []; }
+}
+
+function mergeSourceProvenance(existing, incoming) {
+  const sources = parseProvenance(existing);
+  for (const item of parseProvenance(incoming)) {
+    const key = `${item.provider || ""}:${item.sourceId || item.sourceUrl || ""}`;
+    const at = sources.findIndex((current) => `${current.provider || ""}:${current.sourceId || current.sourceUrl || ""}` === key);
+    if (at < 0) sources.push(item);
+    else sources[at] = { ...sources[at], ...item };
+  }
+  return sources;
+}
+
+function mergeDiscoveryMetadata(existingValue, incomingValue, replace = false) {
+  const parse = (value) => {
+    try { const parsed = typeof value === 'string' ? JSON.parse(value || '{}') : value; return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; }
+    catch { return {}; }
+  };
+  const existing = parse(existingValue);
+  const incoming = parse(incomingValue);
+  if (replace) return incomingValue || existingValue || null;
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    if ((merged[key] === null || merged[key] === undefined || merged[key] === '') && value !== undefined && value !== null && value !== '') merged[key] = value;
+  }
+  return Object.keys(merged).length ? JSON.stringify(merged) : null;
+}
+
+function isStrongCrossSourceMatch(existing, incoming) {
+  if (existing?.source_type !== "automatic_discovery" || !existing?.proposed_event_date || existing.proposed_event_date !== incoming.proposedEventDate) return false;
+  const left = canonicalDiscoveryTitle(existing.title);
+  const right = canonicalDiscoveryTitle(incoming.title);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const similarity = candidateTitleSimilarity(existing.title, incoming.title);
+  if (similarity < 0.78) return false;
+  const leftLocation = normalizeCandidateTitle(parseProvenance(existing.source_provenance).map((item) => item.location).filter(Boolean).join(" "));
+  const rightLocation = normalizeCandidateTitle(parseProvenance(incoming.sourceProvenance).map((item) => item.location).filter(Boolean).join(" "));
+  const matchingLocation = leftLocation && rightLocation && candidateTitleSimilarity(leftLocation, rightLocation) >= 0.5;
+  const timesClose = existing.proposed_event_at && incoming.proposedEventAt
+    && Math.abs(new Date(existing.proposed_event_at).getTime() - new Date(incoming.proposedEventAt).getTime()) <= 30 * 60 * 1000;
+  return Boolean(matchingLocation || timesClose);
+}
+
 function candidateMatchIdentityTokens(value) {
   const tokens = normalizeCandidateTitle(value).split(' ').filter(Boolean);
   // Discovery titles may include the artist and tour-country context that
@@ -304,20 +368,61 @@ function findCandidateCalendarMatches(guildId, candidate) {
   return rows.filter((event) => candidateMatchesCalendarEvent(candidate, event));
 }
 
-function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, discoveryKey = null, sourceMetadata = null, submitterId = null, submittedNote = null, discordEventId = null }) {
-  const normalizedUrl = normalizeCandidateUrl(sourceUrl);
-  if (!normalizedUrl && !discordEventId) throw new Error('A complete http(s) source link is required.');
-  const dedupeKey = normalizedUrl ? `url:${normalizedUrl}` : `discord:${discordEventId}`;
+function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt = null, proposedEventDate = null, proposedEventEndDate = null, proposedEventTimezone = null, sourceUrl = null, sourceType = 'member_submission', sourceProvider = null, discoveryKey = null, sourceMetadata = null, sourceProvenance = [], submitterId = null, submittedNote = null, discordEventId = null }) {
+  // A discovery source URL can legitimately support multiple distinct dates
+  // (for example one tour announcement linking to every tour stop). Source
+  // identity and event-date/title matching, not URL equality, dedupe these.
+  const isDiscovery = sourceType === 'automatic_discovery';
+  const normalizedUrl = isDiscovery ? null : normalizeCandidateUrl(sourceUrl);
+  const hasDiscoveryIdentity = isDiscovery && sourceProvider && discoveryKey;
+  if (!normalizedUrl && !discordEventId && !hasDiscoveryIdentity) throw new Error('A complete http(s) source link is required.');
+  const dedupeKey = hasDiscoveryIdentity ? `discovery:${sourceProvider}:${discoveryKey}` : (normalizedUrl ? `url:${normalizedUrl}` : `discord:${discordEventId}`);
   const db = getDb();
   const now = new Date().toISOString();
+  const saveProvenance = (existing, crossSourceMatch = false, replaceSchedule = false) => {
+    const merged = mergeSourceProvenance(existing.source_provenance, sourceProvenance);
+    const providerAlreadyPresent = parseProvenance(existing.source_provenance).some((item) => item.provider === sourceProvider);
+    const cross = crossSourceMatch || (sourceType === 'automatic_discovery' && !providerAlreadyPresent && merged.length > 1);
+    const updateSchedule = replaceSchedule && ['open', 'processing'].includes(existing.status);
+    let existingExplicitAllDay = false;
+    try { existingExplicitAllDay = JSON.parse(existing.source_metadata || '{}')?.allDay === true; } catch { /* Unknown metadata must not block safe field enrichment. */ }
+    const fillMissingTime = !updateSchedule && !existingExplicitAllDay && !existing.proposed_event_at && Boolean(proposedEventAt);
+    const fillMissingTimezone = !updateSchedule && !existingExplicitAllDay && !existing.proposed_event_timezone && Boolean(proposedEventTimezone);
+    const mergedMetadata = mergeDiscoveryMetadata(existing.source_metadata, sourceMetadata, updateSchedule);
+    db.prepare(`UPDATE calendar_candidates SET
+      source_provenance = ?,
+      title = CASE WHEN ? THEN ? ELSE COALESCE(title, ?) END,
+      proposed_event_at = CASE WHEN ? THEN ? WHEN ? THEN ? ELSE proposed_event_at END,
+      proposed_event_date = CASE WHEN ? THEN ? ELSE COALESCE(proposed_event_date, ?) END,
+      proposed_event_end_date = CASE WHEN ? THEN ? ELSE COALESCE(proposed_event_end_date, ?) END,
+      proposed_event_timezone = CASE WHEN ? THEN ? WHEN ? THEN ? ELSE proposed_event_timezone END,
+      source_url = COALESCE(source_url, ?), source_url_normalized = COALESCE(source_url_normalized, ?),
+      source_metadata = ?,
+      updated_at = ? WHERE guild_id = ? AND id = ?`).run(
+      JSON.stringify(merged), updateSchedule ? 1 : 0, title?.trim() || null, title?.trim() || null,
+      updateSchedule ? 1 : 0, proposedEventAt, fillMissingTime ? 1 : 0, proposedEventAt,
+      updateSchedule ? 1 : 0, proposedEventDate, proposedEventDate,
+      updateSchedule ? 1 : 0, proposedEventEndDate, proposedEventEndDate,
+      updateSchedule ? 1 : 0, proposedEventTimezone, fillMissingTimezone ? 1 : 0, proposedEventTimezone,
+      sourceUrl?.trim() || null, normalizedUrl,
+      mergedMetadata,
+      now, guildId, existing.id
+    );
+    return { crossSourceMatch: cross, candidate: getCalendarCandidate(guildId, existing.id) };
+  };
   const updateExistingDiscovery = (existing) => {
     const changed = Boolean(existing && (existing.title !== (title?.trim() || null) || existing.proposed_event_at !== proposedEventAt || existing.proposed_event_date !== proposedEventDate || existing.proposed_event_timezone !== proposedEventTimezone || existing.source_metadata !== sourceMetadata));
-    if (!existing || !['open', 'processing'].includes(existing.status)) return { candidate: existing, duplicate: true, duplicateReason: 'same-discovery', updated: false, sourceChanged: changed };
+    if (!existing) return { candidate: existing, duplicate: true, duplicateReason: 'same-discovery', updated: false, sourceChanged: changed };
+    if (!['open', 'processing'].includes(existing.status)) {
+      const { crossSourceMatch, candidate } = saveProvenance(existing);
+      return { candidate, duplicate: true, duplicateReason: 'same-discovery', updated: false, sourceChanged: changed, crossSourceMatch };
+    }
     db.prepare(`UPDATE calendar_candidates SET title = ?, proposed_event_at = ?, proposed_event_date = ?, proposed_event_end_date = ?, proposed_event_timezone = ?, source_url = ?, source_url_normalized = ?, source_metadata = ?, updated_at = ? WHERE guild_id = ? AND id = ?`).run(
       title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone,
       sourceUrl?.trim() || null, normalizedUrl, sourceMetadata, now, guildId, existing.id
     );
-    return { candidate: getCalendarCandidate(guildId, existing.id), duplicate: true, duplicateReason: 'same-discovery', updated: changed, sourceChanged: changed };
+    const { crossSourceMatch, candidate } = saveProvenance(getCalendarCandidate(guildId, existing.id));
+    return { candidate, duplicate: true, duplicateReason: 'same-discovery', updated: changed, sourceChanged: changed, crossSourceMatch };
   };
   if (sourceProvider && discoveryKey) {
     const existingDiscovery = db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_provider = ? AND discovery_key = ?").get(guildId, sourceProvider, discoveryKey);
@@ -326,10 +431,25 @@ function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt =
   const existing = normalizedUrl
     ? db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_url_normalized = ?").get(guildId, normalizedUrl)
     : db.prepare("SELECT * FROM calendar_candidates WHERE guild_id = ? AND discord_event_id = ?").get(guildId, discordEventId);
-  if (existing) return { candidate: existing, duplicate: true, duplicateReason: 'same-source' };
+  if (existing) {
+    if (sourceType === 'automatic_discovery' && existing.source_type === 'automatic_discovery') {
+      const { crossSourceMatch, candidate } = saveProvenance(existing, existing.source_provider !== sourceProvider);
+      return { candidate, duplicate: true, duplicateReason: 'same-source', crossSourceMatch };
+    }
+    return { candidate: existing, duplicate: true, duplicateReason: 'same-source' };
+  }
   if (normalizedUrl) {
     const canonical = db.prepare("SELECT id, title, link FROM scheduled_events WHERE guild_id = ? AND cancelled_at IS NULL AND link IS NOT NULL").all(guildId).find((event) => normalizeCandidateUrl(event.link) === normalizedUrl) || null;
     if (canonical) return { candidate: null, duplicate: true, duplicateReason: 'already-calendar', canonicalEvent: canonical };
+  }
+
+  if (sourceType === 'automatic_discovery' && proposedEventDate) {
+    const sameDate = db.prepare(`SELECT * FROM calendar_candidates WHERE guild_id = ? AND source_type = 'automatic_discovery' AND proposed_event_date = ? ORDER BY created_at, id`).all(guildId, proposedEventDate);
+    const match = sameDate.find((candidate) => isStrongCrossSourceMatch(candidate, { title, proposedEventDate, proposedEventAt, sourceProvenance }));
+    if (match) {
+      const { crossSourceMatch, candidate } = saveProvenance(match, true);
+      return { candidate, duplicate: true, duplicateReason: 'cross-source-event', updated: false, crossSourceMatch };
+    }
   }
 
   const strong = title && proposedEventDate
@@ -340,10 +460,10 @@ function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt =
   const result = db.prepare(`
     INSERT INTO calendar_candidates (
       guild_id, title, proposed_event_at, proposed_event_date, proposed_event_end_date, proposed_event_timezone,
-      source_url, source_url_normalized, source_type, source_provider, discovery_key, source_metadata, submitter_id, submitted_note,
+      source_url, source_url_normalized, source_type, source_provider, discovery_key, source_metadata, source_provenance, submitter_id, submitted_note,
       discord_event_id, dedupe_key, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, discoveryKey, sourceMetadata, submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+  `).run(guildId, title?.trim() || null, proposedEventAt, proposedEventDate, proposedEventEndDate, proposedEventTimezone, sourceUrl?.trim() || null, normalizedUrl, sourceType, sourceProvider, discoveryKey, sourceMetadata, JSON.stringify(mergeSourceProvenance([], sourceProvenance)), submitterId, submittedNote?.trim() || null, discordEventId, dedupeKey, now, now);
   return { candidate: getCalendarCandidate(guildId, Number(result.lastInsertRowid)), duplicate: false, duplicateReason: null };
 }
 

@@ -1,0 +1,55 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+X-WR-CALNAME:Stray Kids Schedule (SKZCBGuide)
+X-WR-TIMEZONE:Asia/Seoul
+BEGIN:VEVENT
+DTSTART:20261224T010000Z
+DTEND:20261225T140000Z
+DTSTAMP:20261107T011730Z
+UID:0e1ul94ttpsogcjg7hcvb5236l@google.com
+SUMMARY:SBS Gayo Daejeon
+DESCRIPTION:Stray Kids will perform at SBS Gayo Daejeon between December 24-25th\, 2026.\n\n<a href="https://news.sbs.co.kr/english/article.do?news_id=N1008812364">Source</a>
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261213T080000Z
+DTEND:20261213T110000Z
+DTSTAMP:20261107T011730Z
+UID:41ju5imh5tpfp7krjhhepgm4eu@google.com
+SUMMARY:MUSIC BANK GLOBAL FESTIVAL IN JAPAN 2026 x Stray Kids
+LOCATION:MUFG Stadium\, Tokyo\, Japan
+DESCRIPTION:Stray Kids will perform at the 2026 Music Bank Global Festival in Japan. <a href="https://www.music-bank.jp/">Source</a>
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261202T093000Z
+DTEND:20261202T140000Z
+DTSTAMP:20261107T011730Z
+UID:36ofp8beefffqrdi7q4aosj49s@google.com
+SUMMARY:2026 FNS Kayo Festival First Night
+DESCRIPTION:Stray Kids appearance confirmed. <a href="https://fujitv.co.jp/FNS/">Program HP</a>
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261212T090000Z
+DTEND:20261212T130000Z
+DTSTAMP:20261107T011730Z
+UID:288sd471lpisc0b1iicmsku8el@google.com
+SUMMARY:RUN IT World Tour - Taipei\, Taiwan
+LOCATION:Taipei Dome\, Taipei City\, Taiwan
+DESCRIPTION:<a href="https://www.google.com/url?q=https%3A%2F%2Fx.com%2FStray_Kids%2Fstatus%2F2069072934338220342">Source</a>
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261205T090000Z
+DTEND:20261205T130000Z
+DTSTAMP:20261107T011730Z
+UID:76nh0iii3mv1pr482lljtec609@google.com
+SUMMARY:RUN IT World Tour - Hong Kong\, China
+LOCATION:Kai Tak Stadium\, Hong Kong
+DESCRIPTION:<a href="https://www.google.com/url?q=https%3A%2F%2Fx.com%2FStray_Kids%2Fstatus%2F2069072934338220342">Source</a>
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR

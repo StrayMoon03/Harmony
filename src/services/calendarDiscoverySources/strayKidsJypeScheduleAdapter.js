@@ -1,5 +1,6 @@
 const SOURCE_KEY = "jype-straykids-schedule";
 const SOURCE_PROVIDER = "jype-straykids-schedule";
+const SOURCE_NAME = "JYP Official";
 const GROUP_ID = "10";
 const OFFICIAL_ORIGIN = "https://straykids.jype.com";
 const SCHEDULE_PAGE = `${OFFICIAL_ORIGIN}/schedule`;
@@ -42,7 +43,7 @@ function sourceUrlFor(record) {
   return `${SCHEDULE_PAGE}?scheduleId=${id}`;
 }
 
-function normalizeRecord(record) {
+function normalizeRecord(record, { retrievedAt = new Date().toISOString() } = {}) {
   if (!record || record.id === undefined || record.id === null) return { candidate: null, reason: "missing-id" };
   const category = String(record.category || "").trim().toUpperCase();
   if (!CATEGORIES.has(category)) return { candidate: null, reason: "excluded-category", category };
@@ -64,6 +65,17 @@ function normalizeRecord(record) {
     explicitOffset: offset,
     location: record.location || null,
   };
+  const url = sourceUrlFor(record);
+  const sourceProvenance = [{
+    provider: SOURCE_PROVIDER,
+    sourceName: SOURCE_NAME,
+    sourceId: String(record.id),
+    sourceUrl: url,
+    originalTitle: String(record.title || "").trim(),
+    location: record.location || null,
+    sourceDateTime: scheduledAt || scheduledDate,
+    retrievedAt,
+  }];
   return {
     candidate: {
       title: String(record.title || "").trim() || `Stray Kids ${category.toLowerCase()}`,
@@ -71,11 +83,12 @@ function normalizeRecord(record) {
       proposedEventDate: eventDate,
       proposedEventEndDate: null,
       proposedEventTimezone: explicitTimezone || null,
-      sourceUrl: sourceUrlFor(record),
+      sourceUrl: url,
       sourceType: "automatic_discovery",
       sourceProvider: SOURCE_PROVIDER,
       discoveryKey: `${SOURCE_PROVIDER}:${GROUP_ID}:${record.id}`,
       sourceMetadata: JSON.stringify(metadata),
+      sourceProvenance,
       submittedNote: "Discovered from the official Stray Kids JYP schedule.",
       skipEnrichment: true,
     },
@@ -119,6 +132,7 @@ async function fetchRecords({ startDate, endDate, fetchImpl = global.fetch, sign
 module.exports = {
   SOURCE_KEY,
   SOURCE_PROVIDER,
+  SOURCE_NAME,
   GROUP_ID,
   OFFICIAL_ORIGIN,
   SCHEDULE_PAGE,
