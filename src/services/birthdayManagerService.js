@@ -14,7 +14,8 @@ const {
 } = require("discord.js");
 const birthdayStore = require("../stores/birthdayStore");
 const { matchAllImportedBirthdays, matchOneImportedBirthday } = require("./birthdayMatchingService");
-const { normalizeBias, BIASES } = require("./birthdayPresets");
+const { normalizeBiases, BIASES } = require("./birthdayPresets");
+const { syncMemberBiasRoles } = require("./welcomePassBiasRoleService");
 const {
   validTimezone,
   validMmdd,
@@ -65,12 +66,12 @@ function memberSelect(customId, placeholder = "Choose a member") {
   )];
 }
 
-function biasSelect(customId, selected = null, includeKeep = false) {
-  const options = [];
-  if (includeKeep) options.push({ label: "Keep current bias", value: "__keep__", description: "Leave the saved bias unchanged" });
-  options.push(...BIASES.map((bias) => ({ label: bias, value: bias, default: bias === selected })));
+function biasSelect(customId, selected = []) {
+  const selectedValues = normalizeBiases(selected);
   return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder("Choose a bias").addOptions(options),
+    new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder("Choose one or more biases")
+      .setMinValues(1).setMaxValues(BIASES.length)
+      .addOptions(BIASES.map((bias) => ({ label: bias, value: bias, default: selectedValues.includes(bias) }))),
   );
 }
 
@@ -204,8 +205,20 @@ function birthdayMemberComponents() {
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdayclear").setLabel("Clear Custom").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaypreview").setLabel("Preview").setStyle(ButtonStyle.Secondary),
     ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaybiasmanage").setLabel("Manage Member Bias").setStyle(ButtonStyle.Primary),
+    ),
     ...birthdayBackRow(),
   ];
+}
+
+function memberBiasPrompt(memberId, profile = null) {
+  const selected = profile?.biases_json || profile?.bias || [];
+  return {
+    content: `Choose the saved bias line for <@${memberId}>. This member-profile setting is independent of birthday opt-in. Select all that apply; OT8 represents all eight members, and Still deciding must stand alone.`,
+    components: [biasSelect(`harmony-manager:community:birthdaybiassave:${memberId}`, selected), ...birthdayBackRow("birthdaymembers", "Back to Member Birthdays")],
+    embeds: [],
+  };
 }
 
 function birthdayMaintenanceComponents() {
@@ -290,7 +303,7 @@ function profileEditModal(action, memberId, bias = null, profile = null) {
       { id: "message", label: "Custom birthday message (optional)", paragraph: true, maxLength: 1000, value: profile?.custom_message },
       { id: "image-url", label: "HTTPS image URL (optional)", maxLength: 500, value: profile?.custom_image_url },
     ];
-  return textModal(`harmony-manager:community:${action}modal:${memberId}:${encodeURIComponent(bias || "__keep__")}`, isAdd ? "Manage birthday" : "Customize birthday", fields);
+  return textModal(`harmony-manager:community:${action}modal:${memberId}`, isAdd ? "Manage birthday" : "Customize birthday", fields);
 }
 
 function renderUpcoming(guildId) {
@@ -505,10 +518,19 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     await interaction.update(memberPrompt("preview", "Choose a member to preview their birthday announcement."));
     return true;
   }
+  if (action === "birthdaybiasmanage" && interaction.isButton?.()) {
+    await interaction.update(memberPrompt("biasmanage", "Choose the Discord member whose saved bias line you want to view or change."));
+    return true;
+  }
   if (action === "birthdaymember" && interaction.isUserSelectMenu?.()) {
     const [, , , mode] = customParts(interaction);
     const memberId = selectedMemberId(interaction);
-    if (!memberId || !["add", "customize", "clear", "preview", "matchmember"].includes(mode)) return true;
+    if (!memberId || !["add", "customize", "clear", "preview", "matchmember", "biasmanage"].includes(mode)) return true;
+    if (mode === "biasmanage") {
+      const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
+      await interaction.update(memberBiasPrompt(memberId, profile));
+      return true;
+    }
     if (mode === "matchmember") {
       saveSession(interaction, { memberId });
       await interaction.showModal(textModal(`harmony-manager:community:birthdaymatchmembermodal:${memberId}`, "Connect Welcome Pass birthday", [
@@ -531,42 +553,72 @@ async function handleBirthdayManagerInteraction(interaction, action) {
       return true;
     }
     const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
-    const currentBias = profile?.bias ? normalizeBias(profile.bias) : null;
+    if (mode === "customize") {
+      saveSession(interaction, { memberId, mode });
+      await interaction.showModal(profileEditModal("birthdaycustomize", memberId, null, profile));
+      return true;
+    }
+    const currentBias = normalizeBiases(profile?.biases_json || profile?.bias);
     saveSession(interaction, { memberId, mode });
     await interaction.update({
-      content: mode === "add" ? "Choose a bias, then enter the birthday details." : "Choose a bias, or keep the current bias, then enter the customization.",
-      components: [biasSelect(`harmony-manager:community:birthdaybias:${mode}:${memberId}`, currentBias, mode === "customize"), ...birthdayBackRow("birthdaymembers", "Back to Member Birthdays")],
+      content: "Choose one or more biases, then continue to the birthday details.",
+      components: [biasSelect(`harmony-manager:community:birthdaybias:${mode}:${memberId}`, currentBias), ...birthdayBackRow("birthdaymembers", "Back to Member Birthdays")],
       embeds: [],
     });
     return true;
   }
   if (action === "birthdaybias" && interaction.isStringSelectMenu?.()) {
     const [, , , mode, memberId] = customParts(interaction);
-    const selectedBias = interaction.values?.[0];
-    if (!memberId || !["add", "customize"].includes(mode) || !selectedBias) return true;
-    const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
-    await interaction.showModal(profileEditModal(mode === "add" ? "birthdayadd" : "birthdaycustomize", memberId, selectedBias === "__keep__" ? (profile?.bias || "__keep__") : selectedBias, profile));
+    const selectedBiases = interaction.values;
+    if (!memberId || mode !== "add" || !selectedBiases?.length) return true;
+    try {
+      const canonical = normalizeBiases(selectedBiases, { allowEmpty: false });
+      saveSession(interaction, { memberId, mode, selectedBiases: canonical });
+      const profile = birthdayStore.getBirthdayProfile(interaction.guildId, memberId);
+      await interaction.showModal(profileEditModal("birthdayadd", memberId, null, profile));
+    } catch (error) {
+      await interaction.reply({ content: error.message || "Choose a valid bias combination.", flags: 64 });
+    }
+    return true;
+  }
+  if (action === "birthdaybiassave" && interaction.isStringSelectMenu?.()) {
+    const memberId = customParts(interaction)[3];
+    try {
+      const biases = normalizeBiases(interaction.values, { allowEmpty: false });
+      birthdayStore.setMemberBiases(interaction.guildId, memberId, biases);
+      const member = await interaction.guild.members.fetch(memberId).catch(() => null);
+      const roleResult = member ? await syncMemberBiasRoles(member) : { issues: ["member_unavailable"], added: 0, removed: 0 };
+      const label = biases.join(", ");
+      const note = roleResult.issues.length
+        ? ` Saved as **${label}**. Bias roles need attention (${roleResult.issues.length} issue(s)); STAY and birthday settings were not changed.`
+        : ` Saved as **${label}** and synchronized ${roleResult.added} role(s) added / ${roleResult.removed} removed.`;
+      await interaction.update({ content: `Updated <@${memberId}>'s member bias.${note}`, components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), embeds: [] });
+    } catch (error) {
+      await interaction.reply({ content: error.message || "Choose a valid bias combination.", flags: 64 });
+    }
     return true;
   }
   if (action === "birthdayaddmodal" && interaction.isModalSubmit?.()) {
-    const [, , , memberId, biasValue] = customParts(interaction);
-    const memberIdValue = memberId || getSession(interaction).memberId;
+    const [, , , memberId] = customParts(interaction);
+    const session = getSession(interaction);
+    const memberIdValue = memberId || session.memberId;
     const birthday = interaction.fields.getTextInputValue("birthday").trim();
     if (!memberIdValue || !validMmdd(birthday)) { await interaction.reply({ content: "Choose a member and enter a valid birthday in MM-DD format.", flags: 64 }); return true; }
-    const bias = normalizeBias(decodeURIComponent(biasValue || "Still deciding"));
-    birthdayStore.upsertBirthdayProfile({ guildId: interaction.guildId, userId: memberIdValue, birthdayMmdd: birthday, birthdayName: interaction.fields.getTextInputValue("name").trim() || memberIdValue, bias });
+    const biases = normalizeBiases(session.selectedBiases || ["Still deciding"], { allowEmpty: false });
+    birthdayStore.upsertBirthdayProfile({ guildId: interaction.guildId, userId: memberIdValue, birthdayMmdd: birthday, birthdayName: interaction.fields.getTextInputValue("name").trim() || memberIdValue, biases });
+    const member = await interaction.guild.members.fetch(memberIdValue).catch(() => null);
+    if (member) await syncMemberBiasRoles(member);
     clearSession(interaction);
     await interaction.reply({ content: `Saved <@${memberIdValue}>'s birthday as **${formatMmdd(birthday)}**.`, components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), flags: 64 });
     return true;
   }
   if (action === "birthdaycustomizemodal" && interaction.isModalSubmit?.()) {
-    const [, , , memberId, biasValue] = customParts(interaction);
+    const [, , , memberId] = customParts(interaction);
     const memberIdValue = memberId || getSession(interaction).memberId;
     const imageUrl = interaction.fields.getTextInputValue("image-url").trim();
     const message = interaction.fields.getTextInputValue("message").trim();
-    const bias = decodeURIComponent(biasValue || "__keep__");
-    if (!memberIdValue || (!message && !imageUrl && bias === "__keep__") || (imageUrl && !/^https:\/\//i.test(imageUrl))) { await interaction.reply({ content: "Choose a member and enter a message, bias, or HTTPS image URL.", flags: 64 }); return true; }
-    const updated = birthdayStore.setBirthdayCustomization(interaction.guildId, memberIdValue, { bias: bias === "__keep__" ? null : normalizeBias(bias), customMessage: message, customImageUrl: imageUrl });
+    if (!memberIdValue || (!message && !imageUrl) || (imageUrl && !/^https:\/\//i.test(imageUrl))) { await interaction.reply({ content: "Choose a member and enter a message or HTTPS image URL.", flags: 64 }); return true; }
+    const updated = birthdayStore.setBirthdayCustomization(interaction.guildId, memberIdValue, { customMessage: message, customImageUrl: imageUrl });
     clearSession(interaction);
     await interaction.reply({ content: updated ? `Saved <@${memberIdValue}>'s birthday customization.` : "That member has no birthday profile yet.", components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), flags: 64 });
     return true;

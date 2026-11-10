@@ -71,14 +71,43 @@ test("member selection routes Manage Birthday through the existing profile store
   assert.equal(open.responses[0].payload.components[0].components[0].data.type, 5);
   const selected = fakeInteraction("birthdaymember", guildId, true, {}, { kind: "user", values: ["100002"], customId: "harmony-manager:community:birthdaymember:add" });
   await handleBirthdayManagerInteraction(selected, "birthdaymember");
-  assert.match(selected.responses[0].payload.content, /Choose a bias/);
+  assert.match(selected.responses[0].payload.content, /Choose one or more biases/);
   const bias = fakeInteraction("birthdaybias", guildId, true, {}, { kind: "string", values: ["Han"], customId: "harmony-manager:community:birthdaybias:add:100002" });
   await handleBirthdayManagerInteraction(bias, "birthdaybias");
-  assert.match(bias.modal.data.custom_id, /birthdayaddmodal:100002:Han/);
-  const submit = fakeInteraction("birthdayaddmodal", guildId, true, { __modal: true, birthday: "11-03", name: "Alex" }, { kind: "modal", customId: "harmony-manager:community:birthdayaddmodal:100002:Han" });
+  assert.match(bias.modal.data.custom_id, /birthdayaddmodal:100002$/);
+  const submit = fakeInteraction("birthdayaddmodal", guildId, true, { __modal: true, birthday: "11-03", name: "Alex" }, { kind: "modal", customId: "harmony-manager:community:birthdayaddmodal:100002", guild: { members: { fetch: async () => null } } });
   await handleBirthdayManagerInteraction(submit, "birthdayaddmodal");
   assert.equal(birthdayStore.getBirthdayProfile(guildId, "100002").birthday_mmdd, "11-03");
   assert.equal(birthdayStore.getBirthdayProfile(guildId, "100002").bias, "Han");
+});
+
+test("member bias can be managed without birthday opt-in or a birthday profile", async () => {
+  const guildId = `birthday-independent-bias-${Date.now()}`;
+  const member = {
+    id: "bias-only-member",
+    user: { username: "bias-only-member", globalName: "Bias Only", bot: false },
+    roles: { cache: { has: () => false }, add: async () => {}, remove: async () => {} },
+  };
+  const guild = { id: guildId, members: { fetch: async () => member } };
+  const open = fakeInteraction("birthdaybiasmanage", guildId);
+  await handleBirthdayManagerInteraction(open, "birthdaybiasmanage");
+  const selected = fakeInteraction("birthdaymember", guildId, true, {}, {
+    kind: "user", values: [member.id], customId: "harmony-manager:community:birthdaymember:biasmanage", guild,
+  });
+  await handleBirthdayManagerInteraction(selected, "birthdaymember");
+  assert.match(selected.responses[0].payload.content, /independent of birthday opt-in/);
+  const menu = selected.responses[0].payload.components[0].components[0];
+  assert.equal(menu.data.min_values, 1);
+  assert.equal(menu.data.max_values, 10);
+
+  const save = fakeInteraction("birthdaybiassave", guildId, true, {}, {
+    kind: "string", values: ["OT8"], customId: `harmony-manager:community:birthdaybiassave:${member.id}`, guild,
+  });
+  await handleBirthdayManagerInteraction(save, "birthdaybiassave");
+  const profile = birthdayStore.getBirthdayProfile(guildId, member.id);
+  assert.equal(profile.celebration_enabled, 0);
+  assert.equal(profile.birthday_mmdd, null);
+  assert.deepEqual(JSON.parse(profile.biases_json), ["OT8"]);
 });
 
 test("member selection supports Customize, Preview, and Clear Custom", async () => {
@@ -89,12 +118,11 @@ test("member selection supports Customize, Preview, and Clear Custom", async () 
   await handleBirthdayManagerInteraction(customize, "birthdaycustomize");
   const selected = fakeInteraction("birthdaymember", guildId, true, {}, { kind: "user", values: ["100003"], customId: "harmony-manager:community:birthdaymember:customize" });
   await handleBirthdayManagerInteraction(selected, "birthdaymember");
-  const bias = fakeInteraction("birthdaybias", guildId, true, {}, { kind: "string", values: ["Changbin"], customId: "harmony-manager:community:birthdaybias:customize:100003" });
-  await handleBirthdayManagerInteraction(bias, "birthdaybias");
-  const submit = fakeInteraction("birthdaycustomizemodal", guildId, true, { __modal: true, message: "A new note", "image-url": "" }, { kind: "modal", customId: "harmony-manager:community:birthdaycustomizemodal:100003:Changbin" });
+  assert.ok(selected.modal, "customization retains the existing message form without changing member bias");
+  const submit = fakeInteraction("birthdaycustomizemodal", guildId, true, { __modal: true, message: "A new note", "image-url": "" }, { kind: "modal", customId: "harmony-manager:community:birthdaycustomizemodal:100003" });
   await handleBirthdayManagerInteraction(submit, "birthdaycustomizemodal");
   assert.equal(birthdayStore.getBirthdayProfile(guildId, "100003").custom_message, "A new note");
-  assert.equal(birthdayStore.getBirthdayProfile(guildId, "100003").bias, "Changbin");
+  assert.equal(birthdayStore.getBirthdayProfile(guildId, "100003").bias, "Felix");
   const preview = fakeInteraction("birthdaypreview", guildId);
   await handleBirthdayManagerInteraction(preview, "birthdaypreview");
   const previewSelected = fakeInteraction("birthdaymember", guildId, true, {}, { kind: "user", values: ["100003"], customId: "harmony-manager:community:birthdaymember:preview" });

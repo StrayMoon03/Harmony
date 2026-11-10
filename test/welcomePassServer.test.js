@@ -13,6 +13,7 @@ process.env.PORT = "0";
 
 const { closeDb, getDb } = require("../src/db/sqlite");
 const welcomePassStore = require("../src/stores/welcomePassStore");
+const birthdayStore = require("../src/stores/birthdayStore");
 const { startWelcomePassServer } = require("../src/services/welcomePassServer");
 
 getDb();
@@ -193,6 +194,27 @@ test("existing approval callback continues to link, grant STAY, and publish appr
   assert.ok(env.sent.some((item) => item.content.includes("Welcome Pass approved — STAY role granted")));
   assert.ok(welcomePassStore.getWelcomePassAssignment("YS-APPROVE1").approved_at);
   assert.equal(welcomePassStore.getWelcomePassSubmissionAlert("YS-APPROVE1"), null);
+});
+
+test("Welcome Pass bias is stored for a member who declined birthday announcements", async (t) => {
+  const env = makeEnvironment("bias-independent-of-birthday-guild");
+  const { server, baseUrl } = await startServer(env.client);
+  t.after(() => server.close());
+
+  const response = await post(baseUrl, "/welcome-pass/approved", {
+    code: "YS-BIASOPT1",
+    approverName: "Review Admin",
+    discordUsername: env.member.user.username,
+    birthdayOptIn: false,
+    birthdayBiases: ["Han", "Felix"],
+  });
+  assert.equal(response.status, 200);
+  const profile = birthdayStore.getBirthdayProfile(env.guild.id, env.member.id);
+  assert.equal(profile.celebration_enabled, 0);
+  assert.equal(profile.birthday_mmdd, null);
+  assert.deepEqual(JSON.parse(profile.biases_json), ["Han", "Felix"]);
+  assert.equal(profile.bias, "Han, Felix");
+  assert.equal(env.roleGrants, 1, "the regular STAY role still grants as before");
 });
 
 
