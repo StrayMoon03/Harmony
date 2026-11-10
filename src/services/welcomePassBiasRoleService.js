@@ -29,7 +29,7 @@ async function syncMemberBiasRoles(member, profile = null) {
   const wanted = new Set(selected);
   const issues = [];
   if (invalid) issues.push("invalid_saved_bias");
-  for (const bias of selected) {
+  for (const bias of selected.filter((value) => value !== "Still deciding")) {
     if (!mappings.some((mapping) => mapping.bias === bias)) issues.push(`role_not_configured:${bias}`);
   }
   let added = 0;

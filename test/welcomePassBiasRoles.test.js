@@ -83,6 +83,17 @@ test("unconfigured or unmanageable bias roles report issues without throwing", a
   assert.equal(member.assigned.has("role-han"), false);
 });
 
+test("Still deciding is a valid no-role selection", async () => {
+  const guildId = `bias-undecided-${Date.now()}`;
+  const { guild } = makeGuild(guildId, []);
+  birthdayStore.setMemberBiases(guildId, "member-undecided", ["Still deciding"]);
+  const member = makeMember(guild, "member-undecided", ["unrelated-role"]);
+  const result = await syncMemberBiasRoles(member);
+  assert.equal(result.status, "synced");
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual([...member.assigned], ["unrelated-role"]);
+});
+
 test("explicit reconciliation backfills existing member profiles without Welcome Pass resubmission", async () => {
   const guildId = `bias-reconcile-${Date.now()}`;
   const { guild, members } = makeGuild(guildId, [{ id: "role-seungmin", editable: true }]);
