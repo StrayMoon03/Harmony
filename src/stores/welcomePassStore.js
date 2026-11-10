@@ -1,4 +1,5 @@
 const { getDb } = require("../db/sqlite");
+const { BIAS_ROLE_KEYS, biasRoleKey } = require("../services/memberBiases");
 
 const CODE_PATTERN = /^YS-[A-Z0-9]{8}$/;
 const DEFAULT_RELEASE_MESSAGE =
@@ -104,6 +105,47 @@ function setWelcomePassGrantMode(guildId, mode) {
     WHERE guild_id = ?
   `).run(mode, new Date().toISOString(), guildId);
   return result.changes > 0;
+}
+
+function listWelcomePassBiasRoles(guildId) {
+  return getDb().prepare(`
+    SELECT guild_id, bias, role_id, updated_at
+    FROM welcome_pass_bias_roles WHERE guild_id = ? ORDER BY bias
+  `).all(guildId);
+}
+
+function getWelcomePassBiasRole(guildId, bias) {
+  const key = biasRoleKey(bias);
+  if (!key || !BIAS_ROLE_KEYS.includes(key)) return null;
+  return getDb().prepare(`
+    SELECT guild_id, bias, role_id, updated_at FROM welcome_pass_bias_roles
+    WHERE guild_id = ? AND bias = ?
+  `).get(guildId, key) || null;
+}
+
+function setWelcomePassBiasRole(guildId, bias, roleId) {
+  const key = biasRoleKey(bias);
+  if (!key || !BIAS_ROLE_KEYS.includes(key)) throw new Error("Choose a supported individual bias or OT8.");
+  const existing = getDb().prepare(`
+    SELECT bias FROM welcome_pass_bias_roles WHERE guild_id = ? AND role_id = ?
+  `).get(guildId, roleId);
+  if (existing && existing.bias !== key) {
+    throw new Error(`That role is already mapped to ${existing.bias}. Remove that mapping first.`);
+  }
+  getDb().prepare(`
+    INSERT INTO welcome_pass_bias_roles (guild_id, bias, role_id, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(guild_id, bias) DO UPDATE SET role_id = excluded.role_id, updated_at = excluded.updated_at
+  `).run(guildId, key, String(roleId), new Date().toISOString());
+  return getWelcomePassBiasRole(guildId, key);
+}
+
+function removeWelcomePassBiasRole(guildId, bias) {
+  const key = biasRoleKey(bias);
+  if (!key || !BIAS_ROLE_KEYS.includes(key)) return false;
+  return Number(getDb().prepare(
+    "DELETE FROM welcome_pass_bias_roles WHERE guild_id = ? AND bias = ?"
+  ).run(guildId, key).changes) > 0;
 }
 
 function linkWelcomePassCode({ code, guildId, userId }) {
@@ -236,6 +278,10 @@ module.exports = {
   updateWelcomePassSetting,
   listWelcomePassSettings,
   setWelcomePassGrantMode,
+  listWelcomePassBiasRoles,
+  getWelcomePassBiasRole,
+  setWelcomePassBiasRole,
+  removeWelcomePassBiasRole,
   linkWelcomePassCode,
   recordWelcomePassApproval,
   claimWelcomePassSubmissionAlert,

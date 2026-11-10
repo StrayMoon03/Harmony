@@ -1,4 +1,5 @@
 const { getDb } = require("../db/sqlite");
+const { normalizeBiases, legacyBiasValue } = require("../services/memberBiases");
 
 function saveBirthdaySettings({
   guildId,
@@ -76,12 +77,16 @@ function saveWelcomePassBirthdayProfile({
   discordUsername,
   timezone,
   bias,
+  biases,
 }) {
+  const selections = normalizeBiases(biases === undefined ? bias : biases);
+  const selectionsJson = selections.length ? JSON.stringify(selections) : null;
+  const legacyBias = legacyBiasValue(selections);
   getDb().prepare(`
     INSERT INTO birthday_profiles (
       welcome_pass_code, celebration_enabled, birthday_mmdd,
-      birthday_name, discord_username, timezone, bias, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      birthday_name, discord_username, timezone, bias, biases_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(welcome_pass_code) DO UPDATE SET
       celebration_enabled = excluded.celebration_enabled,
       birthday_mmdd = excluded.birthday_mmdd,
@@ -89,6 +94,7 @@ function saveWelcomePassBirthdayProfile({
       discord_username = excluded.discord_username,
       timezone = excluded.timezone,
       bias = excluded.bias,
+      biases_json = excluded.biases_json,
       updated_at = excluded.updated_at
   `).run(
     code,
@@ -97,7 +103,8 @@ function saveWelcomePassBirthdayProfile({
     celebrationEnabled ? birthdayName : null,
     String(discordUsername || "").trim().slice(0, 100) || null,
     celebrationEnabled ? timezone : null,
-    celebrationEnabled ? bias : null,
+    legacyBias,
+    selectionsJson,
     new Date().toISOString(),
     new Date().toISOString()
   );
@@ -137,22 +144,27 @@ function attachWelcomePassBirthdayProfile(code) {
       db.prepare(`
       UPDATE birthday_profiles SET
           welcome_pass_code = ?,
-          celebration_enabled = ?,
-          birthday_mmdd = ?,
-          birthday_name = ?,
-          discord_username = ?,
-          timezone = ?,
-          bias = ?,
+          celebration_enabled = CASE WHEN ? = 1 THEN 1 ELSE celebration_enabled END,
+          birthday_mmdd = CASE WHEN ? = 1 THEN ? ELSE birthday_mmdd END,
+          birthday_name = CASE WHEN ? = 1 THEN ? ELSE birthday_name END,
+          discord_username = COALESCE(?, discord_username),
+          timezone = CASE WHEN ? = 1 THEN ? ELSE timezone END,
+          bias = COALESCE(?, bias),
+          biases_json = COALESCE(?, biases_json),
           updated_at = ?
         WHERE id = ?
       `).run(
         code,
         pending.celebration_enabled,
+        pending.celebration_enabled,
         pending.birthday_mmdd,
+        pending.celebration_enabled,
         pending.birthday_name,
         pending.discord_username,
+        pending.celebration_enabled,
         pending.timezone,
         pending.bias,
+        pending.biases_json,
         new Date().toISOString(),
         existing.id
       );
@@ -178,9 +190,13 @@ function upsertBirthdayProfile({
   birthdayMmdd,
   birthdayName,
   bias,
+  biases,
   timezone = null,
 }) {
   const db = getDb();
+  const selections = normalizeBiases(biases === undefined ? bias : biases, { allowEmpty: false });
+  const legacyBias = legacyBiasValue(selections);
+  const selectionsJson = JSON.stringify(selections);
   const existing = db.prepare(
     "SELECT id FROM birthday_profiles WHERE guild_id = ? AND user_id = ?"
   ).get(guildId, userId);
@@ -192,13 +208,15 @@ function upsertBirthdayProfile({
         birthday_mmdd = ?,
         birthday_name = ?,
         bias = ?,
+        biases_json = ?,
         timezone = COALESCE(?, timezone),
         updated_at = ?
       WHERE id = ?
     `).run(
       birthdayMmdd,
       birthdayName,
-      bias,
+      legacyBias,
+      selectionsJson,
       timezone,
       new Date().toISOString(),
       existing.id
@@ -207,19 +225,44 @@ function upsertBirthdayProfile({
     db.prepare(`
       INSERT INTO birthday_profiles (
         guild_id, user_id, celebration_enabled, birthday_mmdd,
-        birthday_name, timezone, bias, created_at, updated_at
-      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
+        birthday_name, timezone, bias, biases_json, created_at, updated_at
+      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       guildId,
       userId,
       birthdayMmdd,
       birthdayName,
       timezone,
-      bias,
+      legacyBias,
+      selectionsJson,
       new Date().toISOString(),
       new Date().toISOString()
     );
   }
+}
+
+function setMemberBiases(guildId, userId, biases) {
+  const selections = normalizeBiases(biases, { allowEmpty: false });
+  const legacyBias = legacyBiasValue(selections);
+  const selectionsJson = JSON.stringify(selections);
+  return Number(getDb().prepare(`
+    INSERT INTO birthday_profiles (
+      guild_id, user_id, celebration_enabled, bias, biases_json, created_at, updated_at
+    ) VALUES (?, ?, 0, ?, ?, ?, ?)
+    ON CONFLICT(guild_id, user_id) DO UPDATE SET
+      bias = excluded.bias,
+      biases_json = excluded.biases_json,
+      updated_at = excluded.updated_at
+  `).run(guildId, userId, legacyBias, selectionsJson, new Date().toISOString(), new Date().toISOString()).changes) > 0;
+}
+
+function listMemberBiasProfiles(guildId) {
+  return getDb().prepare(`
+    SELECT * FROM birthday_profiles
+    WHERE guild_id = ? AND user_id IS NOT NULL
+      AND (biases_json IS NOT NULL OR bias IS NOT NULL)
+    ORDER BY user_id
+  `).all(guildId);
 }
 
 function upsertNonDiscordBirthdayProfile({ guildId, birthdayName, birthdayMmdd, timezone, customMessage = null }) {
@@ -303,18 +346,22 @@ function listBirthdayProfiles(guildId) {
 
 function setBirthdayCustomization(guildId, userId, {
   bias,
+  biases,
   customMessage,
   customImageUrl,
 }) {
+  const selections = biases === undefined && bias == null ? null : normalizeBiases(biases === undefined ? bias : biases, { allowEmpty: false });
   return getDb().prepare(`
     UPDATE birthday_profiles SET
       bias = COALESCE(?, bias),
+      biases_json = COALESCE(?, biases_json),
       custom_message = ?,
       custom_image_url = ?,
       updated_at = ?
     WHERE guild_id = ? AND user_id = ?
   `).run(
-    bias || null,
+    selections ? legacyBiasValue(selections) : null,
+    selections ? JSON.stringify(selections) : null,
     customMessage || null,
     customImageUrl || null,
     new Date().toISOString(),
@@ -391,6 +438,8 @@ module.exports = {
   disableBirthdaySettings,
   updateBirthdayRunKey,
   saveWelcomePassBirthdayProfile,
+  setMemberBiases,
+  listMemberBiasProfiles,
   listUnlinkedWelcomePassBirthdayProfiles,
   attachWelcomePassBirthdayProfile,
   upsertBirthdayProfile,

@@ -10,6 +10,7 @@ const BIASES = [
   "OT8",
   "Still deciding",
 ];
+const { normalizeBiases } = require("./memberBiases");
 
 const PRESETS = {
   "Bang Chan": [
@@ -65,33 +66,36 @@ const PRESETS = {
 };
 
 function normalizeBias(value) {
-  const text = String(value || "").trim();
-  return BIASES.find((bias) => bias.toLowerCase() === text.toLowerCase()) ||
-    "Still deciding";
+  const values = normalizeBiases(value);
+  return values.length === 1 ? values[0] : "Still deciding";
 }
 
 function presetFor(profile, year) {
-  const bias = normalizeBias(profile.bias);
-  const choices = PRESETS[bias] || PRESETS["Still deciding"];
+  const biases = normalizeBiases(profile.biases_json || profile.bias);
+  const effectiveBiases = biases.length ? biases : ["Still deciding"];
+  const choices = effectiveBiases.flatMap((bias) => PRESETS[bias] || []);
+  const available = choices.length ? choices : PRESETS["Still deciding"];
   const seed = [...String(profile.user_id || profile.birthday_name || "Harmony")]
     .reduce((total, char) => total + char.charCodeAt(0), Number(year) || 0);
-  return choices[seed % choices.length];
+  return available[seed % available.length];
 }
 
 function spotlightFor(biasValue) {
-  const bias = normalizeBias(biasValue);
-  if (bias === "OT8") {
+  const biases = normalizeBiases(biasValue);
+  if (biases.includes("OT8")) {
     return "Help us celebrate by dropping an OT8 moment that always makes you smile!";
   }
-  if (bias === "Still deciding") {
+  if (!biases.length || biases.includes("Still deciding")) {
     return "Help us celebrate by leaving some birthday love below!";
   }
-  return `Help us celebrate by sharing a favorite ${bias} moment below!`;
+  if (biases.length === 1) return `Help us celebrate by sharing a favorite ${biases[0]} moment below!`;
+  return `Help us celebrate by sharing a favorite ${biases.join(" or ")} moment below!`;
 }
 
 module.exports = {
   BIASES,
   normalizeBias,
+  normalizeBiases,
   presetFor,
   spotlightFor,
 };

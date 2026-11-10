@@ -6,7 +6,7 @@ const {
   recordWelcomePassApproval,
 } = require("../stores/welcomePassStore");
 const { saveWelcomePassBirthdayProfile } = require("../stores/birthdayStore");
-const { normalizeBias } = require("./birthdayPresets");
+const { normalizeBiases } = require("./memberBiases");
 const { validMmdd } = require("./birthdayService");
 const {
   autoLinkWelcomePassByDiscordUsername,
@@ -147,6 +147,17 @@ function startWelcomePassServer(client) {
       const birthdayOptIn =
         body.birthdayOptIn === true &&
         validMmdd(body.birthdayMmdd);
+      let memberBiases;
+      try {
+        const rawBiases = body.biases ?? body.birthdayBiases ?? body.birthdayBias;
+        memberBiases = normalizeBiases(
+          rawBiases === undefined && birthdayOptIn ? ["Still deciding"] : rawBiases,
+          { allowEmpty: true }
+        );
+      } catch (error) {
+        sendJson(response, 400, { error: "invalid_member_bias_selection" });
+        return;
+      }
       saveWelcomePassBirthdayProfile({
         code,
         celebrationEnabled: birthdayOptIn,
@@ -158,7 +169,7 @@ function startWelcomePassServer(client) {
         timezone: birthdayOptIn
           ? String(body.timezone || "").trim().slice(0, 100)
           : null,
-        bias: birthdayOptIn ? normalizeBias(body.birthdayBias) : null,
+        biases: memberBiases,
       });
 
       const matchResult = await autoLinkWelcomePassByDiscordUsername(

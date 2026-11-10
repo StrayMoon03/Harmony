@@ -14,6 +14,7 @@ const { ChannelType, PermissionFlagsBits } = require("discord.js");
 const {
   attachWelcomePassBirthdayProfile,
 } = require("../stores/birthdayStore");
+const { syncMemberBiasRoles } = require("./welcomePassBiasRoleService");
 
 async function fetchTextChannel(guild, channelId) {
   if (!channelId) return null;
@@ -273,7 +274,22 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
   // linked. Attach them as soon as both guild and member are known.
   attachWelcomePassBirthdayProfile(code);
 
-  if (assignment.assigned_at) return { status: "already_assigned" };
+  if (assignment.assigned_at) {
+    // An approved member may update their profile bias later. Sync only the
+    // Harmony-managed bias roles on repeat callbacks; never replay admission.
+    if (sendMessages) {
+      const guild = client.guilds.cache.get(assignment.guild_id) ||
+        (await client.guilds.fetch(assignment.guild_id).catch(() => null));
+      const member = guild
+        ? await guild.members.fetch(assignment.user_id).catch(() => null)
+        : null;
+      if (member) {
+        const biasRoleSync = await syncMemberBiasRoles(member);
+        return { status: "already_assigned", biasRoleSync };
+      }
+    }
+    return { status: "already_assigned" };
+  }
 
   const settings = getWelcomePassSettings(assignment.guild_id);
   if (!settings) return { status: "waiting_for_setup" };
@@ -301,6 +317,10 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
       "Welcome Pass approved: " + assignment.code
     );
   }
+  // Bias role failures never block the configured STAY approval.
+  const biasRoleSync = sendMessages
+    ? await syncMemberBiasRoles(member)
+    : null;
 
   // Startup/configuration reconciliation may restore a missing role, but it
   // must never replay member-facing or staff-facing admission messages.
@@ -355,6 +375,7 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
         "Member: <@" + member.id + ">",
         "Confirmation: `" + assignment.code + "`",
         "Approved by: " + assignment.approver_name,
+        ...(biasRoleSync?.issues?.length ? ["Bias roles need attention: " + biasRoleSync.issues.map((item) => item.replace(/^[^:]+:/, "")).join(", ")] : []),
       ].join("\n"),
       allowedMentions: { parse: [] },
     }).catch((error) => {
@@ -362,7 +383,7 @@ async function assignApprovedWelcomePass(client, code, { sendMessages = true } =
     });
   }
 
-  return { status: "assigned", guildId: guild.id, userId: member.id };
+  return { status: "assigned", guildId: guild.id, userId: member.id, biasRoleSync };
 }
 
 
@@ -396,6 +417,9 @@ async function handleManualWelcomePassRoleAdded(
 
   if (!markWelcomePassAssigned(assignment.code)) return { status: "already_assigned" };
 
+  // Manual STAY admission follows the same bias role rules as automatic mode.
+  const biasRoleSync = await syncMemberBiasRoles(newMember);
+
   if (releaseChannel) {
     const memberName =
       newMember.displayName ||
@@ -425,6 +449,7 @@ async function handleManualWelcomePassRoleAdded(
         "",
         "Member: <@" + newMember.id + ">",
         "Harmony detected the role change and sent the member message.",
+        ...(biasRoleSync.issues.length ? ["Bias roles need attention: " + biasRoleSync.issues.map((item) => item.replace(/^[^:]+:/, "")).join(", ")] : []),
       ].join("\n"),
       allowedMentions: { parse: [] },
     }).catch((error) => {
@@ -436,6 +461,7 @@ async function handleManualWelcomePassRoleAdded(
     status: "manual_release_sent",
     guildId: newMember.guild.id,
     userId: newMember.id,
+    biasRoleSync,
   };
 }
 

@@ -87,6 +87,15 @@ function migrate(database) {
       message_id   TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS welcome_pass_bias_roles (
+      guild_id   TEXT NOT NULL,
+      bias       TEXT NOT NULL,
+      role_id    TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (guild_id, bias),
+      UNIQUE (guild_id, role_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_welcome_pass_links_member
       ON welcome_pass_links (guild_id, user_id);
 
@@ -760,6 +769,21 @@ function migrate(database) {
     database.exec(
       "ALTER TABLE birthday_profiles ADD COLUMN discord_username TEXT"
     );
+  }
+  if (!birthdayProfileColumns.has("biases_json")) {
+    database.exec("ALTER TABLE birthday_profiles ADD COLUMN biases_json TEXT");
+  }
+  // Existing scalar values remain untouched in `bias` for old Harmony code;
+  // the additive JSON column becomes the canonical multi-selection value.
+  const biasRows = database.prepare(`
+    SELECT id, bias FROM birthday_profiles
+    WHERE biases_json IS NULL AND bias IS NOT NULL AND TRIM(bias) != ''
+  `).all();
+  const saveLegacyBiases = database.prepare(
+    "UPDATE birthday_profiles SET biases_json = ? WHERE id = ? AND biases_json IS NULL"
+  );
+  for (const row of biasRows) {
+    saveLegacyBiases.run(JSON.stringify([row.bias]), row.id);
   }
 
   const guardRuleColumns = new Set(

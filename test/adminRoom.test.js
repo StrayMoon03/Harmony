@@ -915,6 +915,37 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
   assert.match(back.response.embeds[0].data.title, /Welcome Pass Manager/);
 });
 
+test("Welcome Pass Member Bias Roles mapping is interactive, safe, and reconciles only by explicit action", async () => {
+  const { guild, addRole, addChannel } = createGuild("welcome-bias-role-manager");
+  const mappedRole = addRole("han-role", "Han Bias");
+  const panel = addChannel("bias-manager-panel");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "bias-panel-message", enabled: true });
+  const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panel.id, message: { id: "bias-panel-message" } });
+  await room.handleAdminRoomInteraction(open);
+  const homeButtons = open.response.components.flatMap((row) => row.components).map((component) => component.data.custom_id);
+  assert.ok(homeButtons.includes("harmony-admin-room:welcome-bias-roles"));
+
+  const biasPage = guardInteraction(guild, "harmony-admin-room:welcome-bias-roles");
+  await room.handleAdminRoomInteraction(biasPage);
+  assert.match(biasPage.response.embeds[0].data.description, /Bang Chan:\*\* Not mapped/);
+  assert.match(biasPage.response.embeds[0].data.description, /OT8:\*\* Not mapped/);
+  assert.ok(biasPage.response.components.length <= 5);
+  const selectBias = guardInteraction(guild, "harmony-admin-room:welcome-bias-role-bias", { values: ["Han"], isStringSelectMenu: () => true });
+  await room.handleAdminRoomInteraction(selectBias);
+  assert.ok(selectBias.response.components.some((row) => row.components.some((component) => component.data.custom_id.includes("welcome-bias-role-value:Han"))));
+
+  const saveRole = guardInteraction(guild, "harmony-admin-room:welcome-bias-role-value:Han", { values: [mappedRole.id], isRoleSelectMenu: () => true });
+  await room.handleAdminRoomInteraction(saveRole);
+  assert.equal(welcomePassStore.getWelcomePassBiasRole(guild.id, "Han").role_id, mappedRole.id);
+  assert.match(saveRole.response.embeds[0].data.description, /Han members will use/);
+
+  const reconcile = guardInteraction(guild, "harmony-admin-room:welcome-bias-reconcile");
+  await room.handleAdminRoomInteraction(reconcile);
+  assert.match(reconcile.response.embeds[0].data.title, /Reconcile Existing Bias Roles/);
+  assert.ok(reconcile.response.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:welcome-bias-reconcile-confirm"));
+  assert.ok(welcomePassStore.getWelcomePassBiasRole(guild.id, "Han"), "opening configuration does not clear or run roles");
+});
+
 test("Welcome Pass can be set up through selectors without partially saving or clearing existing settings", async () => {
   const { guild, addChannel, addRole } = createGuild("welcome-manager-first-setup");
   const role = addRole("new-stay-role", "STAY");

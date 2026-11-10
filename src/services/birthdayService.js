@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require("discord.js");
 const store = require("../stores/birthdayStore");
 const {
-  normalizeBias,
+  normalizeBiases,
   presetFor,
   spotlightFor,
 } = require("./birthdayPresets");
@@ -94,7 +94,10 @@ function buildBirthdayEmbed(profile, year, preview = false) {
   // A non-member profile is an event/person record, not a Discord member's
   // bias selection. Keep its generated copy neutral even if an old row has a
   // member-specific bias value.
-  const bias = profile.user_id ? normalizeBias(profile.bias) : "Still deciding";
+  const biasValues = profile.user_id
+    ? normalizeBiases(profile.biases_json || profile.bias)
+    : ["Still deciding"];
+  const bias = biasValues.length ? biasValues.join(" + ") : "Still deciding";
   const message = profile.custom_message || presetFor({ ...profile, bias }, year);
   const name = profile.birthday_name || "Birthday STAY";
   const person = profile.user_id ? `<@${profile.user_id}>` : name;
@@ -106,7 +109,7 @@ function buildBirthdayEmbed(profile, year, preview = false) {
       `**A fan-made birthday note inspired by ${bias}:**`,
       message,
       "",
-      spotlightFor(bias),
+      spotlightFor(biasValues),
       "",
       "💜 𝑯𝒂𝒓𝒎𝒐𝒏𝒚",
     ].join("\n");
