@@ -23,10 +23,12 @@ const {
   upcomingProfiles,
   buildBirthdayEmbed,
   savedBirthdayName,
+  sendMemberBirthdayNow,
 } = require("./birthdayService");
 const { YOUTIFUL_TIMEZONE_OPTIONS } = require("../data/youtifulTimezones");
 
 const managerSessions = new Map();
+const birthdaySendPreviews = new Map();
 const ANNOUNCEMENT_HOURS = [
   [0, "12:00 AM"], [1, "1:00 AM"], [2, "2:00 AM"], [3, "3:00 AM"], [4, "4:00 AM"],
   [5, "5:00 AM"], [6, "6:00 AM"], [7, "7:00 AM"], [8, "8:00 AM"], [9, "9:00 AM"],
@@ -208,6 +210,7 @@ function birthdayMemberComponents() {
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-manager:community:birthdaybiasmanage").setLabel("Manage Member Bias").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("harmony-manager:community:birthdaysend").setLabel("Send Now").setStyle(ButtonStyle.Success),
     ),
     ...birthdayBackRow(),
   ];
@@ -537,6 +540,42 @@ async function handleBirthdayManagerInteraction(interaction, action) {
     await interaction.update(memberPrompt("biasmanage", "Choose the Discord member whose saved bias line you want to view or change."));
     return true;
   }
+  if (action === "birthdaysend" && interaction.isButton?.()) {
+    await interaction.update(memberPrompt("preview", "Choose the member whose birthday announcement you want to send."));
+    return true;
+  }
+  if (action === "birthdaysendconfirm" && interaction.isButton?.()) {
+    const [, , , memberId, previewId] = customParts(interaction);
+    const key = sessionKey(interaction);
+    const preview = birthdaySendPreviews.get(key);
+    if (!preview || preview.memberId !== memberId || preview.id !== previewId) {
+      await interaction.reply({ content: "Open a new birthday preview to send an announcement.", flags: 64 });
+      return true;
+    }
+    birthdaySendPreviews.delete(key);
+    await interaction.deferUpdate();
+
+    let message;
+    try {
+      message = await sendMemberBirthdayNow(interaction.guild, memberId, preview.channelId);
+    } catch (error) {
+      console.error("Manual birthday announcement failed:", error);
+      await interaction.editReply({
+        content: `Harmony couldn’t send the announcement. ${error.message}`,
+        embeds: [],
+        components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"),
+      });
+      return true;
+    }
+
+    await interaction.editReply({
+      content: `Sent the birthday announcement for <@${memberId}> in <#${message.channelId}>. [View announcement](${message.url})`,
+      embeds: [],
+      components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"),
+      allowedMentions: { parse: [] },
+    });
+    return true;
+  }
   if (action === "birthdaymember" && interaction.isUserSelectMenu?.()) {
     const [, , , mode] = customParts(interaction);
     const memberId = selectedMemberId(interaction);
@@ -559,10 +598,26 @@ async function handleBirthdayManagerInteraction(interaction, action) {
         await interaction.update({ content: "That member will use Harmony's rotating birthday messages again.", components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"), embeds: [] });
       } else {
         const displayName = interaction.members?.get(memberId)?.displayName || interaction.users?.get(memberId)?.displayName;
+        const settings = birthdayStore.getBirthdaySettings(interaction.guildId);
+        const components = birthdayBackRow("birthdaymembers", "Back to Member Birthdays");
+        const canSend = Boolean(settings?.enabled && settings.channel_id && profile.celebration_enabled && validMmdd(profile.birthday_mmdd));
+        let content = `Preview for <@${memberId}>:`;
+        birthdaySendPreviews.delete(sessionKey(interaction));
+        if (canSend) {
+          birthdaySendPreviews.set(sessionKey(interaction), { id: interaction.id, memberId, channelId: settings.channel_id });
+          content += ` Send Now posts to <#${settings.channel_id}> and pings @everyone, even if Harmony already posted this birthday.`;
+          components.unshift(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`harmony-manager:community:birthdaysendconfirm:${memberId}:${interaction.id}`)
+              .setLabel("Send Now")
+              .setStyle(ButtonStyle.Success),
+          ));
+        }
         await interaction.update({
-          content: `Preview for <@${memberId}>:`,
+          content,
           embeds: [buildBirthdayEmbed(profile, new Date().getUTCFullYear(), true, displayName)],
-          components: birthdayBackRow("birthdaymembers", "Back to Member Birthdays"),
+          components,
+          allowedMentions: { parse: [] },
         });
       }
       return true;
