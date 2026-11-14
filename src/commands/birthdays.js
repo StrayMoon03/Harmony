@@ -245,7 +245,8 @@ async function execute(interaction) {
       await interaction.editReply("That member has no opted-in birthday profile.");
       return;
     }
-    await interaction.editReply({ embeds: [buildBirthdayEmbed(profile, new Date().getUTCFullYear(), true)] });
+    const displayName = interaction.options.getMember?.("member")?.displayName || member.displayName;
+    await interaction.editReply({ embeds: [buildBirthdayEmbed(profile, new Date().getUTCFullYear(), true, displayName)] });
     return;
   }
 

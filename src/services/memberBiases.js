@@ -24,8 +24,9 @@ function normalizeBiases(value, { allowEmpty = true } = {}) {
     if (!canonical) throw new Error("Choose one or more supported bias options.");
     if (!normalized.includes(canonical)) normalized.push(canonical);
   }
-  if (normalized.includes("Still deciding") && normalized.length > 1) {
-    throw new Error("Still deciding cannot be combined with a selected member or OT8.");
+  if (normalized.includes("Still deciding")) {
+    if (normalized.length > 1) throw new Error("Still deciding cannot be combined with a selected member or OT8.");
+    return ["Still deciding"];
   }
   if (normalized.includes("OT8")) return ["OT8"];
   if (INDIVIDUAL_BIASES.every((bias) => normalized.includes(bias))) return ["OT8"];
