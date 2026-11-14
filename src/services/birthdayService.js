@@ -90,7 +90,12 @@ function daysUntil(mmdd, now = new Date()) {
   return Math.round((next - today) / (24 * 60 * 60 * 1000));
 }
 
-function buildBirthdayEmbed(profile, year, preview = false) {
+function savedBirthdayName(profile) {
+  const name = profile?.birthday_name?.trim();
+  return name && name !== profile.user_id ? name : null;
+}
+
+function buildBirthdayEmbed(profile, year, preview = false, memberName) {
   // A non-member profile is an event/person record, not a Discord member's
   // bias selection. Keep its generated copy neutral even if an old row has a
   // member-specific bias value.
@@ -99,7 +104,7 @@ function buildBirthdayEmbed(profile, year, preview = false) {
     : ["Still deciding"];
   const bias = biasValues.length ? biasValues.join(" + ") : "Still deciding";
   const message = profile.custom_message || presetFor({ ...profile, bias }, year);
-  const name = profile.birthday_name || "Birthday STAY";
+  const name = savedBirthdayName(profile) || memberName || "Birthday STAY";
   const person = profile.user_id ? `<@${profile.user_id}>` : name;
   const description = !profile.user_id && profile.custom_message?.trim()
     ? profile.custom_message.trim()
@@ -171,7 +176,7 @@ async function announceBirthdays(client, settings, parts) {
     try {
       await channel.send({
         content: `🎉 @everyone, help us wish <@${member.id}> a very Happy Birthday!`,
-        embeds: [buildBirthdayEmbed(profile, parts.year)],
+        embeds: [buildBirthdayEmbed(profile, parts.year, false, member.displayName)],
         allowedMentions: {
           parse: ["everyone"],
           users: [member.id],
@@ -432,6 +437,7 @@ module.exports = {
   daysUntil,
   nextOccurrence,
   upcomingProfiles,
+  savedBirthdayName,
   buildBirthdayEmbed,
   announceNonDiscordBirthdays,
   startBirthdayScheduler,
