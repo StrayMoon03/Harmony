@@ -10,6 +10,7 @@ function fakeInteraction(action, guildId, admin = true, fields = {}, options = {
   const kind = options.kind || (fields.__modal ? "modal" : "button");
   const interaction = {
     guildId,
+    id: options.id,
     user: { id: options.userId || "birthday-admin" },
     customId: options.customId || `harmony-manager:community:${action}`,
     values: options.values || [],
@@ -379,4 +380,65 @@ test("birthday previews replace legacy Discord IDs with the member display name"
   const embed = preview.responses[0].payload.embeds[0].data;
   assert.equal(embed.title, "🎂 Happy Birthday, Alex!");
   assert.match(embed.description, new RegExp(`<@${memberId}>`));
+});
+
+test("Send Now previews and reposts a birthday already announced, once per confirmation", async () => {
+  const guildId = `birthday-repost-${Date.now()}`;
+  const memberId = "123456789012345678";
+  const now = new Date();
+  const birthdayMmdd = now.toISOString().slice(5, 10);
+  const originalRoleExpiry = new Date(now.getTime() + 3_600_000).toISOString();
+  birthdayStore.saveBirthdaySettings({
+    guildId, channelId: "birthday-channel", roleId: "birthday-role",
+    timezone: "UTC", announcementHour: 9, weeklyDay: 0,
+  });
+  birthdayStore.upsertBirthdayProfile({ guildId, userId: memberId, birthdayMmdd, birthdayName: "Alex", bias: "Hyunjin" });
+  birthdayStore.setBirthdayCustomization(guildId, memberId, {
+    customMessage: "Drop your favorite Hyunjin moment!",
+    customImageUrl: "https://example.com/birthday.png",
+  });
+  const profile = birthdayStore.getBirthdayProfile(guildId, memberId);
+  birthdayStore.markBirthdayAnnounced(profile.id, now.getUTCFullYear(), originalRoleExpiry);
+
+  const sent = [];
+  const channel = {
+    isTextBased: () => true,
+    send: async (payload) => {
+      sent.push(payload);
+      return { channelId: "birthday-channel", url: "https://discord.com/channels/server/channel/message" };
+    },
+  };
+  const guild = {
+    id: guildId,
+    channels: { cache: new Map([["birthday-channel", channel]]) },
+    members: { fetch: async () => ({ id: memberId, displayName: "Alex" }) },
+  };
+  const open = fakeInteraction("birthdaysend", guildId);
+  await handleEventSchedulerInteraction(open);
+  const pickerId = open.responses[0].payload.components[0].components[0].data.custom_id;
+  const selected = fakeInteraction("birthdaymember", guildId, true, {}, {
+    id: "100001", kind: "user", values: [memberId], customId: pickerId,
+  });
+  await handleEventSchedulerInteraction(selected);
+  const preview = selected.responses[0].payload;
+  assert.match(preview.content, /pings @everyone/);
+  assert.deepEqual(preview.allowedMentions.parse, []);
+  assert.equal(sent.length, 0);
+
+  const confirm = preview.components[0].components[0];
+  assert.equal(confirm.data.label, "Send Now");
+  const unauthorized = fakeInteraction("birthdaysendconfirm", guildId, false, {}, { customId: confirm.data.custom_id, guild });
+  await handleEventSchedulerInteraction(unauthorized);
+  assert.equal(sent.length, 0);
+
+  const click = () => fakeInteraction("birthdaysendconfirm", guildId, true, {}, { customId: confirm.data.custom_id, guild });
+  const first = click();
+  await Promise.all([handleEventSchedulerInteraction(first), handleEventSchedulerInteraction(click())]);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].allowedMentions, { parse: ["everyone"], users: [memberId] });
+  assert.match(sent[0].embeds[0].data.description, /Drop your favorite Hyunjin moment/);
+  assert.equal(sent[0].embeds[0].data.image.url, "https://example.com/birthday.png");
+  assert.match(first.responses.at(-1).payload.content, /View announcement/);
+  assert.equal(birthdayStore.getBirthdayProfile(guildId, memberId).role_remove_at, originalRoleExpiry);
+  assert.equal(birthdayStore.listBirthdayHistory(guildId, "2000-01-01", "2100-01-01").length, 1);
 });

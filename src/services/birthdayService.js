@@ -8,6 +8,7 @@ const {
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const ROLE_DURATION_MS = 24 * 60 * 60 * 1000;
+const memberAnnouncementsInFlight = new Set();
 
 function zonedParts(date, timezone) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -143,6 +144,75 @@ async function fetchTextChannel(guild, channelId) {
   return channel?.isTextBased() ? channel : null;
 }
 
+async function sendMemberBirthday(guild, channel, settings, memberId, parts, { manual = false } = {}) {
+  const key = `${guild.id}:${memberId}`;
+  if (memberAnnouncementsInFlight.has(key)) {
+    throw new Error("Harmony is already sending this member’s birthday announcement.");
+  }
+  memberAnnouncementsInFlight.add(key);
+
+  try {
+    const profile = store.getBirthdayProfile(guild.id, memberId);
+    if (!profile?.celebration_enabled || !validMmdd(profile.birthday_mmdd)) {
+      if (manual) throw new Error("This member does not have a saved birthday with celebrations enabled.");
+      return;
+    }
+
+    const firstSendToday = profile.birthday_mmdd === parts.mmdd && Number(profile.last_announced_year || 0) !== parts.year;
+    if (!manual && !firstSendToday) return;
+    const member = await guild.members.fetch(memberId).catch(() => null);
+    if (!member) {
+      if (manual) throw new Error("Harmony could not find that member in this server.");
+      return;
+    }
+
+    let roleAdded = false;
+    if (firstSendToday && settings.role_id && !member.roles.cache.has(settings.role_id)) {
+      try {
+        await member.roles.add(settings.role_id, "Harmony birthday celebration");
+        roleAdded = true;
+      } catch (error) {
+        console.error("Could not grant birthday role:", error);
+      }
+    }
+
+    let message;
+    try {
+      message = await channel.send({
+        content: `🎉 @everyone, help us wish <@${member.id}> a very Happy Birthday!`,
+        embeds: [buildBirthdayEmbed(profile, parts.year, false, member.displayName)],
+        allowedMentions: {
+          parse: ["everyone"],
+          users: [member.id],
+        },
+      });
+    } catch (error) {
+      if (roleAdded) {
+        await member.roles.remove(settings.role_id, "Birthday announcement could not be delivered").catch(() => {});
+      }
+      throw error;
+    }
+
+    if (firstSendToday) {
+      store.markBirthdayAnnounced(profile.id, parts.year, new Date(Date.now() + ROLE_DURATION_MS).toISOString());
+    }
+    return message;
+  } finally {
+    memberAnnouncementsInFlight.delete(key);
+  }
+}
+
+async function sendMemberBirthdayNow(guild, memberId, channelId) {
+  const settings = store.getBirthdaySettings(guild.id);
+  if (!settings?.enabled) throw new Error("Turn on birthday celebrations in Birthday Settings first.");
+  if (settings.channel_id !== channelId) throw new Error("The birthday channel changed. Open a new preview to confirm the destination.");
+  if (!settings.timezone || !validTimezone(settings.timezone)) throw new Error("Choose a time zone in Birthday Settings first.");
+  const channel = await fetchTextChannel(guild, settings.channel_id);
+  if (!channel?.send) throw new Error("The birthday announcement channel is unavailable.");
+  const parts = zonedParts(new Date(), settings.timezone);
+  return sendMemberBirthday(guild, channel, settings, memberId, parts, { manual: true });
+}
+
 async function announceBirthdays(client, settings, parts) {
   const guild = await fetchGuild(client, settings.guild_id);
   if (!guild) return;
@@ -157,46 +227,7 @@ async function announceBirthdays(client, settings, parts) {
     );
 
   for (const profile of profiles) {
-    const member = await guild.members.fetch(profile.user_id).catch(() => null);
-    if (!member) continue;
-
-    let roleAdded = false;
-    if (settings.role_id && !member.roles.cache.has(settings.role_id)) {
-      try {
-        await member.roles.add(
-          settings.role_id,
-          "Harmony birthday celebration"
-        );
-        roleAdded = true;
-      } catch (error) {
-        console.error("Could not grant birthday role:", error);
-      }
-    }
-
-    try {
-      await channel.send({
-        content: `🎉 @everyone, help us wish <@${member.id}> a very Happy Birthday!`,
-        embeds: [buildBirthdayEmbed(profile, parts.year, false, member.displayName)],
-        allowedMentions: {
-          parse: ["everyone"],
-          users: [member.id],
-        },
-      });
-    } catch (error) {
-      if (roleAdded) {
-        await member.roles.remove(
-          settings.role_id,
-          "Birthday announcement could not be delivered"
-        ).catch(() => {});
-      }
-      throw error;
-    }
-
-    store.markBirthdayAnnounced(
-      profile.id,
-      parts.year,
-      new Date(Date.now() + ROLE_DURATION_MS).toISOString()
-    );
+    await sendMemberBirthday(guild, channel, settings, profile.user_id, parts);
   }
 }
 
@@ -438,6 +469,7 @@ module.exports = {
   nextOccurrence,
   upcomingProfiles,
   savedBirthdayName,
+  sendMemberBirthdayNow,
   buildBirthdayEmbed,
   announceNonDiscordBirthdays,
   startBirthdayScheduler,

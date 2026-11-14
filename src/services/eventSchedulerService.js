@@ -3058,7 +3058,7 @@ async function handleManagerInteraction(interaction) {
   }
   if (calendarType === "community" && [
     "birthdays", "birthdayhome", "birthdaymembers", "birthdaysettingsmenu", "birthdaymaintenance", "birthdaystatus", "birthdayupcoming", "birthdayadd", "birthdayaddmodal", "birthdaymember", "birthdaybias", "birthdaybiascontinue", "birthdaybiasmanage",
-    "birthdaycustomize", "birthdaycustomizemodal", "birthdayclear", "birthdaypreview", "birthdaysettings", "birthdaysettingschannel", "birthdaysettingsrole",
+    "birthdaycustomize", "birthdaycustomizemodal", "birthdayclear", "birthdaypreview", "birthdaysend", "birthdaysendconfirm", "birthdaysettings", "birthdaysettingschannel", "birthdaysettingsrole",
     "birthdaysettingsstep2", "birthdaysettingstimezone", "birthdaysettingstime", "birthdaysettingsday", "birthdaysettingssave", "birthdayweekly", "birthdaymonthly", "birthdaymatchall", "birthdaymatchmember",
     "birthdaymatchmembermodal", "birthdaynonmember", "birthdaynonmemberadd", "birthdaynonmemberaddmodal",
     "birthdaynonmemberselect", "birthdaynonmemberedit", "birthdaynonmembereditmodal",
