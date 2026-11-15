@@ -10,7 +10,7 @@ function classifyAuthenticatedProviderFailure(error, { authenticatedRequest = fa
   }
   // Exclude anti-bot prompts and transport/rate-limit failures: these do not
   // prove that the account session is invalid.
-  if (/not logged in|login (?:is )?required|sign[ -]?in (?:is )?required|opened a login page|redirected to (?:the )?login|session (?:has )?expired|session is invalid|invalid session|authentication required|auth_required/i.test(text) &&
+  if (/not logged in|login (?:is )?required|sign[ -]?in (?:is )?required|opened a login page|redirect(?:ed)? to (?:the )?login|session (?:has )?expired|session is invalid|invalid session|authentication required|auth_required/i.test(text) &&
       !/confirm.*not a bot|not a bot|rate.?limit|too many requests|\b429\b/i.test(text)) {
     return { kind: "session", category: /expired|invalid session/.test(text) ? "session_invalid" : "login_required" };
   }

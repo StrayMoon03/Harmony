@@ -9,6 +9,11 @@ test("provider text is only auth evidence when it came from an authenticated req
   assert.deepEqual(classifyAuthenticatedProviderFailure(new Error("login required"), { authenticatedRequest: true }), {
     kind: "session", category: "login_required",
   });
+  const redirectEvidence = classifyAuthenticatedProviderFailure(new Error("[instagram][error] HTTP redirect to login page"), { authenticatedRequest: true });
+  assert.deepEqual(redirectEvidence, {
+    kind: "session", category: "login_required",
+  });
+  assert.match(safeReason({ message: "provider error", socialAuthFailureKind: redirectEvidence.kind }), /session needs to be refreshed/i);
   assert.deepEqual(classifyAuthenticatedProviderFailure(new Error("Facebook checkpoint page"), { authenticatedRequest: true }), {
     kind: "owner", category: "checkpoint",
   });
