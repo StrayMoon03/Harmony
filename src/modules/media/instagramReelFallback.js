@@ -40,13 +40,13 @@ function exactReelCode(value) {
   return match[1];
 }
 
-async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}) {
+async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}, candidateIndex = 0) {
   if (!result || result.code !== expectedCode || typeof result.video !== "string") throw new Error("Instagram reel identity mismatch");
   const url = new URL(result.video);
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram reel URL rejected");
   const request = deps.fetch || fetch;
   const run = deps.exec || exec;
-  const file = path.join(jobDir, "instagram-verified-reel.mp4");
+  const file = path.join(jobDir, `instagram-verified-reel-${candidateIndex}.mp4`);
   let response;
   try {
     const requestSignal = deps.signal
@@ -66,13 +66,13 @@ async function saveOneVerifiedReel(result, expectedCode, jobDir, deps = {}) {
     await fs.writeFile(file, Buffer.concat(chunks));
     const { stdout } = await run(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "stream=codec_type", "-of", "json", file], { timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true, ...(deps.signal ? { signal: deps.signal } : {}) });
     const streams = JSON.parse(stdout).streams || [];
-    if (!streams.some(s => s.codec_type === "video") || !streams.some(s => s.codec_type === "audio")) throw new Error("Instagram reel recovery needs verified video and audio");
-    return [file];
+    if (!streams.some(s => s.codec_type === "video")) throw new Error("Instagram reel recovery needs verified video");
+    return { file, hasAudio: streams.some(s => s.codec_type === "audio") };
   } catch {
     await fs.rm(file, { force: true });
     if (deps.signal?.aborted) throw deps.signal.reason || new Error("Instagram retrieval cancelled");
     // Network/probe exceptions may contain signed URLs; never propagate them.
-    throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
+    throw new Error("Instagram exact reel recovery could not verify a playable video");
   }
 }
 
@@ -86,15 +86,27 @@ async function saveVerifiedReel(result, expectedCode, jobDir, deps = {}) {
     try { url = new URL(value); } catch { throw new Error("Instagram reel URL rejected"); }
     if (typeof value !== "string" || url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !/\.(cdninstagram\.com|fbcdn\.net)$/.test(url.hostname)) throw new Error("Instagram reel URL rejected");
   }
-  for (const video of new Set(videos)) {
+  let silentFallback = null;
+  for (const [index, video] of [...new Set(videos)].entries()) {
     deps.signal?.throwIfAborted();
-    try { return await saveOneVerifiedReel({ ...result, video }, expectedCode, jobDir, deps); }
+    try {
+      const saved = await saveOneVerifiedReel({ ...result, video }, expectedCode, jobDir, deps, index);
+      if (saved.hasAudio) {
+        if (silentFallback) await fs.rm(silentFallback, { force: true });
+        return { files: [saved.file], hasAudio: true };
+      }
+      // Keep the exact-post video as a fallback, but check any other official
+      // renditions for audio before settling for a silent copy.
+      if (!silentFallback) silentFallback = saved.file;
+      else await fs.rm(saved.file, { force: true });
+    }
     catch (error) {
       if (deps.signal?.aborted) throw deps.signal.reason || error;
       /* Failed candidates are removed before trying the next owned URL. */
     }
   }
-  throw new Error("Instagram exact reel recovery could not verify a playable video with audio");
+  if (silentFallback) return { files: [silentFallback], hasAudio: false };
+  throw new Error("Instagram exact reel recovery could not verify a playable video");
 }
 
 async function downloadInstagramReel(url, jobDir, options = {}) {
@@ -123,8 +135,8 @@ async function downloadInstagramReel(url, jobDir, options = {}) {
   try { result = JSON.parse(line.slice("HARMONY_INSTAGRAM_REEL:".length)); }
   catch { throw new Error("Instagram browser returned invalid reel metadata"); }
   options.signal?.throwIfAborted();
-  const files = await saveVerifiedReel(result, code, jobDir, { signal: options.signal });
-  return { files, creator: result.creator };
+  const saved = await saveVerifiedReel(result, code, jobDir, { signal: options.signal });
+  return { ...saved, creator: result.creator };
 }
 
 module.exports = { downloadInstagramReel, saveVerifiedReel, exactReelCode, sanitizedBrowserDiagnostics };

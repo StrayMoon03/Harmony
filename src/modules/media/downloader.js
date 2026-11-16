@@ -9,6 +9,9 @@ const execFileAsync = promisify(execFile);
 
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
 const INSTAGRAM_GALLERY_TIMEOUT_MS = 45000;
+const INSTAGRAM_RETRY_PAUSE_MS = 350;
+const YTDLP_FORMATS_PREFIX = "HARMONY_FORMATS:";
+const YTDLP_FILE_PREFIX = "HARMONY_FILE:";
 
 const IMAGE_EXT = new Set([
   "jpg",
@@ -72,6 +75,73 @@ function probeFile(filePath) {
   };
 }
 
+function isInstagramReelUrl(url) {
+  try {
+    return /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function instagramReelShortcode(url) {
+  try {
+    return new URL(url).pathname.match(/^\/(?:[A-Za-z0-9._]+\/)?reels?\/([A-Za-z0-9_-]+)\/?$/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function isExactInstagramReelFile(filePath, shortcode, retry = false) {
+  if (!shortcode) return true;
+  const prefix = retry ? `harmony-with-audio-${shortcode}.` : `harmony-${shortcode}.`;
+  return path.basename(filePath).startsWith(prefix);
+}
+
+function pauseInstagramRetry(signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason || new Error("Instagram retrieval cancelled"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, INSTAGRAM_RETRY_PAUSE_MS);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason || new Error("Instagram retrieval cancelled"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function sanitizeInstagramFormats(formats) {
+  if (!Array.isArray(formats)) return [];
+  return formats.slice(0, 40).map((format) => ({
+    id: String(format?.format_id || format?.id || "unknown").slice(0, 80),
+    ext: String(format?.ext || "unknown").slice(0, 16),
+    height: Number.isFinite(Number(format?.height)) ? Number(format.height) : null,
+    video: String(format?.vcodec || format?.video || "unknown").slice(0, 64),
+    audio: String(format?.acodec || format?.audio || "unknown").slice(0, 64),
+  }));
+}
+
+function parseInstagramYtDlpOutput(stdout) {
+  const paths = [];
+  let formats = [];
+  for (const line of String(stdout || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+    if (line.startsWith(YTDLP_FORMATS_PREFIX)) {
+      try {
+        formats = sanitizeInstagramFormats(JSON.parse(line.slice(YTDLP_FORMATS_PREFIX.length)));
+      } catch {
+        formats = [];
+      }
+    } else if (line.startsWith(YTDLP_FILE_PREFIX)) {
+      const filePath = line.slice(YTDLP_FILE_PREFIX.length).trim();
+      if (filePath) paths.push(filePath);
+    }
+  }
+  return { paths, formats };
+}
+
 /**
  * Recursively finds media files inside a directory.
  *
@@ -131,8 +201,8 @@ async function createJobDirectory() {
  * Downloads media from a supported URL.
  *
  * yt-dlp is attempted first.
- * Instagram falls back to gallery-dl, then exact-record browser recovery.
- * Photo recovery is unchanged; reels require verified video and audio.
+ * Instagram prefers audio when available but keeps an exact-reel video-only
+ * result when no verified audio stream can be recovered.
  *
  * Every download uses its own temporary folder.
  *
@@ -145,9 +215,17 @@ async function downloadMedia(url, options = {}) {
   const jobDir = await createJobDirectory();
   const errors = [];
   let authFailure = null;
+  const isReel = isInstagramReelUrl(url);
+  let silentVideoFallback = null;
+  const withAuthFailure = (result) => ({
+    ...result,
+    rawDir: jobDir,
+    ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
+  });
   let ytDlpAttempts;
   try {
-    ytDlpAttempts = await runInstagramYtDlpAttempts(url, jobDir, { signal });
+    const runAttempts = options.runInstagramYtDlpAttempts || runInstagramYtDlpAttempts;
+    ytDlpAttempts = await runAttempts(url, jobDir, { signal });
   } catch (error) {
     await fs.rm(jobDir, { recursive: true, force: true });
     throw error;
@@ -158,23 +236,27 @@ async function downloadMedia(url, options = {}) {
       authFailure ||= classifyAuthenticatedProviderFailure(attempt.error, { authenticatedRequest: true });
     }
   }
-  const authenticatedFallbackAttempted = ytDlpAttempts.failures.some((attempt) => attempt.useCookies);
+  const authenticatedFallbackAttempted = ytDlpAttempts.cookieAttempted || ytDlpAttempts.failures.some((attempt) => attempt.useCookies);
   if (ytDlpAttempts.result) {
-    return {
-      ...ytDlpAttempts.result,
-      ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
-    };
+    const hasVideo = ytDlpAttempts.result.files?.some((file) => file.isVideo);
+    if (!isReel || (hasVideo && ytDlpAttempts.result.hasAudio !== false)) {
+      return withAuthFailure(ytDlpAttempts.result);
+    }
+    if (hasVideo) silentVideoFallback = ytDlpAttempts.result;
   }
 
   try {
+    if (ytDlpAttempts.result || ytDlpAttempts.failures.length) await pauseInstagramRetry(signal);
     console.log("Instagram falling back to gallery-dl for the exact post.");
-    const result = await downloadWithGalleryDl(url, jobDir, {
-      requireAudio: errors.some((error) =>
-        String(error?.message || "").includes("INSTAGRAM_AUDIO_MISSING")
-      ),
-      signal,
-    });
-    return { ...result, ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}) };
+    const galleryDir = path.join(jobDir, "gallery-dl");
+    await fs.mkdir(galleryDir, { recursive: true });
+    const getGallery = options.downloadWithGalleryDl || downloadWithGalleryDl;
+    const result = await getGallery(url, galleryDir, { signal });
+    const hasVideo = result.files?.some((file) => file.isVideo);
+    if (!isReel || (hasVideo && result.hasAudio !== false)) {
+      return withAuthFailure(result);
+    }
+    if (hasVideo) silentVideoFallback ||= result;
   } catch (galleryError) {
     if (signal?.aborted) {
       await fs.rm(jobDir, { recursive: true, force: true });
@@ -184,40 +266,47 @@ async function downloadMedia(url, options = {}) {
     if (authenticatedFallbackAttempted) {
       authFailure ||= classifyAuthenticatedProviderFailure(galleryError, { authenticatedRequest: true });
     }
-    await fs.rm(jobDir, { recursive: true, force: true });
-    await fs.mkdir(jobDir, { recursive: true });
-    try {
-      const reelPath = new URL(url).pathname;
-      const isReel = /^\/(?:[A-Za-z0-9._]+\/)?reels?\/[A-Za-z0-9_-]+\/?$/.test(reelPath);
-      const result = isReel
-        ? await require("./instagramReelFallback").downloadInstagramReel(url, jobDir, { signal })
-        : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, jobDir, { signal });
-      return { files: result.files.map(probeFile), creator: result.creator, rawDir: jobDir, platform: "instagram", ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}) };
-    } catch (browserError) {
-      if (signal?.aborted) {
-        await fs.rm(jobDir, { recursive: true, force: true });
-        throw signal.reason || browserError;
-      }
-      errors.push(browserError);
-      if (["session", "owner"].includes(browserError?.socialAuthFailureKind)) {
-        authFailure ||= {
-          kind: browserError.socialAuthFailureKind,
-          category: browserError.socialAuthFailureCategory,
-        };
-      }
-      await fs.rm(jobDir, { recursive: true, force: true });
-    }
-    const summary = errors
-      .map((error) => String(error?.stderr || error?.message || error))
-      .filter(Boolean)
-      .join(" | ");
-    const failure = new Error(`Instagram exhausted its safe download methods: ${summary}`);
-    if (authFailure) {
-      failure.socialAuthFailureKind = authFailure.kind;
-      failure.socialAuthFailureCategory = authFailure.category;
-    }
-    throw failure;
   }
+
+  try {
+    await pauseInstagramRetry(signal);
+    const browserDir = path.join(jobDir, "browser");
+    await fs.mkdir(browserDir, { recursive: true });
+    const getReel = options.downloadInstagramReel || require("./instagramReelFallback").downloadInstagramReel;
+    const result = isReel
+      ? await getReel(url, browserDir, { signal })
+      : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, browserDir, { signal });
+    const browserResult = { files: result.files.map(probeFile), hasAudio: result.hasAudio, creator: result.creator, platform: "instagram" };
+    if (!isReel || (browserResult.files.some((file) => file.isVideo) && browserResult.hasAudio !== false)) {
+      return withAuthFailure(browserResult);
+    }
+    if (browserResult.files.some((file) => file.isVideo)) silentVideoFallback ||= browserResult;
+  } catch (browserError) {
+    if (signal?.aborted) {
+      await fs.rm(jobDir, { recursive: true, force: true });
+      throw signal.reason || browserError;
+    }
+    errors.push(browserError);
+    if (["session", "owner"].includes(browserError?.socialAuthFailureKind)) {
+      authFailure ||= {
+        kind: browserError.socialAuthFailureKind,
+        category: browserError.socialAuthFailureCategory,
+      };
+    }
+  }
+
+  if (silentVideoFallback) return withAuthFailure(silentVideoFallback);
+  await fs.rm(jobDir, { recursive: true, force: true });
+  const summary = errors
+    .map((error) => String(error?.stderr || error?.message || error))
+    .filter(Boolean)
+    .join(" | ");
+  const failure = new Error(`Instagram exhausted its safe download methods: ${summary}`);
+  if (authFailure) {
+    failure.socialAuthFailureKind = authFailure.kind;
+    failure.socialAuthFailureCategory = authFailure.category;
+  }
+  throw failure;
 }
 
 async function runInstagramYtDlpAttempts(url, jobDir, options = {}) {
@@ -225,33 +314,42 @@ async function runInstagramYtDlpAttempts(url, jobDir, options = {}) {
   const cookiePath = process.env.INSTAGRAM_COOKIES || path.resolve(__dirname, "../../instagram-cookies.txt");
   const download = options.download || downloadWithYtDlp;
   const failures = [];
+  let bestResult = null;
+  let cookieAttempted = false;
 
-  // Public retrieval is always first. Only inspect/use the cookie file after
-  // that request fails, so successful public posts never touch the session.
-  for (const useCookies of [false, true]) {
+  // Reels try the configured session first, then public retrieval. Preserve
+  // the existing public-first order for other Instagram media. Keep attempts
+  // isolated so a failed second attempt cannot delete a usable first result.
+  let attemptIndex = 0;
+  const attemptOrder = isInstagramReelUrl(url) ? [true, false] : [false, true];
+  for (const useCookies of attemptOrder) {
+    let attemptDir = path.join(jobDir, useCookies ? "yt-dlp-cookie" : "yt-dlp-public");
     if (useCookies) {
       try {
         await fs.access(cookiePath);
       } catch {
-        break;
+        continue;
       }
+      cookieAttempted = true;
     }
 
+    if (attemptIndex > 0) await pauseInstagramRetry(signal);
+    attemptIndex += 1;
+
     try {
-      return {
-        result: await download(url, jobDir, { useCookies, signal }),
-        failures,
-      };
+      await fs.mkdir(attemptDir, { recursive: true });
+      const result = await download(url, attemptDir, { useCookies, signal });
+      if (result?.hasAudio !== false) return { result, failures, cookieAttempted };
+      bestResult ||= result;
     } catch (error) {
       if (signal?.aborted) throw signal.reason || error;
       failures.push({ error, useCookies });
-      console.warn(`Instagram yt-dlp ${useCookies ? "cookie fallback" : "public"} attempt failed.`);
-      await fs.rm(jobDir, { recursive: true, force: true });
-      await fs.mkdir(jobDir, { recursive: true });
+      console.warn(`Instagram yt-dlp ${useCookies ? "cookie" : "public fallback"} attempt failed.`);
+      await fs.rm(attemptDir, { recursive: true, force: true });
     }
   }
 
-  return { result: null, failures };
+  return { result: bestResult, failures, cookieAttempted };
 }
 
 /**
@@ -286,16 +384,48 @@ async function hasAudioStream(filePath) {
   }
 }
 
+async function hasVideoStream(filePath) {
+  const ffprobePath = process.env.FFPROBE_PATH || "ffprobe";
+  try {
+    const { stdout } = await execFileAsync(
+      ffprobePath,
+      ["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0", filePath],
+      { windowsHide: true, maxBuffer: 1024 * 1024 }
+    );
+    return String(stdout).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function findVerifiedVideoFiles(jobDir, options = {}) {
+  const checkVideo = options.hasVideoStream || hasVideoStream;
+  const paths = await findMediaFiles(jobDir);
+  const videos = paths.filter((filePath) => probeFile(filePath).isVideo);
+  const verified = [];
+  for (const filePath of videos) {
+    options.signal?.throwIfAborted();
+    if (await checkVideo(filePath)) verified.push(filePath);
+  }
+  return verified;
+}
+
 async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
   const ytDlpPath = process.env.YTDLP_PATH || "yt-dlp";
   const cookiesPath =
     process.env.INSTAGRAM_COOKIES ||
     path.resolve(__dirname, "../../instagram-cookies.txt");
   const args = [
+    // This helper is Instagram-only; leave every other platform's network
+    // behavior unchanged while avoiding broken IPv6 routes to Instagram.
+    "--force-ipv4",
     "--no-playlist",
     "--no-warnings",
+    "--keep-video",
     "--print",
-    "after_move:filepath",
+    `before_dl:${YTDLP_FORMATS_PREFIX}%(formats.:.{format_id,ext,height,vcodec,acodec})j`,
+    "--print",
+    `after_move:${YTDLP_FILE_PREFIX}%(filepath)s`,
     "-f",
     format,
     "--merge-output-format",
@@ -314,19 +444,24 @@ async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
   }
 
   args.push(url);
-  const { stdout } = await execFileAsync(ytDlpPath, args, {
-    windowsHide: true,
-    timeout: 120000,
-    killSignal: "SIGKILL",
-    maxBuffer: 20 * 1024 * 1024,
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
+  const run = options.execFileAsync || execFileAsync;
+  try {
+    const { stdout } = await run(ytDlpPath, args, {
+      windowsHide: true,
+      timeout: 120000,
+      killSignal: "SIGKILL",
+      maxBuffer: 20 * 1024 * 1024,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    return parseInstagramYtDlpOutput(stdout);
+  } catch (error) {
+    error.instagramFormats = parseInstagramYtDlpOutput(error.stdout).formats;
+    throw error;
+  }
+}
 
-  return stdout
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+function logInstagramFormatList(stage, formats) {
+  console.warn(`Instagram ${stage} produced video without verified audio; available formats: ${JSON.stringify(sanitizeInstagramFormats(formats))}`);
 }
 
 /**
@@ -337,27 +472,38 @@ async function runInstagramYtDlp(url, outputTemplate, format, options = {}) {
  * @returns {Promise<DownloadResult>}
  */
 async function downloadWithYtDlp(url, jobDir, options = {}) {
+  const shortcode = instagramReelShortcode(url);
   const firstTemplate = path.join(
     jobDir,
     "harmony-%(id)s.%(ext)s"
   );
 
-  let paths = await runInstagramYtDlp(
-    url,
-    firstTemplate,
-    "bv*+ba/b",
-    options
-  );
+  let initialFormats = [];
+  let paths;
+  try {
+    const initial = await runInstagramYtDlp(url, firstTemplate, "bv+ba/b", options);
+    paths = initial.paths;
+    initialFormats = initial.formats;
+  } catch (error) {
+    initialFormats = error.instagramFormats || [];
+    paths = (await findVerifiedVideoFiles(jobDir, options))
+      .filter((filePath) => isExactInstagramReelFile(filePath, shortcode));
+    if (!paths.length) throw error;
+    console.warn("Instagram yt-dlp merge failed; preserving a verified downloaded video for recovery.");
+  }
 
   if (paths.length === 0) {
-    throw new Error(
-      "yt-dlp did not return a downloaded file path."
-    );
+    paths = (await findVerifiedVideoFiles(jobDir, options))
+      .filter((filePath) => isExactInstagramReelFile(filePath, shortcode));
+    if (paths.length === 0) {
+      throw new Error("yt-dlp did not return a downloaded file path or retain a usable video.");
+    }
+    console.warn("Instagram yt-dlp did not report a merged path; preserving its verified video output.");
   }
 
   let files = paths
     .map(probeFile)
-    .filter((file) => file.isImage || file.isVideo);
+    .filter((file) => (file.isImage || file.isVideo) && isExactInstagramReelFile(file.path, shortcode));
 
   if (files.length === 0) {
     throw new Error(
@@ -366,8 +512,11 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
   }
 
   const video = files.find((file) => file.isVideo);
-  let audioRecovered = !video || (await hasAudioStream(video.path));
+  const checkAudio = options.hasAudioStream || hasAudioStream;
+  let audioRecovered = !video || (await checkAudio(video.path));
   if (video && !audioRecovered) {
+    logInstagramFormatList("initial yt-dlp attempt", initialFormats);
+    await pauseInstagramRetry(options.signal);
     console.warn(
       "Instagram download had no audio stream. Retrying with separate video and audio formats..."
     );
@@ -378,27 +527,38 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
     );
 
     try {
-      const retryPaths = await runInstagramYtDlp(
+      let retry;
+      try {
+        retry = await runInstagramYtDlp(
         url,
         retryTemplate,
         "bv+ba/b[acodec!=none]",
         options
-      );
+        );
+      } catch (retryError) {
+        const recoveredPaths = (await findVerifiedVideoFiles(jobDir, options))
+          .filter((filePath) => isExactInstagramReelFile(filePath, shortcode, true));
+        if (!recoveredPaths.length) throw retryError;
+        retry = { paths: recoveredPaths, formats: retryError.instagramFormats || [] };
+        console.warn("Instagram separate-stream merge failed; checking its retained video output.");
+      }
+      const retryPaths = retry.paths.filter((filePath) => isExactInstagramReelFile(filePath, shortcode, true));
       const retryFiles = retryPaths
         .map(probeFile)
         .filter((file) => file.isImage || file.isVideo);
       const retryVideo = retryFiles.find((file) => file.isVideo);
-
-      if (retryVideo && (await hasAudioStream(retryVideo.path))) {
+      if (retryVideo) {
+        const retryHasAudio = await checkAudio(retryVideo.path);
+        if (!retryHasAudio) logInstagramFormatList("separate-stream retry", retry.formats);
         await Promise.all(
           paths.map((filePath) => fs.unlink(filePath).catch(() => {}))
         );
         paths = retryPaths;
         files = retryFiles;
-        audioRecovered = true;
-        console.log(
-          "Instagram audio retry succeeded; merged video contains audio."
-        );
+        audioRecovered = retryHasAudio;
+        console.log(retryHasAudio
+          ? "Instagram audio retry succeeded; merged video contains audio."
+          : "Instagram audio retry produced a usable video without audio; keeping the video.");
       } else {
         await Promise.all(
           retryPaths.map((filePath) => fs.unlink(filePath).catch(() => {}))
@@ -408,18 +568,20 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
         );
       }
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason || error;
       console.warn("Instagram audio retry failed during media processing.");
     }
   }
 
   if (video && !audioRecovered) {
-    throw new Error("INSTAGRAM_AUDIO_MISSING");
+    console.warn("Instagram reel is usable as video, but no audio stream was verified.");
   }
 
   return {
     files,
     rawDir: jobDir,
     platform: "instagram",
+    hasAudio: video ? audioRecovered : null,
   };
 }
 
@@ -428,7 +590,7 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
  *
  * @param {string} url
  * @param {string} jobDir
- * @param {{ requireAudio?: boolean }} [options]
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<DownloadResult>}
  */
 async function downloadWithGalleryDl(url, jobDir, options = {}) {
@@ -458,7 +620,8 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
   }
   args.push(url);
 
-  await execFileAsync(
+  const run = options.execFileAsync || execFileAsync;
+  await run(
     galleryDlPath,
     args,
     {
@@ -502,22 +665,15 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
     );
   }
 
-  if (options.requireAudio) {
-    const video = files.find((file) => file.isVideo);
-    if (!video || !(await hasAudioStream(video.path))) {
-      throw new Error(
-        "Instagram did not expose a merged video with audio."
-      );
-    }
-    console.log(
-      "Instagram gallery-dl merged fallback contains audio."
-    );
-  }
+  const video = files.find((file) => file.isVideo);
+  const checkAudio = options.hasAudioStream || hasAudioStream;
+  const hasAudio = video ? await checkAudio(video.path) : null;
 
   return {
     files,
     rawDir: jobDir,
     platform: "instagram",
+    hasAudio,
   };
 }
 
@@ -525,4 +681,9 @@ module.exports = {
   downloadMedia,
   probeFile,
   runInstagramYtDlpAttempts,
+  downloadWithYtDlp,
+  runInstagramYtDlp,
+  downloadWithGalleryDl,
+  parseInstagramYtDlpOutput,
+  sanitizeInstagramFormats,
 };

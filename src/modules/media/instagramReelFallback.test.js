@@ -54,9 +54,10 @@ async function runSave(result = owned, options = {}) {
       await assert.rejects(saveVerifiedReel(result, "EXACT", dir, deps), options.reject);
       assert.deepEqual(await fs.readdir(dir), []);
     } else {
-      const files = await saveVerifiedReel(result, "EXACT", dir, deps);
-      assert.equal(files.length, 1);
-      assert.equal((await fs.stat(files[0])).size, 2048);
+      const saved = await saveVerifiedReel(result, "EXACT", dir, deps);
+      assert.equal(saved.files.length, 1);
+      assert.equal((await fs.stat(saved.files[0])).size, 2048);
+      assert.equal(saved.hasAudio, options.expectedAudio !== false);
       assert.equal(calls[0].redirect, "error");
     }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
@@ -73,7 +74,10 @@ test("HTML/login response rejected", () => runSave(owned, { response: { headers:
 test("HTTP failure rejected", () => runSave(owned, { response: { ok: false }, reject: /could not verify/ }));
 test("empty response rejected", () => runSave(owned, { response: { body: [Buffer.alloc(10)] }, reject: /could not verify/ }));
 test("oversized response rejected", () => runSave(owned, { response: { headers: new Headers({ "content-type": "video/mp4", "content-length": String(101 * 1024 * 1024) }) }, reject: /could not verify/ }));
-test("silent video rejected and deleted", () => runSave(owned, { probe: { stdout: '{"streams":[{"codec_type":"video"}]}' }, reject: /could not verify/ }));
+test("exact verified video is kept when Instagram exposes no audio stream", () => runSave(owned, {
+  probe: { stdout: '{"streams":[{"codec_type":"video"}]}' },
+  expectedAudio: false,
+}));
 test("audio-only file rejected and deleted", () => runSave(owned, { probe: { stdout: '{"streams":[{"codec_type":"audio"}]}' }, reject: /could not verify/ }));
 test("signed URLs in request failure never propagated", () => runSave(owned, { deps: { fetch: async () => { throw new Error(owned.video); } }, reject: error => !error.message.includes("SIGNED") && /could not verify/.test(error.message) }));
 
@@ -130,14 +134,15 @@ test("Instagram timeout aborts yt-dlp before starting later fallback methods", a
   assert.equal(commands, 1);
 });
 
-test("silent large rendition is deleted before smaller muxed rendition is kept", async () => {
+test("audio-bearing rendition is preferred over an earlier silent video", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-candidates-"));
   const urls = ["https://scontent-a.fbcdn.net/large.mp4", "https://scontent-a.fbcdn.net/small.mp4"];
   const fetched = [];
   try {
-    const files = await saveVerifiedReel({ code: "EXACT", videos: urls }, "EXACT", dir, {
+    const saved = await saveVerifiedReel({ code: "EXACT", videos: urls }, "EXACT", dir, {
       fetch: async (url, config) => {
-        assert.deepEqual(await fs.readdir(dir), []);
+        if (fetched.length === 0) assert.deepEqual(await fs.readdir(dir), []);
+        else assert.deepEqual(await fs.readdir(dir), ["instagram-verified-reel-0.mp4"]);
         assert.equal(config.redirect, "error");
         fetched.push(url);
         return { ok: true, headers: new Headers({ "content-type": "video/mp4" }), body: [Buffer.alloc(2048, fetched.length)] };
@@ -145,9 +150,22 @@ test("silent large rendition is deleted before smaller muxed rendition is kept",
       exec: async () => fetched.length === 1 ? { stdout: '{"streams":[{"codec_type":"video"}]}' } : audioVideo,
     });
     assert.deepEqual(fetched, urls);
-    assert.equal((await fs.readFile(files[0]))[0], 2);
+    assert.equal((await fs.readFile(saved.files[0]))[0], 2);
+    assert.equal(saved.hasAudio, true);
     assert.equal((await fs.readdir(dir)).length, 1);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test("all silent candidates are deleted and signed URLs are not leaked", () => runSave({ code: "EXACT", videos: [owned.video, "https://scontent-a.fbcdn.net/second.mp4"] }, { probe: { stdout: '{"streams":[{"codec_type":"video"}]}' }, reject: error => /could not verify/.test(error.message) && !error.message.includes("SIGNED") }));
+test("first exact verified silent video is retained when no audio rendition exists", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-reel-silent-test-"));
+  try {
+    const saved = await saveVerifiedReel({ code: "EXACT", videos: [owned.video, "https://scontent-a.fbcdn.net/second.mp4"] }, "EXACT", dir, {
+      fetch: async () => ({ ok: true, headers: new Headers({ "content-type": "video/mp4" }), body: [Buffer.alloc(2048)] }),
+      exec: async () => ({ stdout: '{"streams":[{"codec_type":"video"}]}' }),
+    });
+    assert.equal(saved.files.length, 1);
+    assert.equal((await fs.stat(saved.files[0])).size, 2048);
+    assert.equal(saved.hasAudio, false);
+    assert.deepEqual(await fs.readdir(dir), ["instagram-verified-reel-0.mp4"]);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
