@@ -4,11 +4,12 @@ const {
   withMediaLifecycle,
   sendStandaloneNotice,
   deleteOriginalAfterSuccess,
+  suppressOriginalEmbeds,
 } = require("../modules/media/messageLifecycle");
 const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
 const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 120000;
 const fs = require("node:fs/promises");
-const { EmbedBuilder } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
 const { downloadMedia } = require("../modules/media/downloader");
 const {
@@ -239,8 +240,8 @@ function startTypingIndicator(message) {
 }
 
 /**
- * Sends a long YouTube video as two messages so Discord can generate its
- * native player without competing with Harmony's custom red card embed.
+ * Sends Harmony's normal media-card layout around a native YouTube player:
+ * platform header, playable YouTube preview, then creator/share details.
  *
  * @param {import("discord.js").Message} message
  * @param {{ originalUrl: string, cardText: string, durationMinutes: number|null }} options
@@ -279,36 +280,52 @@ async function sendYouTubeStreamingPreview(
   message,
   { originalUrl, cardText, durationMinutes }
 ) {
-  const linkMessage = await message.reply({
-    content: originalUrl,
-    allowedMentions: {
-      repliedUser: false,
-    },
-  });
+  const sent = [];
+  try {
+    const headerMessage = await message.channel.send({
+      content: cardText.header || "YouTube",
+      allowedMentions: { parse: [] },
+    });
+    sent.push(headerMessage);
 
-  const cardMessage = await message.channel.send({
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0xff0000)
-        .setDescription(
-          [
-            cardText,
-            "",
-            durationMinutes
-              ? `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`
-              : "This video plays through YouTube so it can remain full length.",
-          ].join("\n")
-        ),
-    ],
-    allowedMentions: {
-      parse: [],
-    },
-  });
+    const playerMessage = await message.channel.send({
+      content: originalUrl,
+      allowedMentions: { parse: [] },
+    });
+    sent.push(playerMessage);
 
-  shareStore.addOutputMessage(message.id, linkMessage.id, linkMessage.channelId);
-  shareStore.addOutputMessage(message.id, cardMessage.id, cardMessage.channelId);
+    const durationText = durationMinutes
+      ? `This ${durationMinutes}-minute video plays through YouTube so it can remain full length.`
+      : "This video plays through YouTube so it can remain full length.";
+    const footerMessage = await message.channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xff0000)
+          .setDescription([durationText, "", cardText.footer || ""].filter(Boolean).join("\n")),
+      ],
+      components: cardText.buttonUrl
+        ? [new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel(cardText.buttonLabel || "View on YouTube")
+            .setStyle(ButtonStyle.Link)
+            .setURL(cardText.buttonUrl)
+        )]
+        : [],
+      allowedMentions: { parse: [] },
+    });
+    sent.push(footerMessage);
 
-  await suppressOriginalEmbeds(message);
+    for (const output of sent) {
+      shareStore.addOutputMessage(message.id, output.id, output.channelId || message.channel.id);
+    }
+    await suppressOriginalEmbeds(message);
+    return sent.map((output) => output.id);
+  } catch (error) {
+    for (const output of sent) {
+      if (output.delete) await output.delete().catch(() => {});
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1029,8 +1046,35 @@ async function processMediaMessage(message, lifecycle) {
         if (shouldKeepOriginalYouTubePreview(downloadResult)) {
           await lifecycle.markRetrieved();
           recordMediaHealth("youtube", downloadResult);
+          const creator = downloadResult.creator || resolveCreator(info, []);
+          const { cardText, safeToDelete } = buildSuccessfulCard(message, originalUrl, {
+            platform: "YouTube",
+            mediaType: isYouTubeShort(originalUrl) ? "Short" : "Video",
+            creator,
+            originalUrl,
+            originalDate: extractOriginalDate(info),
+          });
+          const sentMessageIds = await sendYouTubeStreamingPreview(message, {
+            originalUrl,
+            cardText,
+            durationMinutes: Number.isFinite(downloadResult.durationSeconds)
+              ? Math.ceil(downloadResult.durationSeconds / 60)
+              : null,
+          });
+          await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
+          shareStore.insert({
+            platform,
+            mediaId,
+            creator,
+            sharedBy: message.member?.displayName ?? message.author.username,
+            sharedById: message.author.id,
+            messageId: null,
+            channelId: message.channel.id,
+            guildId: message.guild?.id ?? null,
+            url: originalUrl,
+          });
           console.log(
-            "YouTube long video left as its original streaming preview."
+            "YouTube streaming video published with Harmony's media-card layout."
           );
           return;
         }
@@ -1250,4 +1294,5 @@ module.exports = {
   mediaLifecycleCutoffMs,
   sendAlreadySharedAndCleanup,
   uploadFacebookMediaOrPreserveOriginal,
+  sendYouTubeStreamingPreview,
 };
