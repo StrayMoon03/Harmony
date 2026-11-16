@@ -278,7 +278,7 @@ async function sendInstagramStreamingPreview(
 
 async function sendYouTubeStreamingPreview(
   message,
-  { originalUrl, cardText, durationMinutes }
+  { originalUrl, cardText, durationMinutes, trackOutputMessages = true }
 ) {
   const sent = [];
   try {
@@ -315,8 +315,10 @@ async function sendYouTubeStreamingPreview(
     });
     sent.push(footerMessage);
 
-    for (const output of sent) {
-      shareStore.addOutputMessage(message.id, output.id, output.channelId || message.channel.id);
+    if (trackOutputMessages) {
+      for (const output of sent) {
+        shareStore.addOutputMessage(message.id, output.id, output.channelId || message.channel.id);
+      }
     }
     await suppressOriginalEmbeds(message);
     return sent.map((output) => output.id);
@@ -1060,6 +1062,11 @@ async function processMediaMessage(message, lifecycle) {
             durationMinutes: Number.isFinite(downloadResult.durationSeconds)
               ? Math.ceil(downloadResult.durationSeconds / 60)
               : null,
+            // The original Discord message is intentionally deleted after the
+            // replacement is sent. Associating the replacement with that
+            // source would make messageDelete treat our own cleanup as a user
+            // deletion and remove the replacement before the share is saved.
+            trackOutputMessages: !safeToDelete,
           });
           await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
           shareStore.insert({

@@ -2,9 +2,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { sendYouTubeStreamingPreview } = require("./mediaHandler");
 const { formatMediaCard } = require("../modules/media/formatter");
+const shareStore = require("../stores/shareStore");
 
-test("long YouTube streaming preview uses Harmony header, player, and details layout", async () => {
+test("long YouTube streaming preview uses Harmony header, player, and details layout", async (t) => {
   const sent = [];
+  const trackedOutputs = [];
+  const originalAddOutputMessage = shareStore.addOutputMessage;
+  shareStore.addOutputMessage = (...args) => trackedOutputs.push(args);
+  t.after(() => { shareStore.addOutputMessage = originalAddOutputMessage; });
   let originalEmbedsSuppressed = false;
   const originalUrl = "https://www.youtube.com/watch?v=abcdefghijk";
   const cardText = formatMediaCard({
@@ -16,6 +21,7 @@ test("long YouTube streaming preview uses Harmony header, player, and details la
     memberComment: "Today's video!",
   });
   const message = {
+    id: "source-message-1",
     channel: {
       id: "channel-1",
       send: async (payload) => {
@@ -47,6 +53,46 @@ test("long YouTube streaming preview uses Harmony header, player, and details la
   assert.match(sent[2].payload.embeds[0].data.description, /Today's video!/);
   assert.equal(sent[2].payload.components[0].components[0].data.url, originalUrl);
   assert.equal(originalEmbedsSuppressed, true);
+  assert.deepEqual(trackedOutputs, [
+    ["source-message-1", "output-1", "channel-1"],
+    ["source-message-1", "output-2", "channel-1"],
+    ["source-message-1", "output-3", "channel-1"],
+  ]);
+});
+
+test("intentionally deleted YouTube source does not associate its replacement card with the source", async (t) => {
+  const trackedOutputs = [];
+  const sent = [];
+  const originalAddOutputMessage = shareStore.addOutputMessage;
+  shareStore.addOutputMessage = (...args) => trackedOutputs.push(args);
+  t.after(() => { shareStore.addOutputMessage = originalAddOutputMessage; });
+
+  const message = {
+    id: "source-message-being-replaced",
+    channel: {
+      id: "channel-1",
+      send: async (payload) => {
+        const output = {
+          id: `output-${sent.length + 1}`,
+          channelId: "channel-1",
+          payload,
+        };
+        sent.push(output);
+        return output;
+      },
+    },
+    suppressEmbeds: async () => {},
+  };
+
+  const ids = await sendYouTubeStreamingPreview(message, {
+    originalUrl: "https://www.youtube.com/watch?v=abcdefghijk",
+    cardText: { header: "YouTube", footer: "Shared by member", buttonUrl: null },
+    durationMinutes: 42,
+    trackOutputMessages: false,
+  });
+
+  assert.equal(ids.length, 3);
+  assert.deepEqual(trackedOutputs, []);
 });
 
 test("YouTube streaming layout removes partial output if a later send fails", async () => {
