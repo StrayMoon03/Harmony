@@ -308,6 +308,13 @@ function migrate(database) {
       updated_at         TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS member_count_accounting (
+      guild_id          TEXT PRIMARY KEY,
+      admin_role_id     TEXT,
+      moderator_role_id TEXT,
+      exclude_staff     INTEGER NOT NULL DEFAULT 1 CHECK (exclude_staff IN (0, 1))
+    );
+
     CREATE TABLE IF NOT EXISTS member_count_activity (
       id          INTEGER PRIMARY KEY,
       guild_id    TEXT NOT NULL,

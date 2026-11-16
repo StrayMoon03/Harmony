@@ -3,8 +3,10 @@ const {
   PermissionFlagsBits,
 } = require("discord.js");
 const roomStore = require("../stores/adminRoomStore");
+const { getWelcomePassSettings } = require("../stores/welcomePassStore");
 const {
   getMemberCountSettings,
+  getMemberCountAccounting,
   listEnabledMemberCountSettings,
   saveMemberCountSettings,
   recordMemberCountActivity,
@@ -16,7 +18,10 @@ let periodicTimer = null;
 async function fetchChannel(guild, channelId) {
   if (!channelId) return null;
   return guild.channels.cache.get(channelId) ||
-    (await guild.channels.fetch(channelId).catch(() => null));
+    (await guild.channels.fetch(channelId).catch((error) => {
+      if (error.code === 10003) return null;
+      throw error;
+    }));
 }
 
 async function createCounterChannel(guild, parent, name) {
@@ -35,7 +40,20 @@ async function createCounterChannel(guild, parent, name) {
   });
 }
 
-async function setupMemberCounts(guild, stayRole) {
+function getMemberCountRoles(guild) {
+  const accounting = getMemberCountAccounting(guild.id);
+  const resolve = (id) => id && id !== guild.id && guild.roles.cache.has(id) ? id : null;
+  return {
+    stayRoleId: resolve(getWelcomePassSettings(guild.id)?.role_id),
+    adminRoleId: resolve(accounting.admin_role_id),
+    moderatorRoleId: resolve(accounting.moderator_role_id),
+    excludeStaff: Boolean(accounting.exclude_staff),
+  };
+}
+
+async function setupMemberCounts(guild) {
+  const { stayRoleId } = getMemberCountRoles(guild);
+  if (!stayRoleId) throw new Error("Set the Approved Role in Welcome Pass before setting up SERVER STATS.");
   const current = getMemberCountSettings(guild.id);
   let category = await fetchChannel(guild, current?.category_id);
   if (!category || category.type !== ChannelType.GuildCategory) {
@@ -67,7 +85,7 @@ async function setupMemberCounts(guild, stayRole) {
 
   saveMemberCountSettings({
     guildId: guild.id,
-    roleId: stayRole.id,
+    roleId: stayRoleId,
     categoryId: category.id,
     totalChannelId: totalChannel.id,
     stayChannelId: stayChannel.id,
@@ -75,18 +93,38 @@ async function setupMemberCounts(guild, stayRole) {
   });
 
   const counts = await refreshMemberCounts(guild);
-  return { category, counts };
+  return { category, counts, stayRoleId };
 }
 
-async function getMemberCounts(guild, roleId) {
+async function getMemberCounts(guild) {
+  const { stayRoleId, adminRoleId, moderatorRoleId, excludeStaff } = getMemberCountRoles(guild);
+  const roles = [adminRoleId, moderatorRoleId, stayRoleId];
+  const ready = roles.every(Boolean) && new Set(roles).size === roles.length;
+  const privateCounts = ready ? { stay: 0, admins: 0, moderators: 0, noRole: 0 } : null;
+
+  let total = 0;
+  let stayHolders = 0;
   const members = await guild.members.fetch();
-  const humans = [...members.values()].filter((member) => !member.user.bot);
-  const stay = roleId ? humans.filter((member) => member.roles.cache.has(roleId)).length : null;
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    total++;
+    const hasStay = stayRoleId && member.roles.cache.has(stayRoleId);
+    if (hasStay) stayHolders++;
+    if (!privateCounts) continue;
+
+    const isAdmin = member.roles.cache.has(adminRoleId);
+    const isModerator = member.roles.cache.has(moderatorRoleId);
+    if (isAdmin) privateCounts.admins++;
+    if (isModerator && (!excludeStaff || !isAdmin)) privateCounts.moderators++;
+    if (hasStay && (!excludeStaff || (!isAdmin && !isModerator))) privateCounts.stay++;
+    if (!isAdmin && !isModerator && !hasStay) privateCounts.noRole++;
+  }
   return {
-    total: humans.length,
-    stay,
-    noRole: stay === null ? null : humans.length - stay,
-    bots: members.size - humans.length,
+    total,
+    publicStay: stayRoleId ? stayHolders : null,
+    publicNoStay: stayRoleId ? total - stayHolders : null,
+    privateCounts,
+    excludeStaff,
   };
 }
 
@@ -96,10 +134,10 @@ async function refreshMemberCounts(guild) {
   if (!settings?.enabled && !panel?.enabled) return null;
   // Resolve lazily because the Admin Room also uses this service for its Member Counts controls.
   const snapshot = panel?.enabled
-    ? await require("./adminRoomService").refreshMemberCountDisplay(guild, settings?.role_id)
-    : await getMemberCounts(guild, settings.role_id);
+    ? await require("./adminRoomService").refreshMemberCountDisplay(guild)
+    : await getMemberCounts(guild);
   if (!settings?.enabled) return null;
-  const { total, stay, noRole } = snapshot;
+  const { total, publicStay: stay, publicNoStay: noRole } = snapshot;
   const counts = { total, stay, noRole };
   const channels = await Promise.all([
     fetchChannel(guild, settings.total_channel_id),
@@ -112,11 +150,11 @@ async function refreshMemberCounts(guild) {
 
   const names = [
     `👥 Total Members: ${counts.total}`,
-    `💜 Stay Role: ${counts.stay}`,
-    `⚠️ No Stay Role: ${counts.noRole}`,
+    counts.stay === null ? null : `💜 Stay Role: ${counts.stay}`,
+    counts.noRole === null ? null : `⚠️ No Stay Role: ${counts.noRole}`,
   ];
   await Promise.all(channels.map((channel, index) =>
-    channel.name === names[index]
+    names[index] === null || channel.name === names[index]
       ? Promise.resolve()
       : channel.setName(names[index], "Harmony member count refresh")
   ));
@@ -178,6 +216,7 @@ function startMemberCountScheduler(client) {
 module.exports = {
   setupMemberCounts,
   getMemberCounts,
+  getMemberCountRoles,
   observeMembershipChange,
   refreshMemberCounts,
   scheduleMemberCountRefresh,

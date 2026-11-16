@@ -794,33 +794,51 @@ function hasActiveMemberCountNavigation(interaction) {
   return true;
 }
 
-function memberCountManagerPayload(guildId, notice = null) {
-  const settings = memberCountStore.getMemberCountSettings(guildId);
-  const configured = Boolean(settings);
-  const value = (channelId) => channelId ? `<#${channelId}>` : "Not configured";
+function memberCountManagerPayload(guild, notice = null) {
+  const settings = memberCountStore.getMemberCountSettings(guild.id);
+  const { stayRoleId, adminRoleId, moderatorRoleId, excludeStaff } = memberCountService.getMemberCountRoles(guild);
+  const role = (id) => id ? `<@&${id}>` : "Not configured";
+  const channel = (id) => id ? `<#${id}>` : "Not configured";
+  const enabled = Boolean(settings?.enabled);
   const description = [
     notice,
-    `**Current Status:** ${configured ? (settings.enabled ? "On" : "Off") : "Not configured"}`,
-    `**Configured STAY role:** ${settings?.role_id ? `<@&${settings.role_id}>` : "Not selected"}`,
-    `**Counter category:** ${value(settings?.category_id)}`,
-    `**Total Members counter:** ${value(settings?.total_channel_id)}`,
-    `**STAY Members counter:** ${value(settings?.stay_channel_id)}`,
-    `**No STAY Role counter:** ${value(settings?.no_role_channel_id)}`,
+    `**STAY Role:** ${stayRoleId ? `${role(stayRoleId)} (Welcome Pass Approved Role)` : "Set the Approved Role in Welcome Pass"}`,
+    `**Admin Role:** ${role(adminRoleId)}`,
+    `**Moderator Role:** ${role(moderatorRoleId)}`,
+    `**Exclude staff from STAY count:** ${excludeStaff ? "On" : "Off"}`,
     "",
-    "Choose a role below to set up the counters or change which role counts as STAY. Existing counters are reused when available.",
-  ].filter(Boolean).join("\n\n");
-  const enabled = Boolean(settings?.enabled);
+    `**Public SERVER STATS:** ${settings ? (enabled ? "On" : "Off") : "Not configured"}`,
+    ...(settings ? [
+      `Category: ${channel(settings.category_id)}`,
+      `Total Members: ${channel(settings.total_channel_id)}`,
+      `STAY Role: ${channel(settings.stay_channel_id)}`,
+      `No STAY Role: ${channel(settings.no_role_channel_id)}`,
+    ] : []),
+  ].filter((line) => line != null).join("\n");
   return pagePayload("📊 Member Counts Manager", description, [
-    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder()
-      .setCustomId("harmony-admin-room:members-role-select")
-      .setPlaceholder(configured ? "Setup / change the STAY role" : "Set up counters with the STAY role")
-      .setMinValues(1)
-      .setMaxValues(1)),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("harmony-admin-room:members-refresh").setLabel("Refresh Now").setStyle(ButtonStyle.Primary).setDisabled(!configured || !enabled),
-      new ButtonBuilder().setCustomId("harmony-admin-room:members-toggle").setLabel(!configured ? "Not Configured" : enabled ? "Turn Off" : "Turn On").setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success).setDisabled(!configured),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-admin").setLabel("Set Admin Role").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-moderator").setLabel("Set Moderator Role").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-exclusion").setLabel(excludeStaff ? "Turn Staff Exclusion Off" : "Turn Staff Exclusion On").setStyle(ButtonStyle.Secondary),
+    ),
+    new ActionRowBuilder().addComponents(
+      settings
+        ? new ButtonBuilder().setCustomId("harmony-admin-room:members-toggle").setLabel(enabled ? "Turn Public Stats Off" : "Turn Public Stats On").setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success)
+        : new ButtonBuilder().setCustomId("harmony-admin-room:members-public-setup").setLabel("Set Up Public Stats").setStyle(ButtonStyle.Secondary).setDisabled(!stayRoleId),
+      new ButtonBuilder().setCustomId("harmony-admin-room:members-refresh").setLabel("Refresh Now").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("harmony-admin-room:members-close").setLabel("Close Manager").setStyle(ButtonStyle.Secondary),
     ),
+  ]);
+}
+
+function memberCountStaffPicker(kind) {
+  const label = kind === "admin" ? "Admin" : "Moderator";
+  return pagePayload(`Set ${label} Role`, `Choose the one role Harmony should count as ${label}.`, [
+    new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder()
+      .setCustomId(`harmony-admin-room:members-save-${kind}`)
+      .setPlaceholder(`Choose the ${label} role`).setMinValues(1).setMaxValues(1)),
+    new ActionRowBuilder().addComponents(new ButtonBuilder()
+      .setCustomId("harmony-admin-room:members-back").setLabel("Back to Member Counts").setStyle(ButtonStyle.Secondary)),
   ]);
 }
 
@@ -1014,13 +1032,18 @@ async function syncLiveCounter(guild, channel, snapshot) {
     return null;
   }
   await validateRoomChannel(guild, channel);
-  const counts = snapshot || await memberCountService.getMemberCounts(guild, memberCountStore.getMemberCountSettings(guild.id)?.role_id);
+  const counts = snapshot || await memberCountService.getMemberCounts(guild);
+  const roles = counts.privateCounts;
   const week = memberCountStore.getWeeklyMemberCountActivity(guild.id);
   const payload = pagePayload("👥 YOUTIFUL STAY — LIVE MEMBER COUNT", [
     `**Total Members:** ${counts.total}`,
-    `**STAY Role:** ${counts.stay ?? "Role not configured"}`,
-    `**No STAY Role:** ${counts.noRole ?? "Role not configured"}`,
-    `**Bots:** ${counts.bots}`,
+    `**STAY:** ${roles?.stay ?? "—"}`,
+    `**Admins:** ${roles?.admins ?? "—"}`,
+    `**Moderators:** ${roles?.moderators ?? "—"}`,
+    `**No Role:** ${roles?.noRole ?? "—"}`,
+    ...(!roles
+      ? ["", "Configure distinct STAY, Admin, and Moderator roles to show the role counts."]
+      : counts.excludeStaff ? [] : ["", "Role counts can overlap. No Role means none of the three configured roles."]),
     "",
     "**This week**",
     `**Joined:** ${week.joined}`,
@@ -1065,9 +1088,9 @@ async function syncAdminRoom(guild, panel, { snapshot, refreshPanel = true, chan
   return counterFailed;
 }
 
-function refreshMemberCountDisplay(guild, roleId) {
+function refreshMemberCountDisplay(guild) {
   return withAdminRoomLock(guild.id, async () => {
-    const snapshot = await memberCountService.getMemberCounts(guild, roleId);
+    const snapshot = await memberCountService.getMemberCounts(guild);
     const panel = roomStore.getPanel(guild.id);
     if (panel?.enabled) {
       await syncAdminRoom(guild, panel, { snapshot, refreshPanel: false }).catch((error) => {
@@ -1303,7 +1326,7 @@ async function handleAdminRoomInteraction(interaction) {
   }
   if (action === "members") {
     setMemberCountNavigation(interaction);
-    await interaction.reply({ ...memberCountManagerPayload(interaction.guildId), flags: MessageFlags.Ephemeral });
+    await interaction.reply({ ...memberCountManagerPayload(interaction.guild), flags: MessageFlags.Ephemeral });
     return true;
   }
   if (action.startsWith("members-")) {
@@ -1311,55 +1334,76 @@ async function handleAdminRoomInteraction(interaction) {
       await interaction.reply({ content: "This Member Counts screen came from an Admin Controls panel that is no longer active. Open Member Counts from the current panel.", flags: MessageFlags.Ephemeral });
       return true;
     }
-    if (action === "members-role-select") {
+    const { guild } = interaction;
+    if (action === "members-back") {
+      await interaction.update(memberCountManagerPayload(guild));
+      return true;
+    }
+    if (action === "members-pick-admin" || action === "members-pick-moderator") {
+      await interaction.update(memberCountStaffPicker(action.slice("members-pick-".length)));
+      return true;
+    }
+    if (action === "members-save-admin" || action === "members-save-moderator") {
+      const kind = action === "members-save-admin" ? "admin" : "moderator";
       const roleId = interaction.values?.[0];
-      const role = roleId && (interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null));
-      if (!role || role.id === interaction.guildId || (role.guild?.id && role.guild.id !== interaction.guildId)) {
-        await interaction.reply({ content: "Select a server role other than @everyone.", flags: MessageFlags.Ephemeral });
+      const role = roleId && (guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null));
+      if (!role || role.id === guild.id || (role.guild?.id && role.guild.id !== guild.id)) {
+        await interaction.reply({ content: "Select a role in this server other than @everyone.", flags: MessageFlags.Ephemeral });
         return true;
       }
-      const botPermissions = interaction.guild.members.me?.permissions;
-      if (!botPermissions?.has(PermissionFlagsBits.ManageChannels)) {
-        await interaction.reply({ content: "Harmony needs **Manage Channels** before she can create and update the live counters.", flags: MessageFlags.Ephemeral });
+      const { stayRoleId, adminRoleId, moderatorRoleId } = memberCountService.getMemberCountRoles(guild);
+      const otherStaffRoleId = kind === "admin" ? moderatorRoleId : adminRoleId;
+      if (role.id === stayRoleId || role.id === otherStaffRoleId) {
+        await interaction.reply({ content: "Choose a distinct role for STAY, Admin, and Moderator.", flags: MessageFlags.Ephemeral });
+        return true;
+      }
+      memberCountStore.saveMemberCountStaffRole(guild.id, kind, role.id);
+      memberCountService.scheduleMemberCountRefresh(guild, 0);
+      await interaction.update(memberCountManagerPayload(guild));
+      return true;
+    }
+    if (action === "members-exclusion") {
+      memberCountStore.toggleMemberCountStaffExclusion(guild.id);
+      memberCountService.scheduleMemberCountRefresh(guild, 0);
+      await interaction.update(memberCountManagerPayload(guild));
+      return true;
+    }
+    if (action === "members-public-setup") {
+      if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        await interaction.reply({ content: "Harmony needs **Manage Channels** to set up the public counters.", flags: MessageFlags.Ephemeral });
         return true;
       }
       await interaction.deferUpdate();
       try {
-        const { category, counts } = await memberCountService.setupMemberCounts(interaction.guild, role);
-        await interaction.editReply({ ...memberCountManagerPayload(interaction.guildId, [
-          "Member counters are ready.",
-          `Category: **${category.name}**`,
-          `Total members: **${counts.total}** · STAY members: **${counts.stay}** · No STAY role: **${counts.noRole}**`,
-        ].join("\n")) });
+        await memberCountService.setupMemberCounts(guild);
+        await interaction.editReply(memberCountManagerPayload(guild, "The public SERVER STATS counters are ready."));
       } catch (error) {
         console.error("Harmony Admin Room member-count setup failed:", error);
-        await interaction.editReply(memberCountManagerPayload(interaction.guildId, "Harmony couldn’t set up the live counters. Check that she has **Manage Channels** and try again."));
+        await interaction.editReply(memberCountManagerPayload(guild, "Harmony couldn’t set up the public counters. Check the Welcome Pass Approved Role and Harmony’s channel permissions."));
       }
       return true;
     }
     if (action === "members-refresh") {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferUpdate();
       try {
-        const counts = await memberCountService.refreshMemberCounts(interaction.guild);
-        await interaction.editReply(counts
-          ? `Updated counters: **${counts.total}** total members, **${counts.stay}** with the STAY role, and **${counts.noRole}** without it.`
-          : "Automatic member-count updates are off. Turn them on before refreshing.");
+        await memberCountService.refreshMemberCounts(guild);
+        await interaction.editReply(memberCountManagerPayload(guild, "Member counts refresh completed."));
       } catch (error) {
         console.error("Harmony Admin Room member-count refresh failed:", error);
-        await interaction.editReply("Harmony couldn’t refresh the live counters. Check that she has **Manage Channels** and that the saved counter channels still exist.");
+        await interaction.editReply(memberCountManagerPayload(guild, "The counts refresh could not complete. Check Harmony’s permissions and the saved counter channels."));
       }
       return true;
     }
     if (action === "members-toggle") {
-      const settings = memberCountStore.getMemberCountSettings(interaction.guildId);
+      const settings = memberCountStore.getMemberCountSettings(guild.id);
       if (!settings) {
-        await interaction.update(memberCountManagerPayload(interaction.guildId, "Set up Member Counts before turning automatic updates on."));
+        await interaction.update(memberCountManagerPayload(guild, "Set up the public SERVER STATS counters first."));
         return true;
       }
       const nextEnabled = !settings.enabled;
-      if (nextEnabled) memberCountStore.setMemberCountEnabled(interaction.guildId, true);
-      else memberCountStore.disableMemberCountSettings(interaction.guildId);
-      await interaction.update(memberCountManagerPayload(interaction.guildId, `Automatic member-count updates are now **${nextEnabled ? "On" : "Off"}**. The saved category and counter channels were preserved.`));
+      memberCountStore.setMemberCountEnabled(guild.id, nextEnabled);
+      if (nextEnabled) memberCountService.scheduleMemberCountRefresh(guild, 0);
+      await interaction.update(memberCountManagerPayload(guild));
       return true;
     }
     if (action === "members-close") {

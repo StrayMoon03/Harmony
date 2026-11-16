@@ -58,6 +58,28 @@ function setMemberCountEnabled(guildId, enabled) {
   return Number(result.changes) > 0;
 }
 
+function getMemberCountAccounting(guildId) {
+  return getDb().prepare("SELECT * FROM member_count_accounting WHERE guild_id = ?").get(guildId) ||
+    { admin_role_id: null, moderator_role_id: null, exclude_staff: 1 };
+}
+
+function saveMemberCountStaffRole(guildId, kind, roleId) {
+  const column = { admin: "admin_role_id", moderator: "moderator_role_id" }[kind];
+  if (!column) throw new Error("Unknown staff role type");
+  getDb().prepare(`
+    INSERT INTO member_count_accounting (guild_id, ${column}) VALUES (?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET ${column} = excluded.${column}
+  `).run(guildId, roleId);
+}
+
+function toggleMemberCountStaffExclusion(guildId) {
+  return getDb().prepare(`
+    INSERT INTO member_count_accounting (guild_id, exclude_staff) VALUES (?, 0)
+    ON CONFLICT(guild_id) DO UPDATE SET exclude_staff = 1 - exclude_staff
+    RETURNING exclude_staff
+  `).get(guildId).exclude_staff === 1;
+}
+
 const easternDate = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -105,6 +127,9 @@ module.exports = {
   seedYoutifulStaysMemberCountWeek,
   getWeeklyMemberCountActivity,
   getMemberCountSettings,
+  getMemberCountAccounting,
+  saveMemberCountStaffRole,
+  toggleMemberCountStaffExclusion,
   listEnabledMemberCountSettings,
   saveMemberCountSettings,
   disableMemberCountSettings,

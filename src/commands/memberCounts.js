@@ -9,6 +9,7 @@ const {
 } = require("../stores/memberCountStore");
 const {
   setupMemberCounts,
+  getMemberCountRoles,
   refreshMemberCounts,
 } = require("../services/memberCountService");
 
@@ -18,11 +19,7 @@ const data = new SlashCommandBuilder()
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addSubcommand((subcommand) => subcommand
     .setName("setup")
-    .setDescription("Create live member counters at the top of the server")
-    .addRoleOption((option) => option
-      .setName("stay-role")
-      .setDescription("Role that marks an approved STAY")
-      .setRequired(true)))
+    .setDescription("Set up public counters using the Welcome Pass Approved Role"))
   .addSubcommand((subcommand) => subcommand
     .setName("refresh")
     .setDescription("Refresh all three counters now"))
@@ -31,7 +28,7 @@ const data = new SlashCommandBuilder()
     .setDescription("Show the live-counter setup"))
   .addSubcommand((subcommand) => subcommand
     .setName("off")
-    .setDescription("Stop automatic counter updates"));
+    .setDescription("Stop automatic updates to the public SERVER STATS counters"));
 
 async function execute(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -46,19 +43,15 @@ async function execute(interaction) {
         );
         return;
       }
-      const stayRole = interaction.options.getRole("stay-role", true);
-      if (stayRole.id === interaction.guild.id) {
-        await interaction.editReply("Please select your actual **Stay** role, not @everyone.");
+      if (!getMemberCountRoles(interaction.guild).stayRoleId) {
+        await interaction.editReply("Set the Approved Role in Welcome Pass before setting up SERVER STATS.");
         return;
       }
-      const { category, counts } = await setupMemberCounts(
-        interaction.guild,
-        stayRole
-      );
+      const { category, counts, stayRoleId } = await setupMemberCounts(interaction.guild);
       await interaction.editReply([
         "📊 **Harmony’s live member counts are ready!**",
         `Category: **${category.name}**`,
-        `Counting as approved: <@&${stayRole.id}>`,
+        `Counting as approved: <@&${stayRoleId}>`,
         `Total members: **${counts.total}**`,
         `Stay role: **${counts.stay}**`,
         `No Stay role: **${counts.noRole}**`,
@@ -78,17 +71,21 @@ async function execute(interaction) {
 
     if (action === "refresh") {
       const counts = await refreshMemberCounts(interaction.guild);
-      await interaction.editReply(
-        `Updated: **${counts.total}** total, **${counts.stay}** with the Stay role, and **${counts.noRole}** without it.`
-      );
+      const description = !counts
+        ? "Automatic SERVER STATS updates are off."
+        : counts.stay === null
+          ? `Updated: **${counts.total}** total. Set the Approved Role in Welcome Pass to refresh the STAY counters.`
+          : `Updated: **${counts.total}** total, **${counts.stay}** with the Stay role, and **${counts.noRole}** without it.`;
+      await interaction.editReply(description);
       return;
     }
 
     if (action === "status") {
+      const { stayRoleId } = getMemberCountRoles(interaction.guild);
       await interaction.editReply([
         `Status: **${settings.enabled ? "On" : "Off"}**`,
         `Category: <#${settings.category_id}>`,
-        `Stay role: <@&${settings.role_id}>`,
+        `STAY role (Welcome Pass): ${stayRoleId ? `<@&${stayRoleId}>` : "Not configured"}`,
         `Total counter: <#${settings.total_channel_id}>`,
         `Stay counter: <#${settings.stay_channel_id}>`,
         `No Stay role counter: <#${settings.no_role_channel_id}>`,
@@ -98,7 +95,7 @@ async function execute(interaction) {
 
     const disabled = disableMemberCountSettings(interaction.guildId);
     await interaction.editReply(disabled
-      ? "Automatic member-count updates are off. The counter channels were left in place."
+      ? "Automatic public SERVER STATS updates are off. The counter channels were left in place."
       : "Live member counts were not configured.");
   } catch (error) {
     console.error("Harmony member count command error:", error);
