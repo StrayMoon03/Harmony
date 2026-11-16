@@ -423,16 +423,17 @@ test("Member Counts Manager reads Welcome Pass automatically and opens with no r
   assert.match(payload.embeds[0].data.description, /STAY Role:\*\* <@&approved> \(Welcome Pass Approved Role\)/);
   assert.match(payload.embeds[0].data.description, /Admin Role:\*\* Not configured/);
   assert.match(payload.embeds[0].data.description, /Moderator Role:\*\* Not configured/);
-  assert.match(payload.embeds[0].data.description, /Exclude staff from STAY count:\*\* On/);
+  assert.doesNotMatch(payload.embeds[0].data.description, /Exclude staff from STAY count/);
   assert.equal(guild.channels.cache.size, 1);
   assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
   const controls = payload.components.flatMap((row) => row.components);
+  assert.ok(controls.every((item) => item.data.custom_id !== "harmony-admin-room:members-exclusion"));
   assert.ok(controls.every((item) => item.toJSON().type === 2));
   assert.ok(controls.some((item) => item.data.custom_id === "harmony-admin-room:members-pick-admin"));
   assert.ok(controls.some((item) => item.data.custom_id === "harmony-admin-room:members-pick-moderator"));
 });
 
-test("Member Counts configures one Admin and Moderator role and persists the exclusion toggle", async (t) => {
+test("Member Counts configures and persists one Admin and Moderator role", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const { guild, addChannel, addRole } = createGuild("member-count-staff-setup");
   const stay = addRole("approved", "STAY");
@@ -487,16 +488,10 @@ test("Member Counts configures one Admin and Moderator role and persists the exc
     assert.match(denied.response.embeds[0].data.description, /no longer an eligible choice/);
   }
   assert.ok(fullFetches >= 6);
-  assert.equal(memberCountStore.getMemberCountAccounting(guild.id).exclude_staff, 1);
-  const exclusion = await useMemberCounts(guild, "exclusion");
-  assert.match(exclusion.response.embeds[0].data.description, /Exclude staff from STAY count:\*\* Off/);
   closeDb();
   const saved = memberCountStore.getMemberCountAccounting(guild.id);
   assert.equal(saved.admin_role_id, admin.id);
   assert.equal(saved.moderator_role_id, moderator.id);
-  assert.equal(saved.exclude_staff, 0);
-  await useMemberCounts(guild, "exclusion");
-  assert.equal(memberCountStore.getMemberCountAccounting(guild.id).exclude_staff, 1);
   assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
   t.mock.timers.tick(0);
   await new Promise(setImmediate);
@@ -1404,10 +1399,9 @@ test("live display is before the panel and reuses its persisted message across r
   assert.deepEqual(first.sent, [counter, controls]);
 });
 
-function assertLiveBuckets(counter, total, stay, admins, moderators, noRole) {
+function assertLiveCounts(counter, total, stay, admins, moderators, noRole, bots = 0) {
   const text = counterText(counter);
-  assert.doesNotMatch(text, /Bots:/);
-  for (const [label, value] of Object.entries({ "Total Members": total, STAY: stay, Admins: admins, Moderators: moderators, "No Role": noRole })) {
+  for (const [label, value] of Object.entries({ "Total Members": total, STAY: stay, Bots: bots, Admins: admins, Moderators: moderators, "No Role": noRole })) {
     assert.ok(text.split("\n").includes(`**${label}:** ${value}`), text);
   }
 }
@@ -1428,28 +1422,33 @@ test("live display updates on join, leave, and all three role grants and removal
   const entrant = setMember("entrant");
   countsService.observeMembershipChange(entrant, "join");
   await runDebounce();
-  assertLiveBuckets(counter, 1, 0, 0, 0, 1);
+  assertLiveCounts(counter, 1, 0, 0, 0, 1);
   assert.match(counterText(counter), /Joined:\*\* 1\n\*\*Left:\*\* 0\n\*\*Net change:\*\* \+1/);
 
   const changes = [
     [{ stay: true }, [1, 0, 0, 0]],
-    [{ stay: true, isModerator: true }, [0, 0, 1, 0]],
-    [{ stay: true, isModerator: true, isAdmin: true }, [0, 1, 0, 0]],
-    [{ stay: true, isModerator: true }, [0, 0, 1, 0]],
+    [{ stay: true, isModerator: true }, [1, 0, 1, 0]],
+    [{ stay: true, isModerator: true, isAdmin: true }, [1, 1, 0, 0]],
+    [{ stay: true, isModerator: true }, [1, 0, 1, 0]],
     [{ stay: true }, [1, 0, 0, 0]],
     [{}, [0, 0, 0, 1]],
   ];
   for (const [roles, buckets] of changes) {
-    setMember("entrant", roles);
-    countsService.scheduleMemberCountRefresh(guild); // The guildMemberUpdate path.
+    const previous = members.get("entrant");
+    countsService.scheduleMemberCountRoleRefresh(previous, setMember("entrant", roles));
     await runDebounce();
-    assertLiveBuckets(counter, 1, ...buckets);
+    assertLiveCounts(counter, 1, ...buckets);
   }
 
-  const bot = setMember("bot", { bot: true, stay: true, isAdmin: true, isModerator: true });
+  const bot = setMember("bot", { bot: true });
   countsService.observeMembershipChange(bot, "join");
   await runDebounce();
-  assertLiveBuckets(counter, 1, 0, 0, 0, 1);
+  assertLiveCounts(counter, 2, 0, 0, 0, 1, 1);
+
+  const botWithStay = setMember("bot", { bot: true, stay: true, isAdmin: true, isModerator: true });
+  countsService.scheduleMemberCountRoleRefresh(bot, botWithStay);
+  await runDebounce();
+  assertLiveCounts(counter, 2, 1, 0, 0, 1, 1);
   assert.deepEqual(stats.map((channel) => channel.name), [
     "👥 Total Members: 1", "💜 Stay Role: 0", "⚠️ No Stay Role: 1",
   ]);
@@ -1457,33 +1456,40 @@ test("live display updates on join, leave, and all three role grants and removal
   members.delete("entrant");
   countsService.observeMembershipChange(entrant, "leave");
   await runDebounce();
-  assertLiveBuckets(counter, 0, 0, 0, 0, 0);
+  assertLiveCounts(counter, 1, 1, 0, 0, 0, 1);
+  members.delete("bot");
+  countsService.observeMembershipChange(botWithStay, "leave");
+  await runDebounce();
+  assertLiveCounts(counter, 0, 0, 0, 0, 0);
   assert.match(counterText(counter), /Joined:\*\* 1\n\*\*Left:\*\* 1\n\*\*Net change:\*\* 0/);
   assert.deepEqual(liveCounters(first), [counter]);
   assert.equal(fullFetches, 0, "join, leave, and role events can use the complete Discord member cache");
 });
 
-test("live display accounts for overlaps with exclusion On and Off while public role counts stay literal", async () => {
+test("private counts overlap STAY with staff and bots while public counters stay human-only", async () => {
   const { guild, first, stats, setMember } = liveRoomFixture("live-count-overlap");
   setMember("admin-stay", { isAdmin: true, stay: true });
   setMember("mod-stay", { isModerator: true, stay: true });
   setMember("dual-staff", { isAdmin: true, isModerator: true });
   setMember("stay", { stay: true });
   setMember("none");
-  setMember("bot", { bot: true, stay: true, isAdmin: true, isModerator: true });
+  setMember("bot-with-stay-and-staff", { bot: true, stay: true, isAdmin: true, isModerator: true });
+  setMember("bot-without-roles", { bot: true });
   await room.execute(setupInteraction({ guild, channel: first }));
   const [counter] = liveCounters(first);
-  assertLiveBuckets(counter, 5, 1, 2, 1, 1);
-  const { total, privateCounts } = await countsService.getMemberCounts(guild);
-  assert.equal(Object.values(privateCounts).reduce((sum, count) => sum + count, 0), total);
+  assertLiveCounts(counter, 7, 4, 2, 1, 1, 2);
+  assert.match(counterText(counter), /STAY includes everyone holding the role, including staff and bots/);
+  const snapshot = await countsService.getMemberCounts(guild);
+  assert.deepEqual(snapshot.privateCounts, {
+    total: 7, stay: 4, bots: 2, admins: 2, moderators: 1, noRole: 1,
+  });
   await countsService.refreshMemberCounts(guild);
   const publicNames = stats.map((channel) => channel.name);
   assert.deepEqual(publicNames, ["👥 Total Members: 5", "💜 Stay Role: 3", "⚠️ No Stay Role: 2"]);
 
-  memberCountStore.toggleMemberCountStaffExclusion(guild.id);
+  getDb().prepare("UPDATE member_count_accounting SET exclude_staff = 0 WHERE guild_id = ?").run(guild.id);
   await countsService.refreshMemberCounts(guild);
-  assertLiveBuckets(counter, 5, 3, 2, 2, 1);
-  assert.match(counterText(counter), /Role counts can overlap/);
+  assertLiveCounts(counter, 7, 4, 2, 1, 1, 2);
   assert.deepEqual(stats.map((channel) => channel.name), publicNames);
   assert.deepEqual(liveCounters(first), [counter]);
 });
@@ -1516,7 +1522,7 @@ test("simultaneous manual and background member counts share one full request wi
   assert.equal(result.publicCounts, null);
   assert.equal(snapshot.total, 1);
   assert.match(button.response.embeds[0].data.description, /Private member counts refreshed/);
-  assertLiveBuckets(counter, 1, 1, 0, 0, 0);
+  assertLiveCounts(counter, 1, 1, 0, 0, 0);
   assert.equal(fetches, 1);
 });
 
@@ -1558,7 +1564,7 @@ test("rate limiting queues one retry, preserves the display and leaves, then app
   t.mock.timers.tick(1);
   await new Promise(setImmediate);
   assert.equal(fetches, 2);
-  assertLiveBuckets(counter, 1, 0, 0, 0, 1);
+  assertLiveCounts(counter, 1, 0, 0, 0, 1);
   assert.match(counterText(counter), /Left:\*\* 1/);
   assert.deepEqual(liveCounters(first), [counter]);
   t.mock.timers.tick(60_000);
@@ -1578,7 +1584,7 @@ test("Refresh Now reports public and private failures separately", async () => {
   assert.match(publicMessage, /Private member counts refreshed/);
   assert.match(publicMessage, /Public SERVER STATS refresh failed: Voice channel rename denied/);
   assert.doesNotMatch(publicMessage, /Private refresh failed/);
-  assertLiveBuckets(counter, 1, 1, 0, 0, 0);
+  assertLiveCounts(counter, 1, 1, 0, 0, 0);
 
   stats[0].setName = rename;
   first.messages.fetch = async () => { throw new Error("Private message access denied"); };
@@ -1589,13 +1595,13 @@ test("Refresh Now reports public and private failures separately", async () => {
   assert.equal(stats[0].name, "👥 Total Members: 1");
 });
 
-test("live display avoids claiming role counts when staff setup is incomplete", async () => {
+test("live display reports STAY when staff setup is incomplete", async () => {
   const { guild, first, stats, setMember } = liveRoomFixture("live-count-missing-staff");
   guild.roles.cache.delete("configured-mod");
   setMember("member", { stay: true });
   await room.execute(setupInteraction({ guild, channel: first }));
   const [counter] = liveCounters(first);
-  assertLiveBuckets(counter, 1, "—", "—", "—", "—");
+  assertLiveCounts(counter, 1, 1, "—", "—", "—");
   assert.match(counterText(counter), /Configure distinct STAY, Admin, and Moderator roles/);
   await countsService.refreshMemberCounts(guild);
   assert.equal(stats[1].name, "💜 Stay Role: 1");

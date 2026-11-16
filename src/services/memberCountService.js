@@ -60,7 +60,6 @@ function getMemberCountRoles(guild) {
     stayRoleId: resolve(getWelcomePassSettings(guild.id)?.role_id),
     adminRoleId: resolve(accounting.admin_role_id),
     moderatorRoleId: resolve(accounting.moderator_role_id),
-    excludeStaff: Boolean(accounting.exclude_staff),
   };
 }
 
@@ -174,33 +173,41 @@ function fetchMembers(guild, reconcile) {
 
 async function getMemberCounts(guild, { reconcile = false } = {}) {
   const members = await fetchMembers(guild, reconcile);
-  const { stayRoleId, adminRoleId, moderatorRoleId, excludeStaff } = getMemberCountRoles(guild);
+  const { stayRoleId, adminRoleId, moderatorRoleId } = getMemberCountRoles(guild);
   const roles = [adminRoleId, moderatorRoleId, stayRoleId];
   const ready = roles.every(Boolean) && new Set(roles).size === roles.length;
-  const privateCounts = ready ? { stay: 0, admins: 0, moderators: 0, noRole: 0 } : null;
+  const privateCounts = {
+    total: members.size,
+    stay: stayRoleId ? 0 : null,
+    bots: 0,
+    admins: ready ? 0 : null,
+    moderators: ready ? 0 : null,
+    noRole: ready ? 0 : null,
+  };
 
-  let total = 0;
-  let stayHolders = 0;
+  let humanTotal = 0;
+  let humanStay = 0;
   for (const member of members.values()) {
-    if (member.user.bot) continue;
-    total++;
     const hasStay = stayRoleId && member.roles.cache.has(stayRoleId);
-    if (hasStay) stayHolders++;
-    if (!privateCounts) continue;
+    if (hasStay) privateCounts.stay++;
+    if (member.user.bot === true) {
+      privateCounts.bots++;
+      continue;
+    }
 
-    const isAdmin = member.roles.cache.has(adminRoleId);
-    const isModerator = member.roles.cache.has(moderatorRoleId);
-    if (isAdmin) privateCounts.admins++;
-    if (isModerator && (!excludeStaff || !isAdmin)) privateCounts.moderators++;
-    if (hasStay && (!excludeStaff || (!isAdmin && !isModerator))) privateCounts.stay++;
-    if (!isAdmin && !isModerator && !hasStay) privateCounts.noRole++;
+    humanTotal++;
+    if (hasStay) humanStay++;
+    if (!ready) continue;
+
+    if (member.roles.cache.has(adminRoleId)) privateCounts.admins++;
+    else if (member.roles.cache.has(moderatorRoleId)) privateCounts.moderators++;
+    else if (!hasStay) privateCounts.noRole++;
   }
   return {
-    total,
-    publicStay: stayRoleId ? stayHolders : null,
-    publicNoStay: stayRoleId ? total - stayHolders : null,
+    total: humanTotal,
+    publicStay: stayRoleId ? humanStay : null,
+    publicNoStay: stayRoleId ? humanTotal - humanStay : null,
     privateCounts,
-    excludeStaff,
   };
 }
 
@@ -275,6 +282,15 @@ function observeMembershipChange(member, kind, now = new Date()) {
   scheduleMemberCountRefresh(member.guild);
 }
 
+function scheduleMemberCountRoleRefresh(oldMember, newMember) {
+  const guild = newMember.guild;
+  if (newMember.user.bot) {
+    const stayRoleId = getWelcomePassSettings(guild.id)?.role_id;
+    if (!stayRoleId || oldMember.roles.cache.has(stayRoleId) === newMember.roles.cache.has(stayRoleId)) return;
+  }
+  scheduleMemberCountRefresh(guild);
+}
+
 async function runScheduledRefresh(guild, reconcile) {
   try {
     // An event may have arrived after the active refresh took its snapshot.
@@ -332,5 +348,6 @@ module.exports = {
   observeMembershipChange,
   refreshMemberCounts,
   scheduleMemberCountRefresh,
+  scheduleMemberCountRoleRefresh,
   startMemberCountScheduler,
 };
