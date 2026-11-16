@@ -15,7 +15,7 @@ function shouldRetryInstagramYtDlpWithoutCookies(error) {
     .filter(Boolean)
     .map((value) => String(value))
     .join("\n");
-  return !(/INSTAGRAM_AUDIO_MISSING|\\b429\\b|Too Many Requests/i.test(details));
+  return !(/INSTAGRAM_AUDIO_MISSING|\b429\b|Too Many Requests/i.test(details));
 }
 
 const IMAGE_EXT = new Set([
