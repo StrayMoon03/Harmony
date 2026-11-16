@@ -2,10 +2,12 @@ const {
   ChannelType,
   PermissionFlagsBits,
 } = require("discord.js");
+const roomStore = require("../stores/adminRoomStore");
 const {
   getMemberCountSettings,
   listEnabledMemberCountSettings,
   saveMemberCountSettings,
+  recordMemberCountActivity,
 } = require("../stores/memberCountStore");
 
 const refreshTimers = new Map();
@@ -76,21 +78,29 @@ async function setupMemberCounts(guild, stayRole) {
   return { category, counts };
 }
 
-async function refreshMemberCounts(guild) {
-  const settings = getMemberCountSettings(guild.id);
-  if (!settings?.enabled) return null;
-
+async function getMemberCounts(guild, roleId) {
   const members = await guild.members.fetch();
   const humans = [...members.values()].filter((member) => !member.user.bot);
-  const stayCount = humans.filter((member) =>
-    member.roles.cache.has(settings.role_id)
-  ).length;
-  const counts = {
+  const stay = roleId ? humans.filter((member) => member.roles.cache.has(roleId)).length : null;
+  return {
     total: humans.length,
-    stay: stayCount,
-    noRole: humans.length - stayCount,
+    stay,
+    noRole: stay === null ? null : humans.length - stay,
+    bots: members.size - humans.length,
   };
+}
 
+async function refreshMemberCounts(guild) {
+  const settings = getMemberCountSettings(guild.id);
+  const panel = roomStore.getPanel(guild.id);
+  if (!settings?.enabled && !panel?.enabled) return null;
+  // Resolve lazily because the Admin Room also uses this service for its Member Counts controls.
+  const snapshot = panel?.enabled
+    ? await require("./adminRoomService").refreshMemberCountDisplay(guild, settings?.role_id)
+    : await getMemberCounts(guild, settings.role_id);
+  if (!settings?.enabled) return null;
+  const { total, stay, noRole } = snapshot;
+  const counts = { total, stay, noRole };
   const channels = await Promise.all([
     fetchChannel(guild, settings.total_channel_id),
     fetchChannel(guild, settings.stay_channel_id),
@@ -114,6 +124,17 @@ async function refreshMemberCounts(guild) {
   return counts;
 }
 
+function observeMembershipChange(member, kind, now = new Date()) {
+  if (!member.user.bot) {
+    try {
+      recordMemberCountActivity(member.guild.id, kind, now);
+    } catch (error) {
+      console.error("Harmony could not save a member count event:", error);
+    }
+  }
+  scheduleMemberCountRefresh(member.guild);
+}
+
 function scheduleMemberCountRefresh(guild, delayMs = 2500) {
   const existing = refreshTimers.get(guild.id);
   if (existing) clearTimeout(existing);
@@ -130,9 +151,13 @@ function scheduleMemberCountRefresh(guild, delayMs = 2500) {
 }
 
 async function refreshAllMemberCounts(client) {
-  for (const settings of listEnabledMemberCountSettings()) {
-    const guild = client.guilds.cache.get(settings.guild_id) ||
-      (await client.guilds.fetch(settings.guild_id).catch(() => null));
+  const guildIds = new Set([
+    ...listEnabledMemberCountSettings().map((settings) => settings.guild_id),
+    ...roomStore.getEnabledPanels().map((panel) => panel.guild_id),
+  ]);
+  for (const guildId of guildIds) {
+    const guild = client.guilds.cache.get(guildId) ||
+      (await client.guilds.fetch(guildId).catch(() => null));
     if (guild) scheduleMemberCountRefresh(guild, 0);
   }
 }
@@ -152,6 +177,8 @@ function startMemberCountScheduler(client) {
 
 module.exports = {
   setupMemberCounts,
+  getMemberCounts,
+  observeMembershipChange,
   refreshMemberCounts,
   scheduleMemberCountRefresh,
   startMemberCountScheduler,

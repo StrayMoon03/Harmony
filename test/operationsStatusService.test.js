@@ -575,11 +575,12 @@ test("status response is ephemeral and includes a fresh-check control without se
   assert.equal(JSON.stringify(payload).includes("COOKIE"), false);
 });
 
-test("both existing Schedule Manager panels open the shared Status / Health check", () => {
+test("Status / Health is omitted from both separate Schedule Managers", () => {
   for (const calendarType of ["stray_kids", "community"]) {
     const ids = managerPanelComponents(calendarType, "guild-status")
       .flatMap((row) => row.components.map((component) => component.data.custom_id));
-    assert.ok(ids.includes("harmony-status:open"));
+    assert.ok(!ids.includes("harmony-status:open"));
+    assert.equal(ids.includes("harmony-manager:community:birthdays"), calendarType === "community");
   }
 });
 

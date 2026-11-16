@@ -30,6 +30,7 @@ function permissionSet(allowed = true) {
 function createGuild(guildId = "admin-room-guild") {
   const channelsById = new Map();
   const rolesById = new Map();
+  let nextMessage = BigInt(Date.now()) << 22n;
   const guild = {
     id: guildId,
     ownerId: "owner-id",
@@ -59,11 +60,25 @@ function createGuild(guildId = "admin-room-guild") {
       parentId: null,
       type: ChannelType.GuildText,
       isTextBased: () => true,
-      permissionsFor: () => ({ has: () => true }),
-      messages: { fetch: async (messageId) => sent.find((item) => item.id === messageId) || null },
+      permissionsFor: (target) => ({ has: (bit) =>
+        !(target === guild.roles.everyone && bit === PermissionFlagsBits.ViewChannel && channel.private) }),
+      messages: { fetch: async (options) => {
+        if (typeof options === "string") return sent.find((item) => item.id === options && !item.deleted) || null;
+        if (options.message) {
+          const message = sent.find((item) => item.id === options.message && !item.deleted);
+          if (!message) throw Object.assign(new Error("Unknown Message"), { code: 10008 });
+          return message;
+        }
+        return new Map(sent.filter((item) => !item.deleted && (!options.before || BigInt(item.id) < BigInt(options.before)))
+          .slice(-options.limit).map((item) => [item.id, item]));
+      } },
       send: async (payload) => {
         const message = {
-          id: `${id}-message-${sent.length + 1}`,
+          id: String(++nextMessage),
+          author: { id: guild.members.me.id },
+          createdTimestamp: Date.now(),
+          get embeds() { return (message.payload.embeds || []).map((embed) => embed.data); },
+          delete: async () => { message.deleted = true; },
           channelId: id,
           payload,
           editCalls: [],
@@ -130,8 +145,8 @@ test("Admin Room install, persistence, refresh, move, and off lifecycle", async 
   assert.equal(roomStore.getEnabledPanels().filter((panel) => panel.guild_id === guild.id).length, 1);
   assert.equal(first.sent.length, 1, "refresh edits the persisted panel instead of posting a duplicate");
   const refreshedControls = first.sent[0].payload.components.flatMap((row) => row.components).map((item) => item.data.custom_id);
-  assert.equal(refreshedControls.length, 10);
-  assert.equal(new Set(refreshedControls).size, 10);
+  assert.equal(refreshedControls.length, 8);
+  assert.equal(new Set(refreshedControls).size, 8);
 
   await room.execute(setupInteraction({ guild, channel: second, action: "move" }));
   saved = roomStore.getPanel(guild.id);
@@ -185,15 +200,15 @@ test("the persistent panel exposes direct non-schedule admin controls only", asy
   assert.match(embed.title, /HARMONY ADMIN CONTROLS/);
   assert.doesNotMatch(JSON.stringify(payload), /Calendar & Events|Open Stray Kids Schedule Manager|Open Youtiful Stays Schedule Manager|Choose an Admin Room section/);
   assert.equal(payload.components.length, 2);
-  assert.deepEqual(payload.components.map((row) => row.components.length), [5, 5]);
+  assert.deepEqual(payload.components.map((row) => row.components.length), [5, 3]);
   assert.equal(new Set(ids).size, ids.length);
-  for (const action of ["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "birthdays", "status", "media"]) {
+  for (const action of ["guard", "moderation-history", "welcome", "greetings", "members", "collections", "status", "media"]) {
     assert.ok(ids.includes(`harmony-admin-room:${action}`), `missing direct control for ${action}`);
   }
   assert.ok(ids.every((id) => !/calendar|schedule|category|home/.test(id)));
 });
 
-test("authorized controls open the existing Guard, history, Birthday, and community workflows", async () => {
+test("authorized controls open the existing Guard, moderation history, and community workflows", async () => {
   const { guild } = createGuild("navigation-guild");
   roomStore.savePanel({ guildId: guild.id, channelId: "active-room", messageId: "active-panel", enabled: true });
   const base = {
@@ -205,18 +220,30 @@ test("authorized controls open the existing Guard, history, Birthday, and commun
   assert.match(base.response.embeds[0].data.title, /Harmony Guard/);
   assert.equal(base.response.flags, 64);
 
-  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:guard-history-open" });
-  assert.match(base.response.embeds[0].data.title, /History/);
+  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:moderation-history" });
+  assert.equal(base.response.embeds[0].data.title, "Moderation History");
   assert.equal(base.response.flags, 64);
+  const [guardLogs, messageLogs] = base.response.components.flatMap((row) => row.components);
+  assert.equal(guardLogs.data.label, "Guard Logs");
+  assert.equal(messageLogs.data.label, "Message Logs");
+  for (const [button, title] of [[guardLogs, /Guard Moderation History/], [messageLogs, /Message Logs Manager/]]) {
+    const route = guardInteraction(guild, button.data.custom_id, { channelId: base.channelId, user: base.user });
+    await room.handleAdminRoomInteraction(route);
+    assert.match(route.response.embeds[0].data.title, title);
+  }
+  const logsClose = guardInteraction(guild, "harmony-admin-room:logs-close", { channelId: base.channelId, user: base.user });
+  await room.handleAdminRoomInteraction(logsClose);
+  assert.match(logsClose.response.content, /closed/i);
 
-  await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:birthdays" });
-  const birthdayReply = base.response;
-  assert.match(birthdayReply.content, /BIRTHDAY MANAGER/);
-  assert.equal(birthdayReply.flags, 64);
+  roomStore.savePanel({ guildId: guild.id, channelId: base.channelId, messageId: "moved-panel" });
+  const stale = guardInteraction(guild, guardLogs.data.custom_id, { channelId: base.channelId });
+  await room.handleAdminRoomInteraction(stale);
+  assert.match(stale.response.content, /no longer active/i);
+  roomStore.savePanel({ guildId: guild.id, channelId: base.channelId, messageId: base.message.id });
 
   await room.handleAdminRoomInteraction({ ...base, customId: "harmony-admin-room:welcome" });
   assert.match(base.response.embeds[0].data.title, /Welcome Pass/);
-  for (const [action, title] of [["greetings", "Greetings"], ["members", "Member Counts"], ["collections", "Collections"], ["logs", "Message Logs"], ["media", "Media & Errors Manager"]]) {
+  for (const [action, title] of [["greetings", "Greetings"], ["members", "Member Counts"], ["collections", "Collections"], ["media", "Media & Errors Manager"]]) {
     await room.handleAdminRoomInteraction({ ...base, customId: `harmony-admin-room:${action}` });
     assert.match(base.response.embeds[0].data.title, new RegExp(title));
   }
@@ -1215,4 +1242,212 @@ test("existing Schedule Manager panel components remain available", () => {
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+function liveRoomFixture(id) {
+  const { guild, addChannel, addRole } = createGuild(id);
+  const first = addChannel("private-controls");
+  const next = addChannel("other-private-controls");
+  first.private = next.private = true;
+  const role = addRole("configured-stay", "STAY");
+  const stats = ["total-voice", "stay-voice", "no-role-voice"].map(addChannel);
+  for (const channel of stats) channel.type = ChannelType.GuildVoice;
+  memberCountStore.saveMemberCountSettings({
+    guildId: guild.id, roleId: role.id, categoryId: "stats",
+    totalChannelId: stats[0].id, stayChannelId: stats[1].id, noRoleChannelId: stats[2].id,
+  });
+
+  const members = new Map();
+  guild.members.fetch = async () => members;
+  const setMember = (id, { bot = false, stay = false } = {}) => {
+    const member = { id, guild, user: { bot }, roles: { cache: new Set(stay ? [role.id] : []) } };
+    members.set(id, member);
+    return member;
+  };
+  return { guild, first, next, stats, members, setMember };
+}
+
+const countsService = require("../src/services/memberCountService");
+const counterTitle = "👥 YOUTIFUL STAY — LIVE MEMBER COUNT";
+const liveCounters = (channel) => channel.sent.filter((message) =>
+  !message.deleted && message.embeds[0]?.title === counterTitle);
+const counterText = (message) => message.embeds[0].description;
+
+test("live display is before the panel and reuses its persisted message across refresh and restart", async () => {
+  const { guild, first, setMember } = liveRoomFixture("live-count-reuse");
+  setMember("first", { stay: true });
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const [counter, controls] = first.sent;
+  assert.equal(counter.embeds[0].title, counterTitle);
+  assert.match(controls.embeds[0].title, /ADMIN CONTROLS/);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, counter.id);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").channel_id, first.id);
+  closeDb();
+  await room.refreshConfiguredAdminRooms(client(guild));
+  await room.execute(setupInteraction({ guild, action: "refresh" }));
+  assert.deepEqual(first.sent, [counter, controls]);
+});
+
+test("live display updates for joins, leaves, STAY role changes and bots while SERVER STATS retain human totals", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const runDebounce = async () => {
+    t.mock.timers.tick(2500);
+    await new Promise(setImmediate);
+  };
+  const { guild, first, stats, members, setMember } = liveRoomFixture("live-count-events");
+  const entrant = setMember("entrant");
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const [counter] = liveCounters(first);
+  const assertCounts = (total, stay, noRole, bots) => {
+    for (const [label, value] of Object.entries({ "Total Members": total, "STAY Role": stay, "No STAY Role": noRole, Bots: bots })) {
+      assert.ok(counterText(counter).includes(`**${label}:** ${value}`));
+    }
+    assert.deepEqual(stats.map((channel) => channel.name), [
+      `👥 Total Members: ${total}`, `💜 Stay Role: ${stay}`, `⚠️ No Stay Role: ${noRole}`,
+    ]);
+    assert.equal(liveCounters(first).length, 1);
+  };
+  countsService.observeMembershipChange(entrant, "join");
+  await runDebounce();
+  assertCounts(1, 0, 1, 0);
+  assert.match(counterText(counter), /Joined:\*\* 1\n\*\*Left:\*\* 0\n\*\*Net change:\*\* \+1/);
+
+  const bot = setMember("bot", { bot: true, stay: true });
+  countsService.observeMembershipChange(bot, "join");
+  await runDebounce();
+  assertCounts(1, 0, 1, 1);
+
+  setMember("entrant", { stay: true });
+  countsService.scheduleMemberCountRefresh(guild); // The guildMemberUpdate path.
+  await runDebounce();
+  assertCounts(1, 1, 0, 1);
+  assert.equal(memberCountStore.getWeeklyMemberCountActivity(guild.id).joined, 1);
+
+  members.delete("entrant");
+  countsService.observeMembershipChange(entrant, "leave");
+  await runDebounce();
+  assertCounts(0, 0, 0, 1);
+  assert.match(counterText(counter), /Joined:\*\* 1\n\*\*Left:\*\* 1\n\*\*Net change:\*\* 0/);
+
+  members.delete("bot");
+  countsService.observeMembershipChange(bot, "leave");
+  await runDebounce();
+  assertCounts(0, 0, 0, 0);
+  assert.equal(memberCountStore.getWeeklyMemberCountActivity(guild.id).left, 1);
+});
+
+test("weekly activity uses Eastern Monday midnight and seeds only the owner-confirmed guild and week once", async () => {
+  const { guild, addChannel } = createGuild("weekly-seed");
+  addChannel("1554747061252005938");
+  const beforeMidnight = new Date("2026-11-16T04:59:59.999Z");
+  const midnight = new Date("2026-11-16T05:00:00.000Z");
+  const before = () => memberCountStore.getWeeklyMemberCountActivity(guild.id, beforeMidnight);
+  const next = () => memberCountStore.getWeeklyMemberCountActivity(guild.id, midnight);
+  await room.configureRequestedGuardReviewRoom(client(guild));
+  assert.deepEqual(before(), { joined: 2, left: 1, net: 1 });
+  closeDb();
+  await room.configureRequestedGuardReviewRoom(client(guild));
+  assert.deepEqual(before(), { joined: 2, left: 1, net: 1 });
+  memberCountStore.recordMemberCountActivity(guild.id, "join", beforeMidnight);
+  assert.deepEqual(before(), { joined: 3, left: 1, net: 2 });
+  assert.deepEqual(next(), { joined: 0, left: 0, net: 0 });
+  memberCountStore.recordMemberCountActivity(guild.id, "leave", midnight);
+  assert.deepEqual(next(), { joined: 0, left: 1, net: -1 });
+
+  const summerSunday = new Date("2026-07-06T03:59:59.999Z");
+  const summerMonday = new Date("2026-07-06T04:00:00.000Z");
+  memberCountStore.recordMemberCountActivity(guild.id, "join", summerSunday);
+  assert.equal(memberCountStore.getWeeklyMemberCountActivity(guild.id, summerSunday).joined, 1);
+  assert.equal(memberCountStore.getWeeklyMemberCountActivity(guild.id, summerMonday).joined, 0);
+  const otherGuild = createGuild("not-the-seed-guild").guild;
+  await room.configureRequestedGuardReviewRoom(client(otherGuild));
+  assert.deepEqual(memberCountStore.getWeeklyMemberCountActivity(otherGuild.id, beforeMidnight), { joined: 0, left: 0, net: 0 });
+});
+
+test("a confirmed deleted display gets one replacement below older messages and before the active controls", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { guild, first } = liveRoomFixture("live-count-deleted");
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const [previous, oldPanel] = first.sent;
+  await previous.delete();
+  room.handleMemberCountDisplayDeletion({ guild, channelId: first.id, id: previous.id });
+  t.mock.timers.tick(0);
+  await countsService.refreshMemberCounts(guild);
+  const [replacement] = liveCounters(first);
+  assert.equal(liveCounters(first).length, 1);
+  assert.notEqual(replacement.id, previous.id);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, replacement.id);
+  assert.ok(BigInt(roomStore.getPanel(guild.id).message_id) > BigInt(replacement.id));
+  assert.deepEqual(oldPanel.payload.components, []);
+});
+
+test("restart recovers a pending counter send even beyond the first page of Discord history", async () => {
+  const { guild, first } = liveRoomFixture("live-count-pending");
+  const send = first.send;
+  first.send = async (payload) => {
+    const delivered = await send(payload);
+    if (delivered.embeds[0]?.title === counterTitle) throw new Error("Discord accepted send before SQLite recorded the ID");
+    return delivered;
+  };
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const [delivered] = liveCounters(first);
+  const pending = roomStore.getDelivery(guild.id, "counter");
+  assert.equal(pending.message_id, null);
+  assert.equal(delivered.payload.enforceNonce, true);
+  assert.equal(delivered.payload.nonce, pending.token);
+  first.send = send;
+  for (let index = 0; index < 103; index++) await send({ content: "More room messages" });
+
+  closeDb();
+  await room.refreshConfiguredAdminRooms(client(guild));
+  assert.deepEqual(liveCounters(first), [delivered]);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, delivered.id);
+});
+
+test("missing permissions do not trigger a replacement and public counters still refresh", async () => {
+  const { guild, first, stats, setMember } = liveRoomFixture("live-count-permissions");
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const saved = roomStore.getDelivery(guild.id, "counter");
+  const fetch = first.messages.fetch;
+  first.messages.fetch = async () => { throw Object.assign(new Error("Missing Access"), { code: 50001 }); };
+  setMember("human", { stay: true });
+  await countsService.refreshMemberCounts(guild);
+  assert.equal(stats[0].name, "👥 Total Members: 1");
+  assert.equal(liveCounters(first).length, 1);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, saved.message_id);
+
+  first.messages.fetch = fetch;
+  const permissionsFor = first.permissionsFor;
+  first.permissionsFor = (target) => ({
+    has: (bit) => bit !== PermissionFlagsBits.ReadMessageHistory && permissionsFor(target).has(bit),
+  });
+  await countsService.refreshMemberCounts(guild);
+  assert.equal(liveCounters(first).length, 1);
+  first.permissionsFor = permissionsFor;
+  first.private = false;
+  await countsService.refreshMemberCounts(guild);
+  assert.equal(liveCounters(first).length, 0);
+  assert.ok(roomStore.getPanel(guild.id).enabled);
+});
+
+test("moving the admin room retires the old display and off/on restores one in the active room", async () => {
+  const { guild, first, next } = liveRoomFixture("live-count-room-move");
+  await room.execute(setupInteraction({ guild, channel: first }));
+  const [original] = liveCounters(first);
+  await room.execute(setupInteraction({ guild, channel: next, action: "move" }));
+  assert.ok(original.deleted);
+  const [moved] = liveCounters(next);
+  assert.equal(roomStore.getDelivery(guild.id, "counter").channel_id, next.id);
+  assert.ok(BigInt(roomStore.getPanel(guild.id).message_id) > BigInt(moved.id));
+
+  await room.execute(setupInteraction({ guild, action: "off" }));
+  assert.ok(moved.deleted);
+  await countsService.refreshMemberCounts(guild);
+  assert.equal(liveCounters(next).length, 0);
+  assert.equal(roomStore.getPanel(guild.id).enabled, 0);
+
+  await room.execute(setupInteraction({ guild, channel: next }));
+  const [turnedOn] = liveCounters(next);
+  assert.equal(liveCounters(next).length, 1);
+  assert.ok(BigInt(roomStore.getPanel(guild.id).message_id) > BigInt(turnedOn.id));
 });

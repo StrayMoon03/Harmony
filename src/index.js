@@ -64,6 +64,7 @@ const {
 } = require("./services/birthdayService");
 const {
   scheduleMemberCountRefresh,
+  observeMembershipChange,
   startMemberCountScheduler,
 } = require("./services/memberCountService");
 const {
@@ -163,7 +164,6 @@ client.once("clientReady", async () => {
     }
   }
 
-  await adminRoomCommand.refreshConfiguredAdminRooms(client);
   const configuredGuardRoom = await adminRoomCommand.configureRequestedGuardReviewRoom(client);
   if (configuredGuardRoom?.changed) {
     console.log("Harmony Guard Review Room configured", {
@@ -171,6 +171,8 @@ client.once("clientReady", async () => {
       channelId: configuredGuardRoom.channelId,
     });
   }
+
+  await adminRoomCommand.refreshConfiguredAdminRooms(client);
 
   // Refresh only manager panels that already have persisted references. This
   // keeps deployed component changes visible without creating new setup or
@@ -204,8 +206,8 @@ client.once("clientReady", async () => {
 client.on("guildCreate", async (guild) => {
   try {
     await registerGuildCommands(guild);
-    await adminRoomCommand.refreshConfiguredAdminRooms(client);
     await adminRoomCommand.configureRequestedGuardReviewRoom(client);
+    await adminRoomCommand.refreshConfiguredAdminRooms(client);
   } catch (error) {
     console.error(
       `Could not register Harmony commands in ${guild.name}:`,
@@ -242,12 +244,11 @@ client.on("guildMemberAdd", async (member) => {
     member.guild.name
   );
 
+  observeMembershipChange(member, "join");
   if (member.user.bot) {
     console.log("Greeting skipped: joining account is a bot.");
     return;
   }
-
-  scheduleMemberCountRefresh(member.guild);
 
   const settings = getGreetingSettings(member.guild.id);
   if (!settings || !settings.enabled) {
@@ -303,9 +304,8 @@ client.on("guildMemberAdd", async (member) => {
 });
 
 client.on("guildMemberRemove", async (member) => {
+  observeMembershipChange(member, "leave");
   if (member.user.bot) return;
-
-  scheduleMemberCountRefresh(member.guild);
 
   const settings = getGreetingSettings(member.guild.id);
   if (!settings || !settings.enabled) return;
@@ -402,6 +402,11 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
 });
 
 client.on("messageDelete", async (message) => {
+  try {
+    adminRoomCommand.handleMemberCountDisplayDeletion(message);
+  } catch (error) {
+    console.error("Could not check the deleted message against the live member count:", error);
+  }
   await handleLoggedMessageDelete(message);
 
   try {

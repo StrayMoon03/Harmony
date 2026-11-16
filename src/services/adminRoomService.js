@@ -16,7 +16,9 @@ const {
 const roomStore = require("../stores/adminRoomStore");
 const guardStore = require("../stores/communityGuardStore");
 const guardService = require("./communityGuardService");
-const birthdayManager = require("./birthdayManagerService");
+const {
+  withAdminRoomLock, fetchRoomChannel, fetchRoomMessage, ensureRoomMessage, retireRoomMessage,
+} = require("./adminRoomMessages");
 const welcomePassStore = require("../stores/welcomePassStore");
 const welcomePassService = require("./welcomePassService");
 const greetingStore = require("../stores/greetingStore");
@@ -53,13 +55,11 @@ const mediaNavigationSessions = new Map();
 const MEDIA_SESSION_TTL_MS = 15 * 60 * 1000;
 const ADMIN_CONTROLS = [
   ["guard", "Harmony Guard", ButtonStyle.Primary],
-  ["guard-history-open", "Guard History", ButtonStyle.Secondary],
+  ["moderation-history", "Moderation History", ButtonStyle.Secondary],
   ["welcome", "Welcome Pass", ButtonStyle.Secondary],
   ["greetings", "Greetings", ButtonStyle.Secondary],
   ["members", "Member Counts", ButtonStyle.Secondary],
   ["collections", "Collections", ButtonStyle.Secondary],
-  ["logs", "Message Logs", ButtonStyle.Secondary],
-  ["birthdays", "Birthdays", ButtonStyle.Success],
   ["status", "Status / Health", ButtonStyle.Primary],
   ["media", "Media & Errors", ButtonStyle.Secondary],
 ];
@@ -81,8 +81,8 @@ async function buildHomePayload() {
     .setTitle("💜 HARMONY ADMIN CONTROLS")
     .setDescription("Use these controls for Harmony’s community, system, and media tools. The Stray Kids and Youtiful Stays Schedule Manager panels in this channel remain your calendar controls.")
     .addFields(
-      { name: "COMMUNITY", value: "Guard · Guard History · Welcome Pass · Greetings · Member Counts", inline: false },
-      { name: "OTHER ADMIN TOOLS", value: "Collections · Message Logs · Birthdays · Status / Health · Media & Errors", inline: false },
+      { name: "COMMUNITY", value: "Guard · Moderation History · Welcome Pass · Greetings · Member Counts", inline: false },
+      { name: "OTHER ADMIN TOOLS", value: "Collections · Status / Health · Media & Errors", inline: false },
     );
   return { embeds: [embed], components: buildHomeComponents(), allowedMentions: { parse: [] } };
 }
@@ -685,9 +685,9 @@ function messageLogSessionKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
 }
 
-function setMessageLogNavigation(interaction) {
+function setMessageLogNavigation(interaction, panelMessageId = interaction.message?.id) {
   messageLogNavigationSessions.set(messageLogSessionKey(interaction), {
-    panelMessageId: interaction.message?.id,
+    panelMessageId,
     channelId: interaction.channelId,
     updatedAt: Date.now(),
   });
@@ -947,7 +947,32 @@ function historyEntry(row) {
   return `**${result}** · ${source}\n<t:${timestamp}:f>\n${rule} · ${category}\nMember: ${member} · By: ${actor} · DM: ${dm}`;
 }
 
-function guardHistoryPayload(guildId, page = 0) {
+const MODERATION_HISTORY = [
+  ["guard", "Guard Logs", (interaction, panelId) => guardHistoryPayload(interaction.guildId, 0, panelId)],
+  ["messages", "Message Logs", (interaction, panelId) => {
+    setMessageLogNavigation(interaction, panelId);
+    return messageLogManagerPayload(interaction.guildId, interaction.guild);
+  }],
+];
+
+function moderationHistoryPayload(panelId) {
+  const buttons = MODERATION_HISTORY.map(([action, label]) => new ButtonBuilder()
+    .setCustomId(`harmony-admin-room:moderation-history:${action}:${panelId}`)
+    .setLabel(label).setStyle(ButtonStyle.Secondary));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 5) {
+    rows.push(new ActionRowBuilder().addComponents(...buttons.slice(index, index + 5)));
+  }
+  return pagePayload("Moderation History", "Choose the history to open.", rows);
+}
+
+function isActiveRoomPanel(interaction, messageId) {
+  const active = roomStore.getPanel(interaction.guildId);
+  return active?.enabled && active.message_id === messageId && active.channel_id === interaction.channelId;
+}
+
+function guardHistoryPayload(guildId, page = 0, panelId) {
+  const pageId = (number) => `harmony-admin-room:guard-history:${number}${panelId ? ":" + panelId : ""}`;
   const total = guardStore.countHistory(guildId);
   const lastPage = Math.max(0, Math.ceil(total / HISTORY_PAGE_SIZE) - 1);
   const currentPage = Math.min(Math.max(0, Number(page) || 0), lastPage);
@@ -956,24 +981,14 @@ function guardHistoryPayload(guildId, page = 0) {
     ? rows.map(historyEntry).join("\n\n")
     : "No saved Guard actions or Admin Review safe decisions were found.";
   const pager = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`harmony-admin-room:guard-history:${currentPage - 1}`).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 0),
-    new ButtonBuilder().setCustomId(`harmony-admin-room:guard-history:${currentPage + 1}`).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(currentPage >= lastPage),
-    new ButtonBuilder().setCustomId("harmony-admin-room:guard:ephemeral").setLabel("Back to Guard").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(pageId(currentPage - 1)).setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 0),
+    new ButtonBuilder().setCustomId(pageId(currentPage + 1)).setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(currentPage >= lastPage),
+    new ButtonBuilder().setCustomId(panelId ? `harmony-admin-room:moderation-history:menu:${panelId}` : "harmony-admin-room:guard:ephemeral")
+      .setLabel(panelId ? "Back to Moderation History" : "Back to Guard").setStyle(ButtonStyle.Secondary),
   );
   const embed = new EmbedBuilder().setColor(0x5865f2).setTitle("🛡️ Guard Moderation History")
     .setDescription(body.slice(0, 4000)).setFooter({ text: `Page ${currentPage + 1} of ${lastPage + 1} · ${total} saved decisions/actions · Message content is not shown.` });
   return { embeds: [embed], components: [pager], allowedMentions: { parse: [] } };
-}
-
-async function fetchChannel(guild, channelId) {
-  return guild.channels.cache.get(channelId) || guild.channels.fetch(channelId).catch(() => null);
-}
-
-async function panelMessage(guild, panel) {
-  const channel = await fetchChannel(guild, panel.channel_id);
-  if (!channel?.isTextBased?.()) return { channel, message: null };
-  const message = await channel.messages.fetch(panel.message_id).catch(() => null);
-  return { channel, message };
 }
 
 async function validateRoomChannel(guild, channel) {
@@ -985,71 +1000,156 @@ async function validateRoomChannel(guild, channel) {
   return channel;
 }
 
-async function postHome(guild, client, channel) {
-  const payload = await buildHomePayload(guild, client);
-  return channel.send(payload);
+async function deactivateOldPanel(guild, panel, exceptMessageId = null) {
+  if (!panel || panel.message_id === "0" || panel.message_id === exceptMessageId) return;
+  const channel = await fetchRoomChannel(guild, panel.channel_id);
+  const message = channel?.isTextBased?.() && await fetchRoomMessage(channel, panel.message_id);
+  if (message) await message.edit({ content: "Harmony Admin Room panel moved or turned off. Use `/harmony-admin-room` to manage the active panel.", embeds: [], components: [] });
 }
 
-async function deactivateOldPanel(guild, panel, exceptMessageId = null) {
-  if (!panel || panel.message_id === exceptMessageId) return;
-  const { message } = await panelMessage(guild, panel);
-  if (message) await message.edit({ content: "Harmony Admin Room panel moved or turned off. Use `/harmony-admin-room` to manage the active panel.", embeds: [], components: [] }).catch(() => {});
+async function syncLiveCounter(guild, channel, snapshot) {
+  const visibleToEveryone = channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel);
+  if (visibleToEveryone !== false) {
+    await retireRoomMessage(guild, "counter");
+    return null;
+  }
+  await validateRoomChannel(guild, channel);
+  const counts = snapshot || await memberCountService.getMemberCounts(guild, memberCountStore.getMemberCountSettings(guild.id)?.role_id);
+  const week = memberCountStore.getWeeklyMemberCountActivity(guild.id);
+  const payload = pagePayload("👥 YOUTIFUL STAY — LIVE MEMBER COUNT", [
+    `**Total Members:** ${counts.total}`,
+    `**STAY Role:** ${counts.stay ?? "Role not configured"}`,
+    `**No STAY Role:** ${counts.noRole ?? "Role not configured"}`,
+    `**Bots:** ${counts.bots}`,
+    "",
+    "**This week**",
+    `**Joined:** ${week.joined}`,
+    `**Left:** ${week.left}`,
+    `**Net change:** ${week.net > 0 ? "+" : ""}${week.net}`,
+  ].join("\n"));
+  const counter = await ensureRoomMessage(guild, channel, "counter", payload);
+  if (counter.embeds[0]?.description !== payload.embeds[0].data.description) {
+    if (counter.embeds[0]?.footer) payload.embeds[0].setFooter({ text: counter.embeds[0].footer.text });
+    await counter.edit(payload);
+  }
+  return counter;
+}
+
+async function syncAdminRoom(guild, panel, { snapshot, refreshPanel = true, channel } = {}) {
+  channel ||= await fetchRoomChannel(guild, panel.channel_id);
+  if (!channel?.isTextBased?.()) throw new Error("The saved Admin Room channel is unavailable. Use `/harmony-admin-room move` to choose a new channel.");
+
+  let counter;
+  let counterFailed = false;
+  try {
+    counter = await syncLiveCounter(guild, channel, snapshot);
+  } catch (error) {
+    counterFailed = true;
+    console.warn("Harmony Admin Room live member count is unavailable:", error.message);
+  }
+  if (!refreshPanel && !counter) return counterFailed;
+
+  if (!refreshPanel && BigInt(panel.message_id) > BigInt(counter.id)) return counterFailed;
+
+  // Messages are chronological. When the counter is new or has been deleted,
+  // place the controls below it and retire the previous controls.
+  const current = panel.message_id === "0" ? null : await fetchRoomMessage(channel, panel.message_id);
+  const followsCounter = (message) => !counter || BigInt(message.id) > BigInt(counter.id);
+  if (current && followsCounter(current)) {
+    if (refreshPanel) await current.edit(await buildHomePayload());
+    return counterFailed;
+  }
+  const replacement = await ensureRoomMessage(guild, channel, "panel", await buildHomePayload(), followsCounter);
+  if (current) await deactivateOldPanel(guild, panel, replacement.id);
+  roomStore.savePanel({ guildId: guild.id, channelId: channel.id, messageId: replacement.id });
+  return counterFailed;
+}
+
+function refreshMemberCountDisplay(guild, roleId) {
+  return withAdminRoomLock(guild.id, async () => {
+    const snapshot = await memberCountService.getMemberCounts(guild, roleId);
+    const panel = roomStore.getPanel(guild.id);
+    if (panel?.enabled) {
+      await syncAdminRoom(guild, panel, { snapshot, refreshPanel: false }).catch((error) => {
+        console.warn("Harmony Admin Room live member count refresh failed:", error.message);
+      });
+    }
+    return snapshot;
+  });
+}
+
+function handleMemberCountDisplayDeletion(message) {
+  if (!message.guild) return;
+  const delivery = roomStore.getDelivery(message.guild.id, "counter");
+  if (delivery?.channel_id === message.channelId && delivery.message_id === message.id) {
+    memberCountService.scheduleMemberCountRefresh(message.guild, 0);
+  }
 }
 
 async function setupAdminRoom(interaction) {
   if (!isAdminRoomAuthorized(interaction)) return interaction.reply({ content: "Only server admins can manage the Harmony Admin Room.", flags: MessageFlags.Ephemeral });
   if (!interaction.guild) return interaction.reply({ content: "Use this command inside a server.", flags: MessageFlags.Ephemeral });
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const { guild } = interaction;
   const action = interaction.options.getSubcommand();
-  const existing = roomStore.getPanel(interaction.guildId);
-  try {
-    if (action === "off") {
-      if (!existing || !existing.enabled) return interaction.editReply("The Harmony Admin Room is already off.");
-      await deactivateOldPanel(interaction.guild, existing);
-      roomStore.setEnabled(interaction.guildId, false);
-      return interaction.editReply("Harmony Admin Room is off. Its panel is inactive; Harmony’s commands and services are unchanged.");
-    }
-
-    if (action === "refresh") {
-      if (!existing || !existing.enabled) return interaction.editReply("No active Admin Room is installed. Use `/harmony-admin-room install` first.");
-      const { channel, message } = await panelMessage(interaction.guild, existing);
-      if (!channel?.isTextBased?.()) return interaction.editReply("The saved Admin Room channel is unavailable. Use `/harmony-admin-room move` to choose a new channel.");
-      const payload = await buildHomePayload(interaction.guild, interaction.client);
-      if (message) await message.edit(payload);
-      else {
-        const replacement = await postHome(interaction.guild, interaction.client, channel);
-        roomStore.savePanel({ guildId: interaction.guildId, channelId: channel.id, messageId: replacement.id, enabled: true });
+  return withAdminRoomLock(guild.id, async () => {
+    const existing = roomStore.getPanel(guild.id);
+    try {
+      if (action === "off") {
+        if (!existing?.enabled) return interaction.editReply("The Harmony Admin Room is already off.");
+        await retireRoomMessage(guild, "counter");
+        await deactivateOldPanel(guild, existing);
+        const delivery = roomStore.getDelivery(guild.id, "panel");
+        if (delivery?.message_id === existing.message_id) roomStore.clearDelivery(delivery);
+        else await retireRoomMessage(guild, "panel");
+        roomStore.setEnabled(guild.id, false);
+        return interaction.editReply("Harmony Admin Room is off. Its panel is inactive; Harmony’s commands and services are unchanged.");
       }
-      return interaction.editReply("Harmony Admin Room panel refreshed.");
-    }
 
-    const channel = await validateRoomChannel(interaction.guild, interaction.options.getChannel("channel", true));
-    if (action === "install" && existing?.enabled) return interaction.editReply("An Admin Room is already active. Use `move` or `refresh` to manage it.");
-    if (action === "move" && !existing?.enabled) return interaction.editReply("No active Admin Room exists. Use `install` to choose its first channel.");
-    const posted = await postHome(interaction.guild, interaction.client, channel);
-    await deactivateOldPanel(interaction.guild, existing, posted.id);
-    roomStore.savePanel({ guildId: interaction.guildId, channelId: channel.id, messageId: posted.id, enabled: true });
-    return interaction.editReply(`Harmony Admin Room ${action === "move" ? "moved" : "installed"} in <#${channel.id}>.`);
-  } catch (error) {
-    return interaction.editReply(error.message || "Harmony could not update the Admin Room.");
-  }
+      if (action === "refresh") {
+        if (!existing?.enabled) return interaction.editReply("No active Admin Room is installed. Use `/harmony-admin-room install` first.");
+        const failed = await syncAdminRoom(guild, existing);
+        return interaction.editReply(failed
+          ? "Harmony Admin Room panel refreshed. The live member count is unavailable. Check the bot’s channel permissions and try again."
+          : "Harmony Admin Room panel refreshed.");
+      }
+
+      const channel = await validateRoomChannel(guild, interaction.options.getChannel("channel", true));
+      if (action === "install" && existing?.enabled) return interaction.editReply("An Admin Room is already active. Use `move` or `refresh` to manage it.");
+      if (action === "move" && !existing?.enabled) return interaction.editReply("No active Admin Room exists. Use `install` to choose its first channel.");
+      if (existing?.enabled && existing.channel_id === channel.id) {
+        await syncAdminRoom(guild, existing, { channel });
+        return interaction.editReply(`Harmony Admin Room refreshed in <#${channel.id}>.`);
+      }
+
+      await retireRoomMessage(guild, "counter");
+      if (existing?.enabled) await deactivateOldPanel(guild, existing);
+      const delivery = roomStore.getDelivery(guild.id, "panel");
+      if (delivery && delivery.message_id === existing?.message_id) roomStore.clearDelivery(delivery);
+      else await retireRoomMessage(guild, "panel");
+
+      // Save the desired room before either Discord send so startup can finish an interrupted install.
+      const pendingPanel = roomStore.savePanel({ guildId: guild.id, channelId: channel.id, messageId: "0" });
+      const failed = await syncAdminRoom(guild, pendingPanel, { channel });
+      const notice = failed ? " The live member count is unavailable. Check the bot’s channel permissions and refresh the room." : "";
+      return interaction.editReply(`Harmony Admin Room ${action === "move" ? "moved" : "installed"} in <#${channel.id}>.${notice}`);
+    } catch (error) {
+      return interaction.editReply(error.message || "Harmony could not update the Admin Room.");
+    }
+  });
 }
 
 async function refreshConfiguredAdminRooms(client) {
-  for (const panel of roomStore.getEnabledPanels()) {
-    const guild = client.guilds.cache.get(panel.guild_id);
+  for (const { guild_id: guildId } of roomStore.getEnabledPanels()) {
+    const guild = client.guilds.cache.get(guildId);
     if (!guild) continue;
     try {
-      const { channel, message } = await panelMessage(guild, panel);
-      if (!channel?.isTextBased?.()) continue;
-      const payload = await buildHomePayload(guild, client);
-      if (message) await message.edit(payload);
-      else {
-        const replacement = await postHome(guild, client, channel);
-        roomStore.savePanel({ guildId: guild.id, channelId: channel.id, messageId: replacement.id, enabled: true });
-      }
+      await withAdminRoomLock(guildId, async () => {
+        const panel = roomStore.getPanel(guildId);
+        if (panel?.enabled) await syncAdminRoom(guild, panel);
+      });
     } catch (error) {
-      console.warn("Admin Room startup refresh failed", { guildId: panel.guild_id, error: error.message });
+      console.warn("Admin Room startup refresh failed", { guildId, error: error.message });
     }
   }
 }
@@ -1060,6 +1160,12 @@ async function configureRequestedGuardReviewRoom(client) {
       const channel = guild.channels.cache.get(REQUESTED_GUARD_REVIEW_ROOM_ID) ||
         await guild.channels.fetch(REQUESTED_GUARD_REVIEW_ROOM_ID).catch(() => null);
       if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText || !guild.members?.me) continue;
+      // This owner-confirmed channel identifies the Youtiful Stays guild without relying on its name.
+      try {
+        memberCountStore.seedYoutifulStaysMemberCountWeek(guild.id);
+      } catch (error) {
+        console.warn("Harmony could not seed Youtiful Stays' weekly member counts:", error.message);
+      }
       const permissions = channel.permissionsFor(guild.members.me);
       if (!permissions?.has(PermissionFlagsBits.ViewChannel) ||
         !permissions?.has(PermissionFlagsBits.SendMessages) ||
@@ -1130,14 +1236,32 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ content: "Only authorized server admins can use the Harmony Admin Room.", flags: MessageFlags.Ephemeral }).catch(() => {});
     return true;
   }
-  const [, action, parameter] = interaction.customId.split(":");
-  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "birthdays", "status", "media"]);
+  const [, action, parameter, panelId] = interaction.customId.split(":");
+  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "status", "media"]);
   if (panelActions.has(action) && !(["guard", "welcome"].includes(action) && parameter === "ephemeral")) {
-    const active = roomStore.getPanel(interaction.guildId);
-    if (!active?.enabled || active.message_id !== interaction.message?.id || active.channel_id !== interaction.channelId) {
+    if (!isActiveRoomPanel(interaction, interaction.message?.id)) {
       await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
       return true;
     }
+  }
+  if (action === "moderation-history" || (action === "guard-history" && panelId)) {
+    const activeId = panelId || interaction.message?.id;
+    if (!isActiveRoomPanel(interaction, activeId)) {
+      await interaction.reply({ content: "This Moderation History screen is no longer active. Open it from the current Admin Room panel.", flags: MessageFlags.Ephemeral });
+      return true;
+    }
+    if (!parameter) {
+      await interaction.reply({ ...moderationHistoryPayload(activeId), flags: MessageFlags.Ephemeral });
+    } else if (action === "guard-history") {
+      await interaction.update(guardHistoryPayload(interaction.guildId, Number(parameter) || 0, activeId));
+    } else if (parameter === "menu") {
+      await interaction.update(moderationHistoryPayload(activeId));
+    } else {
+      const route = MODERATION_HISTORY.find(([key]) => key === parameter);
+      if (!route) return false;
+      await interaction.update(route[2](interaction, activeId));
+    }
+    return true;
   }
   if (action === "panel-refresh") {
     const saved = roomStore.getPanel(interaction.guildId);
@@ -1146,7 +1270,10 @@ async function handleAdminRoomInteraction(interaction) {
       return true;
     }
     await interaction.deferUpdate();
-    await interaction.message.edit(await buildHomePayload(interaction.guild, interaction.client));
+    await withAdminRoomLock(interaction.guildId, async () => {
+      const current = roomStore.getPanel(interaction.guildId);
+      if (current?.enabled) await syncAdminRoom(interaction.guild, current);
+    });
     return true;
   }
   if (action === "status") {
@@ -1777,10 +1904,6 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.reply({ ...guardHistoryPayload(interaction.guildId), flags: MessageFlags.Ephemeral });
     return true;
   }
-  if (action === "birthdays") {
-    await interaction.reply({ content: birthdayManager.birthdayManagerContent(interaction.guildId), components: birthdayManager.birthdayManagerComponents(), flags: MessageFlags.Ephemeral });
-    return true;
-  }
   if (["collections"].includes(action)) {
     const area = action;
     const payload = communityToolPage(interaction.guildId, area);
@@ -1933,5 +2056,7 @@ module.exports = {
   configureRequestedGuardReviewRoom,
   handleAdminRoomInteraction,
   refreshConfiguredAdminRooms,
+  refreshMemberCountDisplay,
+  handleMemberCountDisplayDeletion,
   HISTORY_PAGE_SIZE,
 };
