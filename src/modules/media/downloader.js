@@ -10,14 +10,6 @@ const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
 const INSTAGRAM_GALLERY_TIMEOUT_MS = 45000;
 
-function shouldRetryInstagramYtDlpWithoutCookies(error) {
-  const details = [error?.message, error?.stderr, error?.stdout]
-    .filter(Boolean)
-    .map((value) => String(value))
-    .join("\n");
-  return !(/INSTAGRAM_AUDIO_MISSING|\b429\b|Too Many Requests/i.test(details));
-}
-
 const IMAGE_EXT = new Set([
   "jpg",
   "jpeg",
@@ -153,36 +145,25 @@ async function downloadMedia(url, options = {}) {
   const jobDir = await createJobDirectory();
   const errors = [];
   let authFailure = null;
-  const cookiePath = process.env.INSTAGRAM_COOKIES || path.resolve(__dirname, "../../instagram-cookies.txt");
-  let cookiesAvailable = false;
-  try { await fs.access(cookiePath); cookiesAvailable = true; } catch { /* public-only attempt */ }
-
-  for (const useCookies of [true, false]) {
-    try {
-      const result = await downloadWithYtDlp(url, jobDir, { useCookies, signal });
-      return {
-        ...result,
-        ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
-      };
-    } catch (error) {
-      if (signal?.aborted) {
-        await fs.rm(jobDir, { recursive: true, force: true });
-        throw signal.reason || error;
-      }
-      errors.push(error);
-      if (useCookies && cookiesAvailable) {
-        authFailure ||= classifyAuthenticatedProviderFailure(error, { authenticatedRequest: true });
-      }
-      const shouldSkipPublicRetry = useCookies && !shouldRetryInstagramYtDlpWithoutCookies(error);
-      if (shouldSkipPublicRetry) {
-        console.warn("Skipping Instagram's duplicate unauthenticated yt-dlp retry after an audio or rate-limit failure; continuing with the existing recovery methods.");
-      } else {
-        console.warn("Instagram yt-dlp " + (useCookies ? "cookie" : "public") + " attempt failed; " + (useCookies ? "retrying without cookies" : "trying gallery-dl") + ".");
-      }
-      await fs.rm(jobDir, { recursive: true, force: true });
-      await fs.mkdir(jobDir, { recursive: true });
-      if (shouldSkipPublicRetry) break;
+  let ytDlpAttempts;
+  try {
+    ytDlpAttempts = await runInstagramYtDlpAttempts(url, jobDir, { signal });
+  } catch (error) {
+    await fs.rm(jobDir, { recursive: true, force: true });
+    throw error;
+  }
+  for (const attempt of ytDlpAttempts.failures) {
+    errors.push(attempt.error);
+    if (attempt.useCookies) {
+      authFailure ||= classifyAuthenticatedProviderFailure(attempt.error, { authenticatedRequest: true });
     }
+  }
+  const authenticatedFallbackAttempted = ytDlpAttempts.failures.some((attempt) => attempt.useCookies);
+  if (ytDlpAttempts.result) {
+    return {
+      ...ytDlpAttempts.result,
+      ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
+    };
   }
 
   try {
@@ -200,7 +181,9 @@ async function downloadMedia(url, options = {}) {
       throw signal.reason || galleryError;
     }
     errors.push(galleryError);
-    if (cookiesAvailable) authFailure ||= classifyAuthenticatedProviderFailure(galleryError, { authenticatedRequest: true });
+    if (authenticatedFallbackAttempted) {
+      authFailure ||= classifyAuthenticatedProviderFailure(galleryError, { authenticatedRequest: true });
+    }
     await fs.rm(jobDir, { recursive: true, force: true });
     await fs.mkdir(jobDir, { recursive: true });
     try {
@@ -235,6 +218,40 @@ async function downloadMedia(url, options = {}) {
     }
     throw failure;
   }
+}
+
+async function runInstagramYtDlpAttempts(url, jobDir, options = {}) {
+  const signal = options.signal;
+  const cookiePath = process.env.INSTAGRAM_COOKIES || path.resolve(__dirname, "../../instagram-cookies.txt");
+  const download = options.download || downloadWithYtDlp;
+  const failures = [];
+
+  // Public retrieval is always first. Only inspect/use the cookie file after
+  // that request fails, so successful public posts never touch the session.
+  for (const useCookies of [false, true]) {
+    if (useCookies) {
+      try {
+        await fs.access(cookiePath);
+      } catch {
+        break;
+      }
+    }
+
+    try {
+      return {
+        result: await download(url, jobDir, { useCookies, signal }),
+        failures,
+      };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      failures.push({ error, useCookies });
+      console.warn(`Instagram yt-dlp ${useCookies ? "cookie fallback" : "public"} attempt failed.`);
+      await fs.rm(jobDir, { recursive: true, force: true });
+      await fs.mkdir(jobDir, { recursive: true });
+    }
+  }
+
+  return { result: null, failures };
 }
 
 /**
@@ -507,5 +524,5 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
 module.exports = {
   downloadMedia,
   probeFile,
-  shouldRetryInstagramYtDlpWithoutCookies,
+  runInstagramYtDlpAttempts,
 };
