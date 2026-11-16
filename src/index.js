@@ -63,7 +63,7 @@ const {
   startBirthdayScheduler,
 } = require("./services/birthdayService");
 const {
-  scheduleMemberCountRefresh,
+  scheduleMemberCountRoleRefresh,
   observeMembershipChange,
   startMemberCountScheduler,
 } = require("./services/memberCountService");
@@ -364,9 +364,7 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
     );
   }
 
-  if (!newMember.user.bot) {
-    scheduleMemberCountRefresh(newMember.guild);
-  }
+  scheduleMemberCountRoleRefresh(oldMember, newMember);
 });
 
 client.on("messageCreate", async (message) => {

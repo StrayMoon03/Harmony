@@ -796,7 +796,7 @@ function hasActiveMemberCountNavigation(interaction) {
 
 function memberCountManagerPayload(guild, notice = null) {
   const settings = memberCountStore.getMemberCountSettings(guild.id);
-  const { stayRoleId, adminRoleId, moderatorRoleId, excludeStaff } = memberCountService.getMemberCountRoles(guild);
+  const { stayRoleId, adminRoleId, moderatorRoleId } = memberCountService.getMemberCountRoles(guild);
   const role = (id) => id ? `<@&${id}>` : "Not configured";
   const channel = (id) => id ? `<#${id}>` : "Not configured";
   const enabled = Boolean(settings?.enabled);
@@ -805,7 +805,6 @@ function memberCountManagerPayload(guild, notice = null) {
     `**STAY Role:** ${stayRoleId ? `${role(stayRoleId)} (Welcome Pass Approved Role)` : "Set the Approved Role in Welcome Pass"}`,
     `**Admin Role:** ${role(adminRoleId)}`,
     `**Moderator Role:** ${role(moderatorRoleId)}`,
-    `**Exclude staff from STAY count:** ${excludeStaff ? "On" : "Off"}`,
     "",
     `**Public SERVER STATS:** ${settings ? (enabled ? "On" : "Off") : "Not configured"}`,
     ...(settings ? [
@@ -819,7 +818,6 @@ function memberCountManagerPayload(guild, notice = null) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-admin").setLabel("Set Admin Role").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-moderator").setLabel("Set Moderator Role").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("harmony-admin-room:members-exclusion").setLabel(excludeStaff ? "Turn Staff Exclusion Off" : "Turn Staff Exclusion On").setStyle(ButtonStyle.Secondary),
     ),
     new ActionRowBuilder().addComponents(
       settings
@@ -1078,14 +1076,15 @@ async function syncLiveCounter(guild, channel, snapshot) {
   const roles = counts.privateCounts;
   const week = memberCountStore.getWeeklyMemberCountActivity(guild.id);
   const payload = pagePayload("👥 YOUTIFUL STAY — LIVE MEMBER COUNT", [
-    `**Total Members:** ${counts.total}`,
-    `**STAY:** ${roles?.stay ?? "—"}`,
-    `**Admins:** ${roles?.admins ?? "—"}`,
-    `**Moderators:** ${roles?.moderators ?? "—"}`,
-    `**No Role:** ${roles?.noRole ?? "—"}`,
-    ...(!roles
-      ? ["", "Configure distinct STAY, Admin, and Moderator roles to show the role counts."]
-      : counts.excludeStaff ? [] : ["", "Role counts can overlap. No Role means none of the three configured roles."]),
+    `**Total Members:** ${roles.total}`,
+    `**STAY:** ${roles.stay ?? "—"}`,
+    `**Bots:** ${roles.bots}`,
+    `**Admins:** ${roles.admins ?? "—"}`,
+    `**Moderators:** ${roles.moderators ?? "—"}`,
+    `**No Role:** ${roles.noRole ?? "—"}`,
+    ...(roles.noRole === null
+      ? ["", "Configure distinct STAY, Admin, and Moderator roles to show staff and No Role counts."]
+      : ["", "STAY includes everyone holding the role, including staff and bots."]),
     "",
     "**This week**",
     `**Joined:** ${week.joined}`,
@@ -1404,12 +1403,6 @@ async function handleAdminRoomInteraction(interaction) {
         console.error("Harmony Admin Room staff role setup failed:", error);
         await interaction.editReply(memberCountManagerPayload(guild, "Harmony couldn’t load or save the staff roles. Try again."));
       }
-      return true;
-    }
-    if (action === "members-exclusion") {
-      memberCountStore.toggleMemberCountStaffExclusion(guild.id);
-      memberCountService.scheduleMemberCountRefresh(guild, 0);
-      await interaction.update(memberCountManagerPayload(guild));
       return true;
     }
     if (action === "members-public-setup") {

@@ -60,7 +60,7 @@ function setMemberCountEnabled(guildId, enabled) {
 
 function getMemberCountAccounting(guildId) {
   return getDb().prepare("SELECT * FROM member_count_accounting WHERE guild_id = ?").get(guildId) ||
-    { admin_role_id: null, moderator_role_id: null, exclude_staff: 1 };
+    { admin_role_id: null, moderator_role_id: null };
 }
 
 function saveMemberCountStaffRole(guildId, kind, roleId) {
@@ -70,14 +70,6 @@ function saveMemberCountStaffRole(guildId, kind, roleId) {
     INSERT INTO member_count_accounting (guild_id, ${column}) VALUES (?, ?)
     ON CONFLICT(guild_id) DO UPDATE SET ${column} = excluded.${column}
   `).run(guildId, roleId);
-}
-
-function toggleMemberCountStaffExclusion(guildId) {
-  return getDb().prepare(`
-    INSERT INTO member_count_accounting (guild_id, exclude_staff) VALUES (?, 0)
-    ON CONFLICT(guild_id) DO UPDATE SET exclude_staff = 1 - exclude_staff
-    RETURNING exclude_staff
-  `).get(guildId).exclude_staff === 1;
 }
 
 const easternDate = new Intl.DateTimeFormat("en-CA", {
@@ -129,7 +121,6 @@ module.exports = {
   getMemberCountSettings,
   getMemberCountAccounting,
   saveMemberCountStaffRole,
-  toggleMemberCountStaffExclusion,
   listEnabledMemberCountSettings,
   saveMemberCountSettings,
   disableMemberCountSettings,
