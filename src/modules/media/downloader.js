@@ -10,6 +10,14 @@ const execFileAsync = promisify(execFile);
 const TEMP_ROOT = path.resolve(__dirname, "../../temp");
 const INSTAGRAM_GALLERY_TIMEOUT_MS = 45000;
 
+function shouldRetryInstagramYtDlpWithoutCookies(error) {
+  const details = [error?.message, error?.stderr, error?.stdout]
+    .filter(Boolean)
+    .map((value) => String(value))
+    .join("\n");
+  return !(/INSTAGRAM_AUDIO_MISSING|\\b429\\b|Too Many Requests/i.test(details));
+}
+
 const IMAGE_EXT = new Set([
   "jpg",
   "jpeg",
@@ -165,12 +173,15 @@ async function downloadMedia(url, options = {}) {
       if (useCookies && cookiesAvailable) {
         authFailure ||= classifyAuthenticatedProviderFailure(error, { authenticatedRequest: true });
       }
-      console.warn(
-        `Instagram yt-dlp ${useCookies ? "cookie" : "public"} attempt failed; ` +
-          `${useCookies ? "retrying without cookies" : "trying gallery-dl"}.`
-      );
+      const shouldSkipPublicRetry = useCookies && !shouldRetryInstagramYtDlpWithoutCookies(error);
+      if (shouldSkipPublicRetry) {
+        console.warn("Skipping Instagram's duplicate unauthenticated yt-dlp retry after an audio or rate-limit failure; continuing with the existing recovery methods.");
+      } else {
+        console.warn("Instagram yt-dlp " + (useCookies ? "cookie" : "public") + " attempt failed; " + (useCookies ? "retrying without cookies" : "trying gallery-dl") + ".");
+      }
       await fs.rm(jobDir, { recursive: true, force: true });
       await fs.mkdir(jobDir, { recursive: true });
+      if (shouldSkipPublicRetry) break;
     }
   }
 
@@ -496,4 +507,5 @@ async function downloadWithGalleryDl(url, jobDir, options = {}) {
 module.exports = {
   downloadMedia,
   probeFile,
+  shouldRetryInstagramYtDlpWithoutCookies,
 };
