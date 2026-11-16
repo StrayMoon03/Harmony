@@ -1,5 +1,6 @@
 const {
   ChannelType,
+  GatewayRateLimitError,
   PermissionFlagsBits,
 } = require("discord.js");
 const roomStore = require("../stores/adminRoomStore");
@@ -13,6 +14,12 @@ const {
 } = require("../stores/memberCountStore");
 
 const refreshTimers = new Map();
+const refreshJobs = new Map();
+const memberRequests = new Map();
+const memberRetries = new Map();
+const lastFullFetch = new WeakMap();
+const FULL_FETCH_COOLDOWN_MS = 30_000;
+const REFRESH_QUEUED_MESSAGE = "Refresh queued because Discord temporarily rate-limited the member-list request. Harmony will retry automatically.";
 const setupJobs = new Map();
 const PUBLIC_COUNTERS = [
   { key: "total_channel_id", name: "👥 Total Members", match: /^(?:👥\s*)?Total Members:\s*(?:\d+|…)$/iu },
@@ -125,11 +132,48 @@ async function configurePublicCounters(guild) {
     noRoleChannelId: noRoleChannel.id,
   });
 
-  const counts = await refreshMemberCounts(guild);
-  return { category, counts, stayRoleId };
+  const { publicCounts: counts, publicError, queued } = await refreshMemberCounts(guild);
+  if (publicError) throw publicError;
+  return { category, counts, stayRoleId, queued };
 }
 
-async function getMemberCounts(guild) {
+function fetchMembers(guild, reconcile) {
+  const retry = memberRetries.get(guild.id);
+  if (retry) throw retry;
+  const pending = memberRequests.get(guild.id);
+  if (pending) return pending;
+
+  const cache = guild.members.cache;
+  const complete = guild.available !== false && Number.isInteger(guild.memberCount) &&
+    cache?.size === guild.memberCount;
+  const recentlyFetched = Date.now() - (lastFullFetch.get(guild) ?? -Infinity) < FULL_FETCH_COOLDOWN_MS;
+  if (complete && (!reconcile || recentlyFetched)) return cache;
+
+  const startedAt = Date.now();
+  const request = guild.members.fetch().then((members) => {
+    lastFullFetch.set(guild, startedAt);
+    return members;
+  }).catch((error) => {
+    const retryAfter = error.data?.retry_after;
+    if (error instanceof GatewayRateLimitError && error.data.opcode === 8 &&
+        Number.isFinite(retryAfter) && retryAfter >= 0) {
+      memberRetries.set(guild.id, error);
+      clearTimeout(refreshTimers.get(guild.id));
+      refreshTimers.delete(guild.id);
+      const timer = setTimeout(() => {
+        memberRetries.delete(guild.id);
+        return runScheduledRefresh(guild, true);
+      }, Math.max(1, Math.ceil(retryAfter * 1000)));
+      timer.unref?.();
+    }
+    throw error;
+  }).finally(() => memberRequests.delete(guild.id));
+  memberRequests.set(guild.id, request);
+  return request;
+}
+
+async function getMemberCounts(guild, { reconcile = false } = {}) {
+  const members = await fetchMembers(guild, reconcile);
   const { stayRoleId, adminRoleId, moderatorRoleId, excludeStaff } = getMemberCountRoles(guild);
   const roles = [adminRoleId, moderatorRoleId, stayRoleId];
   const ready = roles.every(Boolean) && new Set(roles).size === roles.length;
@@ -137,7 +181,6 @@ async function getMemberCounts(guild) {
 
   let total = 0;
   let stayHolders = 0;
-  const members = await guild.members.fetch();
   for (const member of members.values()) {
     if (member.user.bot) continue;
     total++;
@@ -161,15 +204,41 @@ async function getMemberCounts(guild) {
   };
 }
 
-async function refreshMemberCounts(guild) {
+function refreshMemberCounts(guild, { reconcile = true } = {}) {
+  if (memberRetries.has(guild.id)) return Promise.resolve({ queued: true });
+  if (!refreshJobs.has(guild.id)) {
+    const job = updateMemberCounts(guild, reconcile).finally(() => refreshJobs.delete(guild.id));
+    refreshJobs.set(guild.id, job);
+  }
+  return refreshJobs.get(guild.id);
+}
+
+async function updateMemberCounts(guild, reconcile) {
+  if (!getMemberCountSettings(guild.id)?.enabled && !roomStore.getPanel(guild.id)?.enabled) return {};
+  let snapshot;
+  try {
+    snapshot = await getMemberCounts(guild, { reconcile });
+  } catch (error) {
+    if (memberRetries.get(guild.id) === error) return { queued: true };
+    throw error;
+  }
+
   const settings = getMemberCountSettings(guild.id);
   const panel = roomStore.getPanel(guild.id);
-  if (!settings?.enabled && !panel?.enabled) return null;
-  // Resolve lazily because the Admin Room also uses this service for its Member Counts controls.
-  const snapshot = panel?.enabled
-    ? await require("./adminRoomService").refreshMemberCountDisplay(guild)
-    : await getMemberCounts(guild);
-  if (!settings?.enabled) return null;
+  const [privateResult, publicResult] = await Promise.allSettled([
+    // Resolve lazily because the Admin Room also uses this service.
+    panel?.enabled ? require("./adminRoomService").refreshMemberCountDisplay(guild, snapshot) : null,
+    settings?.enabled ? refreshPublicCounters(guild, settings, snapshot) : null,
+  ]);
+  return {
+    privateRefreshed: privateResult.value === true,
+    privateError: privateResult.reason,
+    publicCounts: publicResult.value,
+    publicError: publicResult.reason,
+  };
+}
+
+async function refreshPublicCounters(guild, settings, snapshot) {
   const { total, publicStay: stay, publicNoStay: noRole } = snapshot;
   const counts = { total, stay, noRole };
   const channels = await Promise.all([
@@ -206,16 +275,25 @@ function observeMembershipChange(member, kind, now = new Date()) {
   scheduleMemberCountRefresh(member.guild);
 }
 
-function scheduleMemberCountRefresh(guild, delayMs = 2500) {
+async function runScheduledRefresh(guild, reconcile) {
+  try {
+    // An event may have arrived after the active refresh took its snapshot.
+    await refreshJobs.get(guild.id)?.catch(() => {});
+    const result = await refreshMemberCounts(guild, { reconcile });
+    if (result.privateError) console.error(`Could not refresh private member counts in ${guild.name}:`, result.privateError);
+    if (result.publicError) console.error(`Could not refresh public SERVER STATS in ${guild.name}:`, result.publicError);
+  } catch (error) {
+    console.error(`Could not refresh member counts in ${guild.name}:`, error);
+  }
+}
+
+function scheduleMemberCountRefresh(guild, delayMs = 2500, { reconcile = false } = {}) {
+  if (memberRetries.has(guild.id)) return;
   const existing = refreshTimers.get(guild.id);
   if (existing) clearTimeout(existing);
-  const timer = setTimeout(async () => {
+  const timer = setTimeout(() => {
     refreshTimers.delete(guild.id);
-    try {
-      await refreshMemberCounts(guild);
-    } catch (error) {
-      console.error(`Could not refresh member counts in ${guild.name}:`, error);
-    }
+    return runScheduledRefresh(guild, reconcile);
   }, delayMs);
   timer.unref?.();
   refreshTimers.set(guild.id, timer);
@@ -229,7 +307,7 @@ async function refreshAllMemberCounts(client) {
   for (const guildId of guildIds) {
     const guild = client.guilds.cache.get(guildId) ||
       (await client.guilds.fetch(guildId).catch(() => null));
-    if (guild) scheduleMemberCountRefresh(guild, 0);
+    if (guild) scheduleMemberCountRefresh(guild, 0, { reconcile: true });
   }
 }
 
@@ -247,6 +325,7 @@ function startMemberCountScheduler(client) {
 }
 
 module.exports = {
+  REFRESH_QUEUED_MESSAGE,
   setupMemberCounts,
   getMemberCounts,
   getMemberCountRoles,
