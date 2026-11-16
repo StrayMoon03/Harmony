@@ -1109,10 +1109,11 @@ async function syncAdminRoom(guild, panel, { snapshot, refreshPanel = true, chan
   try {
     counter = await syncLiveCounter(guild, channel, snapshot);
   } catch (error) {
+    if (!refreshPanel) throw error;
     counterFailed = true;
     console.warn("Harmony Admin Room live member count is unavailable:", error.message);
   }
-  if (!refreshPanel && !counter) return counterFailed;
+  if (!refreshPanel && !counter) throw new Error("The Admin Room must be private to display member counts.");
 
   if (!refreshPanel && BigInt(panel.message_id) > BigInt(counter.id)) return counterFailed;
 
@@ -1130,16 +1131,12 @@ async function syncAdminRoom(guild, panel, { snapshot, refreshPanel = true, chan
   return counterFailed;
 }
 
-function refreshMemberCountDisplay(guild) {
+function refreshMemberCountDisplay(guild, snapshot) {
   return withAdminRoomLock(guild.id, async () => {
-    const snapshot = await memberCountService.getMemberCounts(guild);
     const panel = roomStore.getPanel(guild.id);
-    if (panel?.enabled) {
-      await syncAdminRoom(guild, panel, { snapshot, refreshPanel: false }).catch((error) => {
-        console.warn("Harmony Admin Room live member count refresh failed:", error.message);
-      });
-    }
-    return snapshot;
+    if (!panel?.enabled) throw new Error("The Admin Room is disabled.");
+    await syncAdminRoom(guild, panel, { snapshot, refreshPanel: false });
+    return true;
   });
 }
 
@@ -1444,11 +1441,17 @@ async function handleAdminRoomInteraction(interaction) {
       }
       await interaction.deferUpdate();
       try {
-        await memberCountService.refreshMemberCounts(guild);
-        await interaction.editReply(memberCountManagerPayload(guild, "Member counts refresh completed."));
+        const result = await memberCountService.refreshMemberCounts(guild);
+        const notice = result.queued ? memberCountService.REFRESH_QUEUED_MESSAGE : [
+          result.privateRefreshed
+            ? "Private member counts refreshed."
+            : `Private refresh failed: ${result.privateError?.message || "The Admin Room is unavailable."}`,
+          result.publicError && `Public SERVER STATS refresh failed: ${result.publicError.message}`,
+        ].filter(Boolean).join("\n");
+        await interaction.editReply(memberCountManagerPayload(guild, notice));
       } catch (error) {
         console.error("Harmony Admin Room member-count refresh failed:", error);
-        await interaction.editReply(memberCountManagerPayload(guild, "The counts refresh could not complete. Check Harmony’s permissions and the saved counter channels."));
+        await interaction.editReply(memberCountManagerPayload(guild, `Private refresh failed: ${error.message}`));
       }
       return true;
     }

@@ -8,6 +8,7 @@ const {
   disableMemberCountSettings,
 } = require("../stores/memberCountStore");
 const {
+  REFRESH_QUEUED_MESSAGE,
   setupMemberCounts,
   getMemberCountRoles,
   refreshMemberCounts,
@@ -47,14 +48,16 @@ async function execute(interaction) {
         await interaction.editReply("Set the Approved Role in Welcome Pass before setting up SERVER STATS.");
         return;
       }
-      const { category, counts, stayRoleId } = await setupMemberCounts(interaction.guild);
+      const { category, counts, stayRoleId, queued } = await setupMemberCounts(interaction.guild);
       await interaction.editReply([
         "📊 **Harmony’s live member counts are ready!**",
         `Category: **${category.name}**`,
         `Counting as approved: <@&${stayRoleId}>`,
-        `Total members: **${counts.total}**`,
-        `Stay role: **${counts.stay}**`,
-        `No Stay role: **${counts.noRole}**`,
+        ...(counts ? [
+          `Total members: **${counts.total}**`,
+          `Stay role: **${counts.stay}**`,
+          `No Stay role: **${counts.noRole}**`,
+        ] : queued ? [REFRESH_QUEUED_MESSAGE] : []),
         "",
         "Harmony will update these when someone joins, leaves, or gains or loses the Stay role.",
       ].join("\n"));
@@ -70,7 +73,11 @@ async function execute(interaction) {
     }
 
     if (action === "refresh") {
-      const counts = await refreshMemberCounts(interaction.guild);
+      const { queued, publicCounts: counts, publicError } = await refreshMemberCounts(interaction.guild);
+      if (queued || publicError) {
+        await interaction.editReply(queued ? REFRESH_QUEUED_MESSAGE : `Public SERVER STATS refresh failed: ${publicError.message}`);
+        return;
+      }
       const description = !counts
         ? "Automatic SERVER STATS updates are off."
         : counts.stay === null
