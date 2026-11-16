@@ -85,7 +85,7 @@ async function routedDownload(url, expected) {
   const commandOptions = [];
   const module = { exports: {} };
   const sandboxRequire = name => {
-    if (name === "node:util") return { promisify: () => async (...args) => { commandOptions.push(args[2]); throw new Error("simulated downloader failure"); } };
+    if (name === "node:util") return { promisify: () => async (...args) => { commandOptions.push({ args: args[1], options: args[2] }); throw new Error("simulated downloader failure"); } };
     if (name === "./instagramReelFallback") return { downloadInstagramReel: async (_url, _jobDir, options) => { routes.push("reel"); receivedSignal = options.signal; return { files: ["owned.mp4"] }; } };
     if (name === "./instagramPhotoFallback") return { downloadInstagramPhotos: async (_url, _jobDir, options) => { routes.push("photo"); receivedSignal = options.signal; return { files: ["owned.jpg"] }; } };
     return require(name);
@@ -96,8 +96,10 @@ async function routedDownload(url, expected) {
     assert.deepEqual(routes, [expected]);
     assert.equal(result.files.length, 1);
     assert.equal(receivedSignal, controller.signal);
-    assert.deepEqual(commandOptions.map(options => options.timeout), [120000, 120000, 45000]);
-    assert.ok(commandOptions.every(options => options.signal === controller.signal));
+    assert.deepEqual(commandOptions.map(item => item.options.timeout), [120000, 45000]);
+    assert.ok(commandOptions.every(item => item.options.signal === controller.signal));
+    assert.ok(commandOptions[0].args.includes("--no-playlist"));
+    assert.ok(!commandOptions[0].args.includes("--cookies"));
   }
   finally { await fs.rm(result.rawDir, { recursive: true, force: true }); }
 }
