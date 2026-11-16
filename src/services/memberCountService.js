@@ -13,6 +13,12 @@ const {
 } = require("../stores/memberCountStore");
 
 const refreshTimers = new Map();
+const setupJobs = new Map();
+const PUBLIC_COUNTERS = [
+  { key: "total_channel_id", name: "👥 Total Members", match: /^(?:👥\s*)?Total Members:\s*(?:\d+|…)$/iu },
+  { key: "stay_channel_id", name: "💜 Stay Role", match: /^(?:💜\s*)?Stay Role:\s*(?:\d+|…)$/iu },
+  { key: "no_role_channel_id", name: "⚠️ No Stay Role", match: /^(?:⚠️?\s*)?No Stay Role:\s*(?:\d+|…)$/iu },
+];
 let periodicTimer = null;
 
 async function fetchChannel(guild, channelId) {
@@ -51,28 +57,55 @@ function getMemberCountRoles(guild) {
   };
 }
 
-async function setupMemberCounts(guild) {
+function setupMemberCounts(guild) {
+  if (!setupJobs.has(guild.id)) {
+    const setup = configurePublicCounters(guild).finally(() => setupJobs.delete(guild.id));
+    setupJobs.set(guild.id, setup);
+  }
+  return setupJobs.get(guild.id);
+}
+
+function ambiguousPublicCounters() {
+  return Object.assign(new Error("Harmony found ambiguous SERVER STATS channels. Setup stopped before creating counters."), {
+    code: "AMBIGUOUS_SERVER_STATS",
+  });
+}
+
+async function configurePublicCounters(guild) {
   const { stayRoleId } = getMemberCountRoles(guild);
   if (!stayRoleId) throw new Error("Set the Approved Role in Welcome Pass before setting up SERVER STATS.");
   const current = getMemberCountSettings(guild.id);
-  let category = await fetchChannel(guild, current?.category_id);
-  if (!category || category.type !== ChannelType.GuildCategory) {
-    category = await guild.channels.create({
-      name: "📊 SERVER STATS",
-      type: ChannelType.GuildCategory,
-      reason: "Harmony live member counts",
-    });
+  const savedCategory = await fetchChannel(guild, current?.category_id);
+  const available = [...(await guild.channels.fetch()).values()].filter(Boolean);
+  const matchingCategories = available.filter((channel) =>
+    channel.type === ChannelType.GuildCategory && /^(?:📊\s*)?SERVER STATS$/iu.test(channel.name.trim()));
+  if (savedCategory?.type !== ChannelType.GuildCategory && matchingCategories.length > 1) {
+    throw ambiguousPublicCounters();
   }
-
-  const totalChannel =
-    await fetchChannel(guild, current?.total_channel_id) ||
-    await createCounterChannel(guild, category, "👥 Total Members: …");
-  const stayChannel =
-    await fetchChannel(guild, current?.stay_channel_id) ||
-    await createCounterChannel(guild, category, "💜 Stay Role: …");
-  const noRoleChannel =
-    await fetchChannel(guild, current?.no_role_channel_id) ||
-    await createCounterChannel(guild, category, "⚠️ No Stay Role: …");
+  let category = savedCategory?.type === ChannelType.GuildCategory ? savedCategory : matchingCategories[0];
+  const children = category ? available.filter((channel) =>
+    channel.type === ChannelType.GuildVoice && channel.parentId === category.id
+  ) : [];
+  const counters = await Promise.all(PUBLIC_COUNTERS.map(async (counter) => {
+    const saved = await fetchChannel(guild, current?.[counter.key]);
+    if (saved?.type === ChannelType.GuildVoice) return saved;
+    const matches = children.filter((channel) => counter.match.test(channel.name.trim()));
+    if (matches.length > 1) throw ambiguousPublicCounters();
+    return matches[0];
+  }));
+  if (category && category.id !== savedCategory?.id && counters.some((channel) => !channel) &&
+      children.some((channel) => !PUBLIC_COUNTERS.some((counter) => counter.match.test(channel.name.trim())))) {
+    throw ambiguousPublicCounters();
+  }
+  category ||= await guild.channels.create({
+    name: "📊 SERVER STATS",
+    type: ChannelType.GuildCategory,
+    reason: "Harmony live member counts",
+  });
+  for (const [index, counter] of PUBLIC_COUNTERS.entries()) {
+    counters[index] ||= await createCounterChannel(guild, category, `${counter.name}: …`);
+  }
+  const [totalChannel, stayChannel, noRoleChannel] = counters;
 
   for (const channel of [totalChannel, stayChannel, noRoleChannel]) {
     if (channel.parentId !== category.id) {

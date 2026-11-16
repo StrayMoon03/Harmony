@@ -38,10 +38,10 @@ function createGuild(guildId = "admin-room-guild") {
       me: { id: "bot-id", permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } },
       fetch: async () => new Map(),
     },
-    roles: { cache: rolesById, everyone: { id: guildId }, fetch: async (id) => rolesById.get(id) || null },
+    roles: { cache: rolesById, everyone: { id: guildId }, fetch: async (id) => id ? rolesById.get(id) || null : new Map(rolesById) },
     channels: {
       cache: channelsById,
-      fetch: async (id) => channelsById.get(id) || null,
+      fetch: async (id) => id ? channelsById.get(id) || null : new Map(channelsById),
       create: async (options) => {
         const channel = addChannel(`created-${channelsById.size + 1}`);
         channel.name = options.name;
@@ -436,26 +436,57 @@ test("Member Counts configures one Admin and Moderator role and persists the exc
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const { guild, addChannel, addRole } = createGuild("member-count-staff-setup");
   const stay = addRole("approved", "STAY");
-  const admin = addRole("staff-admin", "Admin");
-  const moderator = addRole("staff-mod", "Moderator");
+  const admin = addRole("staff-admin", "Z Admin", { position: 100, editable: false });
+  const moderator = addRole("staff-mod", "Z Moderator", { position: 99, editable: false });
+  const everyone = addRole(guild.id, "@everyone");
+  const bias = addRole("mapped-skzoo", "Quokka");
+  const managed = addRole("managed-role", "External", { managed: true });
+  const harmony = addRole("harmony-role", "Harmony", { tags: { botId: guild.members.me.id } });
+  const otherBot = addRole("other-bot", "Other Bot", { tags: { botId: "another-bot" } });
+  const integration = addRole("integration", "Integration", { tags: { integrationId: "service-id" } });
+  for (let index = 0; index < 30; index++) addRole(`regular-${index}`, `Community Role ${index}`);
+  welcomePassStore.setWelcomePassBiasRole(guild.id, "Han", bias.id);
+  let fullFetches = 0;
+  const fetchRoles = guild.roles.fetch;
+  guild.roles.fetch = async (id) => {
+    assert.equal(id, undefined, "Harmony fetches the whole guild role list");
+    fullFetches++;
+    return fetchRoles();
+  };
+  guild.members.me.roles.highest.comparePositionTo = () => -1;
+  guild.members.me.permissions.has = () => false;
   saveApprovedRole(guild, stay);
   await openMemberCounts(guild, addChannel("controls"));
 
+  const excludedIds = [everyone, stay, bias, managed, harmony, otherBot, integration].map(({ id }) => id);
   for (const [kind, role] of [["admin", admin], ["moderator", moderator]]) {
-    const pick = await useMemberCounts(guild, `pick-${kind}`);
-    const select = pick.response.components[0].components[0].toJSON();
-    assert.equal(select.type, 6);
+    const first = await useMemberCounts(guild, `pick-${kind}`);
+    const select = first.response.components[0].components[0].toJSON();
+    assert.equal(select.type, 3);
     assert.equal(select.custom_id, `harmony-admin-room:members-save-${kind}`);
     assert.equal(select.min_values, 1);
     assert.equal(select.max_values, 1);
+    assert.equal(select.options.length, 25);
+    assert.match(first.response.embeds[0].data.description, /Page 1 of 2/);
+    assert.ok(!select.options.some(({ value }) => value === role.id));
+
+    const next = first.response.components[1].components.find(({ data }) => data.label === "Next");
+    const second = await useMemberCounts(guild, next.data.custom_id.split(":").slice(1).join(":").replace(/^members-/, ""));
+    assert.match(second.response.embeds[0].data.description, /Page 2 of 2/);
+    const options = [...select.options, ...second.response.components[0].components[0].toJSON().options];
+    assert.equal(options.length, kind === "admin" ? 32 : 31);
+    assert.ok(options.some(({ value }) => value === role.id), "staff above Harmony are selectable on later pages");
+    assert.ok(options.every(({ value }) => !excludedIds.includes(value)));
+    if (kind === "moderator") assert.ok(options.every(({ value }) => value !== admin.id));
 
     const saved = await useMemberCounts(guild, `save-${kind}`, { values: [role.id] });
     assert.match(saved.response.embeds[0].data.description, new RegExp(`<@&${role.id}>`));
   }
-  for (const invalidRole of [guild.id, stay.id, moderator.id]) {
+  for (const invalidRole of [...excludedIds, moderator.id]) {
     const denied = await useMemberCounts(guild, "save-admin", { values: [invalidRole] });
-    assert.match(denied.response.content, /other than @everyone|distinct role/);
+    assert.match(denied.response.embeds[0].data.description, /no longer an eligible choice/);
   }
+  assert.ok(fullFetches >= 6);
   assert.equal(memberCountStore.getMemberCountAccounting(guild.id).exclude_staff, 1);
   const exclusion = await useMemberCounts(guild, "exclusion");
   assert.match(exclusion.response.embeds[0].data.description, /Exclude staff from STAY count:\*\* Off/);
@@ -469,6 +500,22 @@ test("Member Counts configures one Admin and Moderator role and persists the exc
   assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
   t.mock.timers.tick(0);
   await new Promise(setImmediate);
+});
+
+test("Member Counts refresh gives setup guidance until both staff roles exist", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-incomplete-refresh");
+  saveApprovedRole(guild, addRole("approved", "STAY"));
+  const admin = addRole("staff-admin", "Admin");
+  guild.members.fetch = async () => assert.fail("incomplete setup should not trigger a counts refresh");
+  await openMemberCounts(guild, addChannel("controls"));
+
+  for (const onlyAdmin of [false, true]) {
+    if (onlyAdmin) memberCountStore.saveMemberCountStaffRole(guild.id, "admin", admin.id);
+    const refresh = await useMemberCounts(guild, "refresh");
+    const description = refresh.response.embeds[0].data.description;
+    assert.match(description, /Complete Member Counts setup by selecting distinct Admin and Moderator roles/);
+    assert.doesNotMatch(description, /permissions|could not complete/);
+  }
 });
 
 test("Member Counts public setup uses Welcome Pass and refreshes existing voice channels in place", async () => {
@@ -494,10 +541,49 @@ test("Member Counts public setup uses Welcome Pass and refreshes existing voice 
   assert.deepEqual(names(), ["👥 Total Members: 3", "💜 Stay Role: 2", "⚠️ No Stay Role: 1"]);
 
   saveApprovedRole(guild, legacy);
+  memberCountStore.saveMemberCountStaffRole(guild.id, "admin", addRole("staff-admin", "Admin").id);
+  memberCountStore.saveMemberCountStaffRole(guild.id, "moderator", addRole("staff-mod", "Moderator").id);
   await useMemberCounts(guild, "refresh");
   assert.deepEqual(names(), ["👥 Total Members: 3", "💜 Stay Role: 1", "⚠️ No Stay Role: 2"]);
   assert.equal(guild.channels.cache.size, 5);
   assert.deepEqual(memberCountStore.getMemberCountSettings(guild.id), saved);
+});
+
+test("Member Counts public setup reuses intact untracked counters and shares concurrent setup", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-reuse-public");
+  saveApprovedRole(guild, addRole("stay", "STAY"));
+  const category = addChannel("existing-stats");
+  category.type = ChannelType.GuildCategory;
+  category.name = "📊 SERVER STATS";
+  const channels = ["👥 Total Members: 430", "💜 Stay Role: 421", "⚠️ No Stay Role: 9"].map((name, index) => {
+    const channel = addChannel(`existing-voice-${index}`);
+    channel.name = name;
+    channel.type = ChannelType.GuildVoice;
+    channel.parentId = category.id;
+    return channel;
+  });
+  guild.channels.create = async () => assert.fail("existing counters should be reused");
+  const before = guild.channels.cache.size;
+  await Promise.all([countsService.setupMemberCounts(guild), countsService.setupMemberCounts(guild)]);
+  assert.equal(guild.channels.cache.size, before);
+  const saved = memberCountStore.getMemberCountSettings(guild.id);
+  assert.equal(saved.category_id, category.id);
+  assert.deepEqual([saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map(({ id }) => id));
+  await countsService.setupMemberCounts(guild);
+  assert.equal(guild.channels.cache.size, before);
+});
+
+test("Member Counts public setup stops before creating channels when existing stats are ambiguous", async () => {
+  const { guild, addChannel, addRole } = createGuild("member-count-ambiguous-public");
+  saveApprovedRole(guild, addRole("stay", "STAY"));
+  for (const id of ["stats-a", "stats-b"]) {
+    const category = addChannel(id);
+    category.type = ChannelType.GuildCategory;
+    category.name = "📊 SERVER STATS";
+  }
+  guild.channels.create = async () => assert.fail("ambiguous server stats cannot be replaced automatically");
+  await assert.rejects(countsService.setupMemberCounts(guild), { code: "AMBIGUOUS_SERVER_STATS" });
+  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
 });
 
 test("Member Counts On/Off preserves setup and re-enables saved counters without recreation", async () => {
