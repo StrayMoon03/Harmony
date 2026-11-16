@@ -308,6 +308,35 @@ function migrate(database) {
       updated_at         TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS member_count_activity (
+      id          INTEGER PRIMARY KEY,
+      guild_id    TEXT NOT NULL,
+      week_key    TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      kind        TEXT NOT NULL CHECK (kind IN ('join', 'leave'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_member_count_activity_week
+      ON member_count_activity (guild_id, week_key);
+
+    CREATE TABLE IF NOT EXISTS member_count_week_seeds (
+      guild_id TEXT NOT NULL,
+      week_key TEXT NOT NULL,
+      joined   INTEGER NOT NULL,
+      left     INTEGER NOT NULL,
+      PRIMARY KEY (guild_id, week_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS admin_room_message_deliveries (
+      guild_id   TEXT NOT NULL,
+      kind       TEXT NOT NULL CHECK (kind IN ('counter', 'panel')),
+      channel_id TEXT NOT NULL,
+      token      TEXT NOT NULL,
+      after_message_id TEXT,
+      message_id TEXT,
+      PRIMARY KEY (guild_id, kind)
+    );
+
     CREATE TABLE IF NOT EXISTS birthday_settings (
       guild_id                TEXT PRIMARY KEY,
       channel_id              TEXT NOT NULL,
