@@ -60,9 +60,42 @@ class DiagnosticsTests(unittest.TestCase):
         signals = {}
         browser.record_diagnostic_signals({"other": {"code": "OTHER", "media_type": 2},
                                           "root": {"code": "EXACT", "media_type": 1}}, "EXACT", signals)
-        self.assertEqual(signals, {"exactRecordSeen": True})
+        self.assertEqual(signals, {"exactRecordSeen": True, "exactRecordMediaTypeSeen": True})
         browser.record_diagnostic_signals({"code": "EXACT", "media_type": 2}, "EXACT", signals)
         self.assertTrue(signals["rootVideoDeclared"])
+
+    def test_text_only_record_is_flagged(self):
+        signals = {}
+        browser.record_diagnostic_signals({"code": "EXACT", "media_type": 19,
+                                           "image_versions2": {"candidates": []}}, "EXACT", signals)
+        self.assertTrue(signals["exactRecordMediaTypeSeen"])
+        self.assertTrue(signals["exactRecordTextOnly"])
+        safe = self.collect(Page({}), signals)
+        self.assertTrue(safe["exactRecordTextOnly"])
+        self.assertNotIn("_textOnlyRecord", safe)
+
+    def test_bare_stub_is_not_text_only(self):
+        signals = {}
+        browser.record_diagnostic_signals({"code": "EXACT", "pk": "1"}, "EXACT", signals)
+        self.assertTrue(signals["exactRecordSeen"])
+        self.assertFalse(signals.get("exactRecordMediaTypeSeen"))
+        self.assertFalse(signals.get("exactRecordTextOnly"))
+
+    def test_text_post_with_media_is_not_text_only(self):
+        for record in (
+            {"code": "EXACT", "media_type": 19,
+             "text_post_app_info": {"linked_inline_media": {"media_type": 1}}},
+            {"code": "EXACT", "media_type": 19,
+             "text_post_app_info": {"share_info": {"quoted_post": {"code": "Q", "media_type": 2}}}},
+        ):
+            signals = {}
+            browser.record_diagnostic_signals(record, "EXACT", signals)
+            self.assertFalse(signals.get("exactRecordTextOnly"), record)
+        signals = {}
+        browser.record_diagnostic_signals({"code": "EXACT", "media_type": 2,
+                                           "video_versions": [{"url": "u"}]}, "EXACT", signals)
+        browser.record_diagnostic_signals({"code": "EXACT", "media_type": 19}, "EXACT", signals)
+        self.assertFalse(signals.get("exactRecordTextOnly"))
 
     def test_sibling_same_code_is_not_reported_as_nested(self):
         payload = [{"code": "EXACT"}, {"shortcode": "EXACT", "media_type": 2,
@@ -164,7 +197,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(browser.exact_post_media_from_json(payload, "EXACT"), [])
         signals = {}
         browser.record_diagnostic_signals(payload, "EXACT", signals)
-        self.assertEqual(signals, {"exactRecordSeen": True})
+        self.assertEqual(signals, {"exactRecordSeen": True, "exactRecordMediaTypeSeen": True})
 
     def test_quoted_foreign_code_is_not_treated_as_root_video(self):
         payload = {"code": "EXACT", "text_post_app_info": {"share_info": {
