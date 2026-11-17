@@ -514,7 +514,13 @@ function welcomePassPage(guild, userId, notice = null) {
   return pagePayload("🎟️ Welcome Pass Manager", description, components);
 }
 
-function welcomeBiasRolePage(guildId, selectedBias = null, notice = null) {
+const WELCOME_BIAS_ROLE_PAGE_SIZE = 25;
+
+function isAssignableBiasRole(role) {
+  return role.editable === true && !role.managed && !role.tags?.botId && !role.tags?.integrationId;
+}
+
+function welcomeBiasRolePage(guildId, selectedBias = null, notice = null, roles = [], requestedPage = 0) {
   const mappings = welcomePassStore.listWelcomePassBiasRoles(guildId);
   const description = [
     notice,
@@ -524,22 +530,56 @@ function welcomeBiasRolePage(guildId, selectedBias = null, notice = null) {
       return `**${bias}:** ${mapping ? `<@&${mapping.role_id}>` : "Not mapped"}`;
     }),
     "Existing members are not changed until you run the explicit reconciliation below.",
-  ].filter(Boolean).join("\n");
+  ];
   const components = [new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder().setCustomId("harmony-admin-room:welcome-bias-role-bias")
       .setPlaceholder("Choose a bias role to configure")
       .addOptions(BIAS_ROLE_KEYS.map((bias) => ({ label: bias, value: bias, default: bias === selectedBias }))),
   )];
   if (selectedBias) {
-    components.push(new ActionRowBuilder().addComponents(
-      new RoleSelectMenuBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-value:${encodeURIComponent(selectedBias)}`)
-        .setPlaceholder(`Choose the ${selectedBias} role`).setMinValues(1).setMaxValues(1),
-    ));
-    components.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-clear:${encodeURIComponent(selectedBias)}`)
-        .setLabel(`Clear ${selectedBias} Mapping`).setStyle(ButtonStyle.Danger)
-        .setDisabled(!mappings.some((row) => row.bias === selectedBias)),
-    ));
+    const biasKey = encodeURIComponent(selectedBias);
+    const currentRoleId = mappings.find((row) => row.bias === selectedBias)?.role_id;
+    const eligibleRoles = [...roles.values()]
+      .filter((role) => role.id !== guildId && isAssignableBiasRole(role))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    const pageCount = Math.max(1, Math.ceil(eligibleRoles.length / WELCOME_BIAS_ROLE_PAGE_SIZE));
+    const page = Math.min(Math.max(Number.parseInt(requestedPage, 10) || 0, 0), pageCount - 1);
+    const start = page * WELCOME_BIAS_ROLE_PAGE_SIZE;
+    const current = eligibleRoles.slice(start, start + WELCOME_BIAS_ROLE_PAGE_SIZE);
+    if (current.length) {
+      description.push(`Role choices · Page ${page + 1} of ${pageCount}`);
+      components.push(new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-value:${biasKey}:${page}`)
+          .setPlaceholder(`Choose the ${selectedBias} role`).setMinValues(1).setMaxValues(1)
+          .addOptions(current.map((role, index) => {
+            const position = start + index;
+            const duplicateName = eligibleRoles[position - 1]?.name === role.name ||
+              eligibleRoles[position + 1]?.name === role.name;
+            return {
+              label: role.name,
+              value: role.id,
+              default: role.id === currentRoleId,
+              ...(duplicateName ? { description: `Role ID ${role.id}` } : {}),
+            };
+          })),
+      ));
+    } else {
+      description.push("Harmony found no assignable server roles.");
+    }
+
+    const controls = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-clear:${biasKey}`)
+        .setLabel(`Clear ${selectedBias} Mapping`).setStyle(ButtonStyle.Danger).setDisabled(!currentRoleId),
+    );
+    if (pageCount > 1) {
+      controls.addComponents(
+        new ButtonBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-page:${biasKey}:${page - 1}`)
+          .setLabel("Previous").setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+        new ButtonBuilder().setCustomId(`harmony-admin-room:welcome-bias-role-page:${biasKey}:${page + 1}`)
+          .setLabel("Next").setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1),
+      );
+    }
+    components.push(controls);
   }
   components.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome-bias-reconcile").setLabel("Reconcile Existing Members").setStyle(ButtonStyle.Primary),
@@ -547,7 +587,7 @@ function welcomeBiasRolePage(guildId, selectedBias = null, notice = null) {
   components.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-admin-room:welcome:ephemeral").setLabel("Back to Welcome Pass").setStyle(ButtonStyle.Secondary),
   ));
-  return pagePayload("Welcome Pass · Member Bias Roles", description, components);
+  return pagePayload("Welcome Pass · Member Bias Roles", description.filter(Boolean).join("\n"), components);
 }
 
 function welcomeBiasReconcileConfirmPage() {
@@ -1679,33 +1719,42 @@ async function handleAdminRoomInteraction(interaction) {
     await interaction.update(welcomeBiasRolePage(interaction.guildId));
     return true;
   }
-  if (action === "welcome-bias-role-bias" && interaction.isStringSelectMenu?.()) {
-    const selectedBias = interaction.values?.[0];
+  const selectingBias = action === "welcome-bias-role-bias" && interaction.isStringSelectMenu?.();
+  const savingBiasRole = action === "welcome-bias-role-value" && interaction.isStringSelectMenu?.();
+  if (selectingBias || savingBiasRole || action === "welcome-bias-role-page") {
+    const selectedBias = selectingBias ? interaction.values?.[0] : decodeURIComponent(parameter || "");
     if (!BIAS_ROLE_KEYS.includes(selectedBias)) {
       await interaction.reply({ content: "Choose one of the supported member biases.", flags: MessageFlags.Ephemeral });
       return true;
     }
-    await interaction.update(welcomeBiasRolePage(interaction.guildId, selectedBias));
-    return true;
-  }
-  if (action === "welcome-bias-role-value" && interaction.isRoleSelectMenu?.()) {
-    const selectedBias = decodeURIComponent(parameter || "");
-    const roleId = interaction.values?.[0];
-    const role = roleId && (interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null));
-    if (!BIAS_ROLE_KEYS.includes(selectedBias) || !role || role.id === interaction.guildId || (role.guild?.id && role.guild.id !== interaction.guildId)) {
-      await interaction.reply({ content: "Choose a valid server role other than @everyone.", flags: MessageFlags.Ephemeral });
+    await interaction.deferUpdate();
+    const roles = await interaction.guild.roles.fetch().catch(() => null);
+    if (!hasActiveWelcomeNavigation(interaction)) {
+      await interaction.editReply(pagePayload("Welcome Pass", "Open Welcome Pass from the current Admin Controls panel."));
       return true;
     }
-    if (role.editable === false) {
-      await interaction.reply({ content: "Harmony cannot manage that role. Move Harmony’s role above it in Server Settings → Roles, then try again.", flags: MessageFlags.Ephemeral });
+    if (!roles) {
+      await interaction.editReply(welcomeBiasRolePage(interaction.guildId, null, "Harmony couldn’t load the server roles. Choose a bias to try again."));
       return true;
     }
-    try {
-      welcomePassStore.setWelcomePassBiasRole(interaction.guildId, selectedBias, role.id);
-      await interaction.update(welcomeBiasRolePage(interaction.guildId, selectedBias, `${selectedBias} members will use <@&${role.id}>.`));
-    } catch (error) {
-      await interaction.reply({ content: error.message || "Harmony could not save that bias role mapping.", flags: MessageFlags.Ephemeral });
+
+    let notice;
+    if (savingBiasRole) {
+      const role = roles.get(interaction.values?.[0]);
+      if (!role || role.id === interaction.guildId || (role.guild?.id && role.guild.id !== interaction.guildId)) {
+        notice = "Choose a valid server role other than @everyone.";
+      } else if (!isAssignableBiasRole(role)) {
+        notice = "Harmony cannot manage that role. Choose an unmanaged role below Harmony’s highest role.";
+      } else {
+        try {
+          welcomePassStore.setWelcomePassBiasRole(interaction.guildId, selectedBias, role.id);
+          notice = `${selectedBias} members will use <@&${role.id}>.`;
+        } catch (error) {
+          notice = error.message || "Harmony could not save that bias role mapping.";
+        }
+      }
     }
+    await interaction.editReply(welcomeBiasRolePage(interaction.guildId, selectedBias, notice, roles, panelId));
     return true;
   }
   if (action === "welcome-bias-role-clear") {
