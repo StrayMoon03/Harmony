@@ -223,12 +223,15 @@ client.on("guildScheduledEventUserRemove", (event, user) => {
   reminderStore.cancelDiscordEventReminder(event.id, user.id);
 });
 
-async function getConfiguredGreetingChannel(guild, settings) {
-  const cached = guild.channels.cache.get(settings.channel_id);
+async function getConfiguredGreetingChannel(guild, settings, welcomePassSettings) {
+  const channelId = resolveWelcomePassEntryChannelId(welcomePassSettings, settings);
+  if (!channelId) return null;
+
+  const cached = guild.channels.cache.get(channelId);
   const channel =
     cached ||
     (await guild.channels
-      .fetch(settings.channel_id)
+      .fetch(channelId)
       .catch(() => null));
 
   return channel && channel.isTextBased()
@@ -257,8 +260,7 @@ client.on("guildMemberAdd", async (member) => {
   }
 
   const welcomePassSettings = getWelcomePassSettings(member.guild.id);
-  const channelId = resolveWelcomePassEntryChannelId(welcomePassSettings, settings);
-  const channel = await getConfiguredGreetingChannel(member.guild, { ...settings, channel_id: channelId });
+  const channel = await getConfiguredGreetingChannel(member.guild, settings, welcomePassSettings);
   if (!channel) {
     console.warn(
       "Configured greeting channel is unavailable in " +
@@ -310,10 +312,8 @@ client.on("guildMemberRemove", async (member) => {
   const settings = getGreetingSettings(member.guild.id);
   if (!settings || !settings.enabled) return;
 
-  const channel = await getConfiguredGreetingChannel(
-    member.guild,
-    settings
-  );
+  const welcomePassSettings = getWelcomePassSettings(member.guild.id);
+  const channel = await getConfiguredGreetingChannel(member.guild, settings, welcomePassSettings);
   if (!channel) {
     console.warn(
       "Configured greeting channel is unavailable in " +
