@@ -23,6 +23,14 @@ function platformFromLink(url) {
   return "Media link";
 }
 
+function looksLikeLoginOrAudienceWall(text) {
+  if (/this content isn['’]?t available to everyone|can['’]?t be seen by certain audiences/i.test(text)) {
+    return true;
+  }
+  if (/confirm.{0,40}not a bot|\bnot a bot\b/i.test(text)) return false;
+  return /\blogin required\b|http redirect to login|redirect(?:ed)? to (?:the )?login(?: page)?/i.test(text);
+}
+
 function safeReason(error) {
   const text = [
     error?.message,
@@ -30,6 +38,16 @@ function safeReason(error) {
     typeof error === "string" ? error : "",
   ].filter(Boolean).join(" ");
 
+  if (error?.socialAuthFailureKind === "owner") {
+    return "The platform account needs a security check by its owner (then refresh cookies).";
+  }
+  if (error?.socialAuthFailureKind === "session") {
+    return "The platform login cookies need to be refreshed.";
+  }
+  // Display-only. This must not be treated as health-store evidence.
+  if (looksLikeLoginOrAudienceWall(text)) {
+    return "The platform login cookies may need to be refreshed.";
+  }
   if (/no audio|audio stream|silent/i.test(text)) {
     return "The downloaded video did not contain a usable audio track.";
   }
@@ -39,8 +57,6 @@ function safeReason(error) {
   if (/below.{0,20}(?:size|byte) threshold|too small|file size|signature rejection/i.test(text)) {
     return "The retrieved media could not be used for posting.";
   }
-  if (error?.socialAuthFailureKind === "owner") return "The platform requires an account security check by its owner.";
-  if (error?.socialAuthFailureKind === "session") return "The platform session needs to be refreshed.";
   if (/compress|too large|size limit|under Discord limit/i.test(text)) {
     return "The media could not be reduced safely to Discord’s upload limit.";
   }
