@@ -1683,23 +1683,29 @@ test("live display reports STAY when staff setup is incomplete", async () => {
   assert.equal(stats[1].name, "💜 Stay Role: 1");
 });
 
-test("weekly activity uses Eastern Monday midnight and seeds only the owner-confirmed guild and week once", async () => {
+test("weekly activity uses Eastern Monday midnight and seeds only the owner-confirmed guild and weeks once", async () => {
   const { guild, addChannel } = createGuild("weekly-seed");
   addChannel("1554747061252005938");
   const beforeMidnight = new Date("2026-11-16T04:59:59.999Z");
   const midnight = new Date("2026-11-16T05:00:00.000Z");
   const before = () => memberCountStore.getWeeklyMemberCountActivity(guild.id, beforeMidnight);
   const next = () => memberCountStore.getWeeklyMemberCountActivity(guild.id, midnight);
+  const followingMonday = new Date("2026-11-23T05:00:00.000Z");
+  for (const kind of ["join", "join", ...Array(9).fill("leave")]) {
+    memberCountStore.recordMemberCountActivity(guild.id, kind, midnight);
+  }
+  assert.deepEqual(next(), { joined: 2, left: 9, net: -7 });
   await room.configureRequestedGuardReviewRoom(client(guild));
   assert.deepEqual(before(), { joined: 2, left: 1, net: 1 });
+  assert.deepEqual(next(), { joined: 4, left: 9, net: -5 });
   closeDb();
   await room.configureRequestedGuardReviewRoom(client(guild));
   assert.deepEqual(before(), { joined: 2, left: 1, net: 1 });
+  assert.deepEqual(next(), { joined: 4, left: 9, net: -5 });
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS total FROM member_count_activity WHERE guild_id = ?").get(guild.id).total, 11);
   memberCountStore.recordMemberCountActivity(guild.id, "join", beforeMidnight);
   assert.deepEqual(before(), { joined: 3, left: 1, net: 2 });
-  assert.deepEqual(next(), { joined: 0, left: 0, net: 0 });
-  memberCountStore.recordMemberCountActivity(guild.id, "leave", midnight);
-  assert.deepEqual(next(), { joined: 0, left: 1, net: -1 });
+  assert.deepEqual(memberCountStore.getWeeklyMemberCountActivity(guild.id, followingMonday), { joined: 0, left: 0, net: 0 });
 
   const summerSunday = new Date("2026-07-06T03:59:59.999Z");
   const summerMonday = new Date("2026-07-06T04:00:00.000Z");
@@ -1709,6 +1715,7 @@ test("weekly activity uses Eastern Monday midnight and seeds only the owner-conf
   const otherGuild = createGuild("not-the-seed-guild").guild;
   await room.configureRequestedGuardReviewRoom(client(otherGuild));
   assert.deepEqual(memberCountStore.getWeeklyMemberCountActivity(otherGuild.id, beforeMidnight), { joined: 0, left: 0, net: 0 });
+  assert.deepEqual(memberCountStore.getWeeklyMemberCountActivity(otherGuild.id, midnight), { joined: 0, left: 0, net: 0 });
 });
 
 test("a confirmed deleted display gets one replacement below older messages and before the active controls", async (t) => {

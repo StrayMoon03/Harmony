@@ -1263,7 +1263,7 @@ async function configureRequestedGuardReviewRoom(client) {
       if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText || !guild.members?.me) continue;
       // This owner-confirmed channel identifies the Youtiful Stays guild without relying on its name.
       try {
-        memberCountStore.seedYoutifulStaysMemberCountWeek(guild.id);
+        memberCountStore.seedYoutifulStaysMemberCountWeeks(guild.id);
       } catch (error) {
         console.warn("Harmony could not seed Youtiful Stays' weekly member counts:", error.message);
       }
