@@ -90,3 +90,153 @@ test('accepts a small Threads image only after it decodes as real post media', a
   assert.equal(result.files.length, 1);
   assert.equal(result.files[0].isImage, true);
 });
+
+
+function loadDownloader(fetchImpl, browserStdout) {
+  const modulePath = path.join(__dirname, 'threadsDownloader.js');
+  const localRequire = createRequire(modulePath);
+  const exec = () => {};
+  exec[promisify.custom] = async (file) => {
+    if (String(file).includes('python')) {
+      return { stdout: browserStdout };
+    }
+    if (String(file).includes('ffprobe')) {
+      return { stdout: '1200x800\n' };
+    }
+    if (String(file).includes('ffmpeg')) {
+      return { stdout: Buffer.alloc(64, 255) };
+    }
+    throw new Error(`unexpected executable: ${file}`);
+  };
+  const module = { exports: {} };
+  const context = {
+    module, exports: module.exports, __dirname, process, console, Buffer, URL, AbortSignal,
+    require: (id) => id === 'node:child_process' ? { execFile: exec } : localRequire(id),
+    fetch: fetchImpl,
+  };
+  vm.runInNewContext(fs.readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
+  return module.exports;
+}
+
+const emptyBrowser = 'HARMONY_THREADS_BROWSER:' + JSON.stringify({ candidates: [] });
+
+test('uses matching exact-post Open Graph fallback after browser and Discord preview find no media', async (t) => {
+  const post = 'https://www.threads.com/@agnieszka.jordan/post/DfueqT_ghKZ';
+  const video = 'https://scontent-a.fbcdn.net/exact.mp4';
+  const image = 'https://scontent-a.fbcdn.net/exact.jpg';
+  const html = [
+    '<html><head>',
+    `<meta property="og:url" content="${post}">`,
+    `<meta property="og:description" content="A year ago, Minsung skipped dinner.">`,
+    `<meta property="og:video" content="${video}">`,
+    `<meta property="og:image" content="${image}">`,
+    '</head></html>',
+  ].join('');
+  const downloaded = [];
+  const api = loadDownloader(async (url) => {
+    if (String(url).includes('threads.com') || String(url).includes('threads.net')) {
+      return new Response(html, { headers: { 'content-type': 'text/html' } });
+    }
+    if (url === video) {
+      downloaded.push('video');
+      return new Response(Buffer.alloc(40 * 1024), { headers: { 'content-type': 'video/mp4' } });
+    }
+    if (url === image) {
+      downloaded.push('image');
+      return new Response(Buffer.alloc(20 * 1024), { headers: { 'content-type': 'image/jpeg' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }, emptyBrowser);
+
+  const result = await api.downloadThreadsMedia(post, {
+    getDiscordEmbedFallback: async () => null,
+  });
+  t.after(() => fsp.rm(result.rawDir, { recursive: true, force: true }));
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].isVideo, true);
+  assert.match(result.files[0].path, /\.mp4$/);
+  assert.equal(downloaded[0], 'video');
+  assert.equal(result.previewOnly, undefined);
+  assert.equal(result.creator, '@agnieszka.jordan');
+});
+
+test('posts a labeled video thumbnail when only og:image is downloadable', async (t) => {
+  const post = 'https://www.threads.com/@agnieszka.jordan/post/DfueqT_ghKZ';
+  const video = 'https://scontent-a.fbcdn.net/exact.mp4';
+  const image = 'https://scontent-a.fbcdn.net/exact.jpg';
+  const html = [
+    '<html><head>',
+    `<meta property="og:url" content="${post}">`,
+    `<meta property="og:description" content="A year ago, Minsung skipped dinner.">`,
+    `<meta property="og:video" content="${video}">`,
+    `<meta property="og:image" content="${image}">`,
+    '</head></html>',
+  ].join('');
+  const api = loadDownloader(async (url) => {
+    if (String(url).includes('threads.com') || String(url).includes('threads.net')) {
+      return new Response(html, { headers: { 'content-type': 'text/html' } });
+    }
+    if (url === video) {
+      return new Response('nope', { status: 403, headers: { 'content-type': 'text/plain' } });
+    }
+    if (url === image) {
+      return new Response(Buffer.alloc(20 * 1024), { headers: { 'content-type': 'image/jpeg' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }, emptyBrowser);
+
+  const result = await api.downloadThreadsMedia(post, {
+    getDiscordEmbedFallback: async () => null,
+  });
+  t.after(() => fsp.rm(result.rawDir, { recursive: true, force: true }));
+  assert.equal(result.files.length, 1);
+  assert.equal(result.files[0].isImage, true);
+  assert.equal(result.previewOnly, true);
+});
+
+test('does not use Open Graph media from a nested or different post', async () => {
+  const requested = 'https://www.threads.com/@author/post/REAL123';
+  const html = [
+    '<html><head>',
+    '<meta property="og:url" content="https://www.threads.com/@other/post/NESTED999">',
+    '<meta property="og:description" content="A different post caption.">',
+    '<meta property="og:image" content="https://scontent-a.fbcdn.net/other.jpg">',
+    '</head></html>',
+  ].join('');
+  const api = loadDownloader(async (url) => {
+    if (String(url).includes('threads.com') || String(url).includes('threads.net')) {
+      return new Response(html, { headers: { 'content-type': 'text/html' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }, emptyBrowser);
+
+  await assert.rejects(api.downloadThreadsMedia(requested, {
+    getDiscordEmbedFallback: async () => null,
+  }), /browser returned no media/);
+});
+
+test('does not use Open Graph fallback for an unresolved share URL', async () => {
+  const share = 'https://www.threads.com/share/ALIAS/';
+  const image = 'https://scontent-a.fbcdn.net/exact.jpg';
+  const html = [
+    '<html><head>',
+    '<meta property="og:image" content="' + image + '">',
+    '</head></html>',
+  ].join('');
+  const downloaded = [];
+  const api = loadDownloader(async (url) => {
+    if (url === image) {
+      downloaded.push(url);
+      return new Response(Buffer.alloc(20 * 1024), { headers: { 'content-type': 'image/jpeg' } });
+    }
+    if (String(url).includes('threads.com') || String(url).includes('threads.net')) {
+      return new Response(html, { headers: { 'content-type': 'text/html' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }, emptyBrowser);
+
+  await assert.rejects(api.downloadThreadsMedia(share, {
+    getDiscordEmbedFallback: async () => null,
+  }), /browser returned no media|share did not remain|could not inspect|no media/);
+  assert.deepEqual(downloaded, []);
+});
