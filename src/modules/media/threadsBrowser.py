@@ -18,6 +18,14 @@ DIAGNOSTIC_KEYS = (
     "exactNestedSameCodeRecordSeen",
 )
 
+# Prefer IPv4 on container hosts. Railway (and similar headless environments)
+# can stall or drop Threads GraphQL on IPv6 while a local browser succeeds.
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-ipv6",
+]
+
 
 def record_diagnostic_signals(value, expected_code, diagnostics):
     records = []
@@ -412,6 +420,17 @@ def document_permalink(page):
     return None
 
 
+
+def wait_for_structured_media(page, structured_media, timeout_ms=12000):
+    # Local Chromium often hydrates GraphQL within the fixed post-load waits.
+    # Railway's system Chromium and network are slower; keep waiting only when
+    # the exact post payload has not arrived yet, inside the 75s helper budget.
+    deadline = time.time() + (timeout_ms / 1000.0)
+    while not structured_media and time.time() < deadline:
+        page.wait_for_timeout(500)
+    return bool(structured_media)
+
+
 def wait_for_permalink(page, timeout_ms=15000):
     deadline = time.time() + (timeout_ms / 1000.0)
     found = document_permalink(page)
@@ -448,7 +467,7 @@ def main():
         browser = playwright.chromium.launch(
             headless=True,
             executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"),
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=list(CHROMIUM_ARGS),
         )
         context = browser.new_context(
             viewport={"width": 1280, "height": 1600},
@@ -556,6 +575,8 @@ def main():
         # Threads lazy-loads media in its newer div-based post layout.
         page.mouse.wheel(0, 500)
         page.wait_for_timeout(2500)
+        if not structured_media:
+            wait_for_structured_media(page, structured_media, timeout_ms=12000)
 
         # Network responses are tied to the resolved shortcode and preserve
         # carousel order without relying on Threads' mixed recommendation DOM.

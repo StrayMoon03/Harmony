@@ -235,5 +235,33 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(pending, [])
 
 
+class HeadlessEnvironmentTests(unittest.TestCase):
+    def test_chromium_args_prefer_ipv4_in_containers(self):
+        self.assertIn("--disable-ipv6", browser.CHROMIUM_ARGS)
+        self.assertIn("--no-sandbox", browser.CHROMIUM_ARGS)
+        self.assertIn("--disable-dev-shm-usage", browser.CHROMIUM_ARGS)
+
+    def test_structured_media_wait_returns_immediately_when_payload_exists(self):
+        waits = []
+
+        class FakePage:
+            def wait_for_timeout(self, milliseconds):
+                waits.append(milliseconds)
+
+        self.assertTrue(browser.wait_for_structured_media(FakePage(), ["https://scontent-a.fbcdn.net/owned.mp4"], timeout_ms=2000))
+        self.assertEqual(waits, [])
+
+    def test_structured_media_wait_polls_until_timeout_when_empty(self):
+        waits = []
+
+        class FakePage:
+            def wait_for_timeout(self, milliseconds):
+                waits.append(milliseconds)
+
+        self.assertFalse(browser.wait_for_structured_media(FakePage(), [], timeout_ms=1200))
+        self.assertGreaterEqual(len(waits), 2)
+        self.assertTrue(all(value == 500 for value in waits))
+
+
 if __name__ == "__main__":
     unittest.main()

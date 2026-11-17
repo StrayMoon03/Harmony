@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   collectPostScopedJsonMedia,
+  collectExactOpenGraphFallback,
   exactThreadsPostUrl,
   resolveThreadsShareRedirect,
   shouldUseScopedBrowserDirectly,
@@ -162,4 +163,113 @@ test("runs share alias resolution attempts concurrently", async (t) => {
     null
   );
   assert.equal(peakInFlight, 4);
+});
+
+function openGraphPage({
+  url,
+  description = "A year ago, Minsung skipped dinner.",
+  video = null,
+  image = "https://scontent-a.fbcdn.net/thumb.jpg",
+  extra = "",
+}) {
+  const tags = [
+    `<meta property="og:url" content="${url}">`,
+    `<link rel="canonical" href="${url}">`,
+    description ? `<meta property="og:description" content="${description}">` : "",
+    video ? `<meta property="og:video" content="${video}">` : "",
+    image ? `<meta property="og:image" content="${image}">` : "",
+    extra,
+  ].filter(Boolean);
+  return `<html><head>${tags.join("")}</head></html>`;
+}
+
+test("prefers matching og:video then og:image and rejects a different post", () => {
+  const requested = "https://www.threads.com/@agnieszka.jordan/post/DfueqT_ghKZ";
+  const video = "https://scontent-a.fbcdn.net/exact.mp4";
+  const image = "https://scontent-a.fbcdn.net/exact.jpg";
+  const matched = collectExactOpenGraphFallback(
+    openGraphPage({ url: requested, video, image }),
+    requested
+  );
+  assert.equal(matched.canonicalUrl, requested);
+  assert.deepEqual(matched.candidates, [video, image]);
+  assert.equal(matched.videoPost, true);
+  assert.equal(matched.creator, "@agnieszka.jordan");
+
+  const imageOnly = collectExactOpenGraphFallback(
+    openGraphPage({
+      url: requested,
+      video: null,
+      image,
+      extra: '"code":"DfueqT_ghKZ","media_type":2,"video_versions":[{"url":"https://scontent-a.fbcdn.net/hidden.mp4"}]',
+    }),
+    requested
+  );
+  assert.deepEqual(imageOnly.candidates, [image]);
+  assert.equal(imageOnly.videoPost, true);
+
+  assert.equal(
+    collectExactOpenGraphFallback(
+      openGraphPage({
+        url: "https://www.threads.com/@other/post/NESTED999",
+        video,
+        image,
+        extra: '<meta property="og:description" content="A year ago, Minsung skipped dinner.">',
+      }),
+      requested
+    ),
+    null
+  );
+  assert.equal(
+    collectExactOpenGraphFallback(
+      openGraphPage({ url: requested, image }),
+      "https://www.threads.com/share/ALIAS/"
+    ),
+    null
+  );
+});
+
+test("requires og:description to match known post text when both are available", () => {
+  const requested = "https://www.threads.com/@author/post/REAL123";
+  const html = openGraphPage({
+    url: requested,
+    description: "A year ago, Minsung skipped dinner.",
+    image: "https://scontent-a.fbcdn.net/exact.jpg",
+  });
+  assert.equal(
+    collectExactOpenGraphFallback(html, requested, {
+      knownText: "Totally different caption about another post",
+    }),
+    null
+  );
+  assert.equal(
+    collectExactOpenGraphFallback(html, requested, {
+      knownText: "A year ago, Minsung skipped dinner.",
+    })?.image,
+    "https://scontent-a.fbcdn.net/exact.jpg"
+  );
+  assert.equal(
+    collectExactOpenGraphFallback(html, requested)?.image,
+    "https://scontent-a.fbcdn.net/exact.jpg"
+  );
+});
+
+test("decodes entity-encoded @ in og:url before matching the requested shortcode", () => {
+  const requested = "https://www.threads.com/@agnieszka.jordan/post/DfueqT_ghKZ";
+  const html = [
+    "<html><head>",
+    '<meta property="og:url" content="https://www.threads.com/&#064;agnieszka.jordan/post/DfueqT_ghKZ">',
+    '<link rel="canonical" href="https://www.threads.com/&#064;agnieszka.jordan/post/DfueqT_ghKZ">',
+    '<meta property="og:description" content="A year ago, Minsung skipped &#xbc25;, and it was probably the only time we were actually proud of them for skipping one">',
+    '<meta property="og:image" content="https://scontent-a.fbcdn.net/exact.jpg?foo=1&amp;bar=2">',
+    '"code":"DfueqT_ghKZ","media_type":2,"video_versions":[{"url":"https://scontent-a.fbcdn.net/hidden.mp4"}]',
+    "</head></html>",
+  ].join("");
+  const result = collectExactOpenGraphFallback(html, requested, {
+    knownText: "A year ago, Minsung skipped 밥, and it was probably the only time we were actually proud of them for skipping one",
+  });
+  assert.equal(result.canonicalUrl, requested);
+  assert.equal(result.image, "https://scontent-a.fbcdn.net/exact.jpg?foo=1&bar=2");
+  assert.equal(result.videoPost, true);
+  assert.match(result.description, /Minsung skipped 밥/);
 });

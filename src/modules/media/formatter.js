@@ -31,6 +31,7 @@ function buttonUrlForPlatform(platform, originalUrl) {
  * @param {string|number|Date|null} [options.originalDate]
  * @param {string} options.sharedById
  * @param {string|null} [options.memberComment]
+ * @param {string|null} [options.footerNote]
  * @returns {{ header: string, footer: string, buttonLabel: string, buttonUrl: string|null }}
  */
 function formatMediaCard({
@@ -40,6 +41,7 @@ function formatMediaCard({
   originalDate,
   sharedById,
   memberComment,
+  footerNote,
 }) {
   const parsedDate = originalDate ? new Date(originalDate) : null;
   const dateText = parsedDate && !Number.isNaN(parsedDate.getTime())
@@ -63,6 +65,7 @@ function formatMediaCard({
     footer: [
       authorLine,
       `Shared by ${sharedBy}`,
+      footerNote || null,
       memberComment ? "" : null,
       memberComment ? `**💬 ${sharedBy}**` : null,
       memberComment ? `> ${memberComment}` : null,

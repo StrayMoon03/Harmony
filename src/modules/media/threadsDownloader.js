@@ -97,8 +97,31 @@ async function readThreadsCookieHeader(hostname) {
   }
 }
 
-function decodePageText(value) {
+function decodeHtmlEntities(value) {
   return String(value || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
+      try {
+        return String.fromCodePoint(Number.parseInt(hex, 16));
+      } catch {
+        return match;
+      }
+    })
+    .replace(/&#(\d+);/g, (match, dec) => {
+      try {
+        return String.fromCodePoint(Number(dec));
+      } catch {
+        return match;
+      }
+    });
+}
+
+function decodePageText(value) {
+  return decodeHtmlEntities(String(value || "")
     .replace(/\\u0025/gi, "%")
     .replace(/\\u0026/gi, "&")
     .replace(/\\u003d/gi, "=")
@@ -108,7 +131,7 @@ function decodePageText(value) {
     .replace(/\\"/g, '"')
     .replace(/&amp;/gi, "&")
     .replace(/&#x2F;/gi, "/")
-    .replace(/&quot;/gi, '"');
+    .replace(/&quot;/gi, '"'));
 }
 
 function metaContent(html, property) {
@@ -333,6 +356,174 @@ function collectCandidateUrls(html) {
       })
     ).values(),
   ].slice(0, 20);
+}
+
+
+function threadsExactPostShortcode(url) {
+  try {
+    const match = decodeURIComponent(new URL(url).pathname).match(
+      /\/@[^/]+\/post\/([A-Za-z0-9_-]+)\/?$/i
+    );
+    return match?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalHref(html) {
+  const patterns = [
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i,
+    /<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["'][^>]*>/i,
+  ];
+  for (const pattern of patterns) {
+    const match = String(html || "").match(pattern);
+    if (match) return decodePageText(match[1]);
+  }
+  return null;
+}
+
+function normalizePostText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function threadsPostTextsCompatible(knownText, pageText) {
+  const known = normalizePostText(knownText);
+  const page = normalizePostText(pageText);
+  if (!known || !page) return true;
+  if (known.includes(page) || page.includes(known)) return true;
+  const limit = Math.min(known.length, page.length);
+  let shared = 0;
+  while (shared < limit && known[shared] === page[shared]) shared += 1;
+  return shared >= 40 || (shared >= 12 && shared / limit >= 0.5);
+}
+
+function exactPostDeclaresVideo(html, expectedCode) {
+  const text = decodePageText(String(html || ""));
+  const escaped = String(expectedCode).replace(/[.*+?^$()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`"code"\\s*:\\s*"${escaped}"`));
+  if (!match || match.index == null) return false;
+  const start = match.index;
+  const rest = text.slice(start + match[0].length);
+  const nextCode = rest.search(/"code"\s*:\s*"/);
+  const window = text.slice(
+    start,
+    nextCode === -1 ? start + 12000 : start + match[0].length + nextCode
+  );
+  return (
+    /"media_type"\s*:\s*2\b/.test(window) ||
+    /"video_versions"\s*:\s*\[\s*\{/.test(window)
+  );
+}
+
+/**
+ * Last-resort Open Graph media for an exact post (or a resolved /share/ URL).
+ * Requires the page's own canonical/og:url shortcode to match the requested
+ * post. When a known post text and og:description are both available, they
+ * must also be compatible. Never returns media from a different or nested post.
+ */
+function collectExactOpenGraphFallback(html, requestedPostUrl, options = {}) {
+  const expectedCode = threadsExactPostShortcode(requestedPostUrl);
+  if (!expectedCode) return null;
+
+  const pageUrl = exactThreadsPostUrl(
+    metaContent(html, "og:url") || canonicalHref(html),
+    requestedPostUrl
+  );
+  if (!pageUrl) return null;
+  const pageCode = threadsExactPostShortcode(pageUrl);
+  if (!pageCode || pageCode.toLowerCase() !== expectedCode.toLowerCase()) {
+    return null;
+  }
+
+  const description =
+    metaContent(html, "og:description") ||
+    metaContent(html, "description") ||
+    metaContent(html, "twitter:description");
+  if (
+    options.knownText &&
+    description &&
+    !threadsPostTextsCompatible(options.knownText, description)
+  ) {
+    return null;
+  }
+
+  const ogVideo = validCdnUrl(
+    metaContent(html, "og:video:secure_url") ||
+      metaContent(html, "og:video:url") ||
+      metaContent(html, "og:video")
+  );
+  const ogImage = validCdnUrl(
+    metaContent(html, "og:image") ||
+      metaContent(html, "og:image:url") ||
+      metaContent(html, "twitter:image")
+  );
+  if (!ogVideo && !ogImage) return null;
+
+  return {
+    canonicalUrl: pageUrl,
+    video: ogVideo,
+    image: ogImage,
+    candidates: ogVideo ? [ogVideo, ogImage].filter(Boolean) : [ogImage],
+    videoPost: Boolean(ogVideo) || exactPostDeclaresVideo(html, expectedCode),
+    description,
+    creator: extractThreadsCreator(pageUrl),
+  };
+}
+
+async function fetchExactOpenGraphFallback(requestedPostUrl, options = {}) {
+  if (!threadsExactPostShortcode(requestedPostUrl)) return null;
+
+  const urls = [requestedPostUrl];
+  try {
+    const parsed = new URL(requestedPostUrl);
+    const alternate = new URL(requestedPostUrl);
+    alternate.hostname = parsed.hostname.endsWith("threads.com")
+      ? parsed.hostname.replace(/threads\.com$/i, "threads.net")
+      : parsed.hostname.replace(/threads\.net$/i, "threads.com");
+    if (alternate.toString() !== parsed.toString()) {
+      urls.push(alternate.toString());
+    }
+  } catch {
+    return null;
+  }
+
+  const userAgents = [
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+  ];
+
+  for (const candidate of urls) {
+    for (const userAgent of userAgents) {
+      try {
+        const cookieHeader = await readThreadsCookieHeader(
+          new URL(candidate).hostname
+        );
+        const response = await fetch(candidate, {
+          redirect: "follow",
+          headers: {
+            "User-Agent": userAgent,
+            Accept: "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) continue;
+        const fallback = collectExactOpenGraphFallback(
+          await response.text(),
+          requestedPostUrl,
+          { knownText: options.knownText }
+        );
+        if (fallback) return fallback;
+      } catch {
+        // Try the next host or crawler UA.
+      }
+    }
+  }
+  return null;
 }
 
 function isThreadsShareUrl(url) {
@@ -795,6 +986,7 @@ async function downloadThreadsMedia(url, options = {}) {
     let pageFetchFailed = false;
     let fallbackCreator = null;
     let scopedCandidates = [];
+    let openGraphFallback = null;
 
     if (shouldUseScopedBrowserDirectly(shareUrl, url)) {
       // Exact posts and share aliases both require the scoped browser. The
@@ -883,7 +1075,27 @@ async function downloadThreadsMedia(url, options = {}) {
             `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
           );
         } else {
-          throw browserError;
+          const identityUrl = isExactThreadsPostUrl(finalUrl)
+            ? finalUrl
+            : isExactThreadsPostUrl(url)
+              ? url
+              : null;
+          const openGraph = identityUrl
+            ? await fetchExactOpenGraphFallback(identityUrl, {
+                knownText: options.knownText || fallback?.description || null,
+              })
+            : null;
+          if (openGraph?.candidates?.length) {
+            candidates = openGraph.candidates;
+            finalUrl = openGraph.canonicalUrl || finalUrl;
+            fallbackCreator = openGraph.creator || fallbackCreator;
+            openGraphFallback = openGraph;
+            console.log(
+              "Threads using exact-post Open Graph media after browser and Discord preview found none."
+            );
+          } else {
+            throw browserError;
+          }
         }
       }
     }
@@ -1031,6 +1243,17 @@ async function downloadThreadsMedia(url, options = {}) {
       });
     }
 
+    if (openGraphFallback) {
+      const videos = retained.filter((item) => !item.file.isImage);
+      if (videos.length > 0) {
+        const dropped = retained.filter((item) => item.file.isImage);
+        retained = videos;
+        for (const item of dropped) {
+          await fs.rm(item.file.path, { force: true });
+        }
+      }
+    }
+
     const files = retained.map((item) => item.file);
 
     if (files.length === 0) {
@@ -1043,6 +1266,13 @@ async function downloadThreadsMedia(url, options = {}) {
       `Threads download complete (${files.length} file(s)).`
     );
 
+    const previewOnly = Boolean(
+      openGraphFallback &&
+        files.length > 0 &&
+        files.every((file) => file.isImage) &&
+        (openGraphFallback.videoPost || openGraphFallback.video)
+    );
+
     return {
       files,
       rawDir: jobDir,
@@ -1052,6 +1282,7 @@ async function downloadThreadsMedia(url, options = {}) {
         options.discordEmbedFallback?.creator ||
         extractThreadsCreator(finalUrl) ||
         extractThreadsCreator(url),
+      ...(previewOnly ? { previewOnly: true } : {}),
       ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
     };
   } catch (error) {
@@ -1071,6 +1302,7 @@ module.exports = {
   downloadThreadsMedia,
   collectCandidateUrls,
   collectPostScopedJsonMedia,
+  collectExactOpenGraphFallback,
   exactThreadsPostUrl,
   resolveThreadsShareRedirect,
   shouldUseScopedBrowserDirectly,

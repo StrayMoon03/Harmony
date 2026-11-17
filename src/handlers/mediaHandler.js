@@ -1229,6 +1229,9 @@ async function processMediaMessage(message, lifecycle) {
         creator,
         originalUrl,
         originalDate: extractOriginalDate(info),
+        footerNote: downloadResult.previewOnly
+          ? "This is a preview image from the original Threads video."
+          : undefined,
       });
 
       await markRetrievedOrCleanup(lifecycle, downloadResult);

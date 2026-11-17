@@ -133,3 +133,21 @@ test("X text post uses exact metadata and the compact standalone layout", () => 
   assert.match(text, /Shared by <@123456789012345678> • Sep 20, 2026/);
   assert.match(text, /View on X/);
 });
+
+test("Threads video thumbnail fallback adds a footer preview note without changing the header", () => {
+  const card = formatMediaCard({
+    platform: "Threads",
+    mediaType: "Photo",
+    creator: "agnieszka.jordan",
+    originalUrl: "https://www.threads.com/@agnieszka.jordan/post/DfueqT_ghKZ",
+    originalDate: new Date("2025-11-15T12:00:00Z"),
+    sharedById: "123",
+    footerNote: "This is a preview image from the original Threads video.",
+  });
+  assert.equal(card.header, "Threads");
+  assert.doesNotMatch(card.header, /preview|thumbnail|Video|Photo/i);
+  assert.equal(
+    card.footer,
+    "@agnieszka.jordan • Nov 15, 2025\nShared by <@123>\nThis is a preview image from the original Threads video."
+  );
+});
