@@ -81,6 +81,27 @@ test("successful refresh validates, rotates, atomically activates, verifies, and
   assert.ok(Date.now() - Date.parse(health.last_verified_at) < 5_000);
 });
 
+test("post-activation verification rejects an activation that did not change the runtime file", async () => {
+  makeRequest();
+  const service = context().service;
+  const activeFile = process.env.INSTAGRAM_COOKIES;
+  const previous = fs.readFileSync(activeFile, "utf8");
+  let checks = 0;
+  let restored = false;
+  const runtime = require("../src/services/runtimeSecrets");
+  const workflow = createSessionRefreshWorkflow({
+    validator: async () => { checks++; return { status: "AUTHENTICATED" }; },
+    providerFactory: () => ({ rotate: async () => {}, restore: async () => { restored = true; } }),
+    runtime: { ...runtime, activateRuntimeSession: () => ({ rollback: () => true }) },
+    audit: { recordCredentialRefreshStage() {} },
+  });
+  const result = await workflow.submit({ ...context(), service }, "different-session");
+  assert.equal(result.reason, "activation_failure");
+  assert.equal(checks, 1);
+  assert.equal(restored, true);
+  assert.equal(fs.readFileSync(activeFile, "utf8"), previous);
+});
+
 test("verified authorized maintenance clears a persisted checkpoint only after activation verification", async () => {
   getDb();
   statusService.recordSocialAuthFailure("instagram", "2026-10-28T00:00:30.000Z", "owner");

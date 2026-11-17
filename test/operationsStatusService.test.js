@@ -42,6 +42,9 @@ function reloadStatusService() {
 }
 
 test.beforeEach(() => {
+  for (const platform of ["instagram", "facebook", "youtube", "threads"]) {
+    process.env[platform.toUpperCase() + "_COOKIES"] = path.join(tempDir, `missing-${platform}-cookies.txt`);
+  }
   getDb().prepare("DELETE FROM social_health_state").run();
   getDb().prepare("DELETE FROM social_health_verification_attempts").run();
 });
@@ -194,8 +197,11 @@ test("session file presence never exposes its path or contents or claims authent
 });
 
 test("explicit Facebook and Instagram verification persist verified healthy state across service reload", async () => {
-  const now = "2026-11-07T12:00:00.000Z";
+  const now = new Date().toISOString();
   for (const platform of ["facebook", "instagram"]) {
+    const file = path.join(tempDir, `${platform}-verification.txt`);
+    fs.writeFileSync(file, "SESSION_SECRET_SENTINEL");
+    process.env[platform.toUpperCase() + "_COOKIES"] = file;
     const result = await statusService.verifySocialSession(platform, {
       clock: () => now,
       isConfigured: async () => true,
@@ -230,12 +236,15 @@ test("indeterminate verification stays unknown and does not infer cookie failure
 });
 
 test("live verification distinguishes rejected session from security checkpoint", async () => {
-  const run = (platform, status, at) => statusService.verifySocialSession(platform, {
-    clock: () => at,
-    isConfigured: async () => true,
-    readFile: async () => "opaque candidate",
-    validator: async () => ({ status }),
-  });
+  const run = (platform, status, at) => {
+    const file = path.join(tempDir, `${platform}-verification.txt`);
+    fs.writeFileSync(file, "opaque candidate");
+    process.env[platform.toUpperCase() + "_COOKIES"] = file;
+    return statusService.verifySocialSession(platform, {
+      clock: () => at,
+      validator: async () => ({ status }),
+    });
+  };
   assert.equal((await run("facebook", "UNAUTHENTICATED", "2026-11-07T12:00:00.000Z")).state, "session");
   assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.attention);
   assert.equal((await run("instagram", "OWNER_REQUIRED", "2026-11-07T12:10:00.000Z")).state, "owner");
@@ -259,10 +268,11 @@ test("verification cooldown prevents repeated provider checks and missing sessio
 test("secure refresh records an explicit verified checkpoint and legacy media success is not enough for cookie services", async () => {
   statusService.recordSocialSuccess("facebook", "2026-11-07T12:00:00.000Z");
   assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.unknown);
-  statusService.recordSocialMaintenanceSuccess("facebook", "2026-11-07T12:05:00.000Z");
+  const now = new Date().toISOString();
+  statusService.recordSocialMaintenanceSuccess("facebook", now);
   const stored = getDb().prepare("SELECT success_kind, last_verified_at FROM social_health_state WHERE platform = 'facebook'").get();
   assert.equal(stored.success_kind, "refresh");
-  assert.equal(stored.last_verified_at, "2026-11-07T12:05:00.000Z");
+  assert.equal(stored.last_verified_at, now);
   assert.equal((await statusService.checkSocial("facebook")).status, statusService.STATUS.healthy);
 });
 
@@ -340,7 +350,8 @@ test("Status / Health button uses the same refreshed guild-owner authorization",
     member: { permissions: { has: () => false } },
     user: { id: "owner-1" },
     client: client(),
-    update: async (payload) => { interaction.response = payload; },
+    deferUpdate: async () => { interaction.deferred = true; },
+    editReply: async (payload) => { interaction.response = payload; },
   };
   assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
   assert.ok(interaction.response.components.flatMap((row) => row.components).some((button) => button.data.custom_id === "harmony-status:diagnostics"));
@@ -502,7 +513,8 @@ test("Verify Social Sessions component rechecks admin permission server-side", a
     guild: guild("verify-authorization"),
     member: { permissions: { has: () => false } },
     user: { id: "ordinary-member" },
-    update: async (payload) => { response = payload; },
+    deferUpdate: async () => { interaction.deferred = true; },
+    editReply: async (payload) => { response = payload; },
   };
   assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
   assert.match(response.content, /Only authorized server admins/);
@@ -521,7 +533,8 @@ test("authorized admin Verify button returns a safe unconfigured result without 
     member: { permissions: { has: (permission) => permission === PermissionFlagsBits.ManageGuild } },
     user: { id: "manage-server-admin" },
     client: client(),
-    update: async (payload) => { response = payload; },
+    deferUpdate: async () => { interaction.deferred = true; },
+    editReply: async (payload) => { response = payload; },
   };
   try {
     assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
@@ -531,6 +544,91 @@ test("authorized admin Verify button returns a safe unconfigured result without 
     if (oldPath === undefined) delete process.env.FACEBOOK_COOKIES;
     else process.env.FACEBOOK_COOKIES = oldPath;
   }
+});
+
+test("a replacement bypasses the old session cooldown and an inconclusive check supersedes its warning", async () => {
+  const file = path.join(tempDir, "stale-threads-session.txt");
+  process.env.THREADS_COOKIES = file;
+  fs.writeFileSync(file, "old");
+  const now = Date.now();
+  const verify = (offset, status, expected) => statusService.verifySocialSession("threads", {
+    clock: () => now + offset,
+    validator: async (_service, contents) => {
+      assert.equal(contents, expected);
+      return { status };
+    },
+  });
+  assert.equal((await verify(0, "UNAUTHENTICATED", "old")).state, "session");
+  assert.equal((await statusService.checkSocial("threads")).status, statusService.STATUS.attention);
+  fs.writeFileSync(file, "replacement");
+  assert.match((await statusService.checkSocial("threads")).explanation, /active session has changed/);
+  assert.equal((await verify(1, "INCONCLUSIVE", "replacement")).state, "unknown");
+  assert.equal((await statusService.checkSocial("threads")).status, statusService.STATUS.unknown);
+  assert.equal((await verify(2, "AUTHENTICATED", "replacement")).state, "rate_limited");
+  assert.equal((await verify(statusService.SOCIAL_VERIFY_COOLDOWN_MS + 1, "AUTHENTICATED", "replacement")).state, "verified");
+});
+
+test("Verify and Refresh Status acknowledge first and check active provider sessions", async (t) => {
+  const helper = path.join(tempDir, "mock-verification-helper");
+  fs.writeFileSync(helper, [
+    "#!/usr/bin/env node",
+    "const fs = require('node:fs');",
+    "const candidate = fs.readFileSync(0, 'utf8');",
+    "const expected = 'active-' + process.argv[3];",
+    "setTimeout(() => process.stdout.write(JSON.stringify({ status: candidate === expected ? 'AUTHENTICATED' : 'UNAUTHENTICATED' })), 20);",
+  ].join("\n"), { mode: 0o700 });
+  const previousPython = process.env.PYTHON_PATH;
+  const previousUsername = process.env.INSTAGRAM_EXPECTED_USERNAME;
+  process.env.PYTHON_PATH = helper;
+  process.env.INSTAGRAM_EXPECTED_USERNAME = "test.account";
+  t.after(() => {
+    if (previousPython === undefined) delete process.env.PYTHON_PATH;
+    else process.env.PYTHON_PATH = previousPython;
+    if (previousUsername === undefined) delete process.env.INSTAGRAM_EXPECTED_USERNAME;
+    else process.env.INSTAGRAM_EXPECTED_USERNAME = previousUsername;
+  });
+
+  for (const platform of statusService.COOKIE_SERVICES) {
+    const file = path.join(tempDir, `active-${platform}.txt`);
+    process.env[platform.toUpperCase() + "_COOKIES"] = file;
+    fs.writeFileSync(file, `active-${platform}`);
+    statusService.recordSocialAuthFailure(platform, new Date().toISOString(), "owner", "checkpoint");
+  }
+  const click = async (customId) => {
+    const events = [];
+    let response;
+    const interaction = {
+      customId,
+      isButton: () => true,
+      message: {},
+      guild: {
+        ...guild("live-verification"),
+        ownerId: undefined,
+        fetch: async () => {
+          assert.deepEqual(events, ["acknowledged"]);
+          return { ownerId: "owner-1" };
+        },
+      },
+      user: { id: "owner-1" },
+      client: client(),
+      deferUpdate: async () => {
+        events.push("acknowledged");
+        interaction.deferred = true;
+      },
+      editReply: async (payload) => { response = payload; events.push("edited"); },
+    };
+    assert.equal(await statusCommand.handleStatusInteraction(interaction), true);
+    assert.deepEqual(events, ["acknowledged", "edited"]);
+    return response;
+  };
+  const verified = await click("harmony-status:verify:youtube");
+  assert.match(verified.content, /YouTube authenticated session is working/);
+  const refreshed = await click("harmony-status:refresh");
+  assert.match(refreshed.content, /YouTube was checked recently/);
+  for (const service of statusService.COOKIE_SERVICES) {
+    assert.match(refreshed.embeds[0].data.description, new RegExp(`\\*\\*${statusService.SOCIAL[service]}\\*\\* — Working`));
+  }
+  assert.match(refreshed.embeds[0].data.description, /TikTok\*\* — Unable to Verify/);
 });
 
 test("Guard status includes monitoring, active rules, and Review Room visibility", async () => {

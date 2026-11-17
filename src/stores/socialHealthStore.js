@@ -81,16 +81,16 @@ function recordVerifiedSuccess(platform, at, source = "verification") {
 
 function getVerificationAttempt(platform) {
   if (!VERIFY_PLATFORMS.has(platform)) return null;
-  return getDb().prepare("SELECT platform, last_attempt_at, last_result FROM social_health_verification_attempts WHERE platform = ?").get(platform) || null;
+  return getDb().prepare("SELECT platform, last_attempt_at, last_result, session_fingerprint FROM social_health_verification_attempts WHERE platform = ?").get(platform) || null;
 }
 
-function recordVerificationAttempt(platform, at, result) {
+function recordVerificationAttempt(platform, at, result, fingerprint) {
   if (!VERIFY_PLATFORMS.has(platform) || !["verified", "session", "owner", "unknown"].includes(result)) return false;
   getDb().prepare(`
-    INSERT INTO social_health_verification_attempts (platform, last_attempt_at, last_result)
-    VALUES (?, ?, ?)
-    ON CONFLICT(platform) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, last_result = excluded.last_result
-  `).run(platform, safeTimestamp(at), result);
+    INSERT INTO social_health_verification_attempts (platform, last_attempt_at, last_result, session_fingerprint)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(platform) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, last_result = excluded.last_result, session_fingerprint = excluded.session_fingerprint
+  `).run(platform, safeTimestamp(at), result, fingerprint);
   return true;
 }
 
