@@ -546,12 +546,23 @@ async function fetchExactOpenGraphFallback(requestedPostUrl, options = {}) {
             signal: AbortSignal.timeout(8000),
           });
           attempt.status = response.status;
+          // Where Threads actually sent us (a login wall shows up as /login
+          // or /) and which post the page says it is. Diagnostics only.
+          try { attempt.finalPath = new URL(response.url || candidate).pathname; } catch {}
           if (!response.ok) {
             console.log("Threads exact-post crawler attempt:", attempt);
             continue;
           }
           const html = await response.text();
           attempt.characters = html.length;
+          try {
+            const pageUrl = metaContent(html, "og:url") || canonicalHref(html);
+            attempt.pageOgPath = pageUrl
+              ? decodePageText(new URL(decodePageText(pageUrl), candidate).pathname)
+              : null;
+          } catch {
+            attempt.pageOgPath = null;
+          }
           const fallback = collectExactOpenGraphFallback(
             html,
             requestedPostUrl,
