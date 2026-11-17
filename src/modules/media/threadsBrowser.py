@@ -328,6 +328,33 @@ def exact_post_media_from_json(value, expected_code):
     candidates = [items for items in candidates if items]
     return max(candidates, key=len) if candidates else []
 
+
+def ingest_json_payload(payload, expected_code, structured_media, record_signals=None, pending_payloads=None):
+    # /share/ URLs have no post shortcode until the page resolves. Buffer
+    # GraphQL/JSON seen in the meantime and replay it once the permalink
+    # shortcode is known, instead of discarding the exact post's media.
+    if not expected_code:
+        if pending_payloads is not None:
+            pending_payloads.append(payload)
+        return
+    candidates = exact_post_media_from_json(payload, expected_code)
+    if record_signals is not None:
+        try:
+            record_diagnostic_signals(payload, expected_code, record_signals)
+        except Exception:
+            pass
+    if len(candidates) > len(structured_media):
+        structured_media[:] = candidates
+
+
+def adopt_expected_code(expected_code, pending_payloads, structured_media, record_signals=None):
+    if not expected_code or not pending_payloads:
+        return
+    payloads = list(pending_payloads)
+    pending_payloads.clear()
+    for payload in payloads:
+        ingest_json_payload(payload, expected_code, structured_media, record_signals)
+
 def document_permalink(page):
     """Resolve this page's post without scanning the whole feed.
 
@@ -464,10 +491,9 @@ def main():
         page = context.new_page()
         structured_media = []
         record_signals = {}
+        pending_payloads = []
 
         def capture_exact_post(response):
-            if not expected_code:
-                return
             try:
                 content_type = (response.headers.get("content-type") or "").lower()
                 response_url = (response.url or "").lower()
@@ -481,13 +507,13 @@ def main():
                 ):
                     return
                 payload = response.json()
-                candidates = exact_post_media_from_json(payload, expected_code)
-                try:
-                    record_diagnostic_signals(payload, expected_code, record_signals)
-                except Exception:
-                    pass
-                if len(candidates) > len(structured_media):
-                    structured_media[:] = candidates
+                ingest_json_payload(
+                    payload,
+                    expected_code,
+                    structured_media,
+                    record_signals,
+                    pending_payloads,
+                )
             except Exception:
                 return
 
@@ -510,6 +536,19 @@ def main():
                 "Threads page did not resolve to one verifiable post"
             )
 
+        exact_path = urlparse(exact_post_url).path.rstrip("/")
+        exact_code = exact_path.split("/")[-1]
+        # /share/ aliases start with no shortcode. Adopt the resolved post
+        # identity before any second navigation so later GraphQL, and any
+        # payloads buffered during the share landing, are scoped correctly.
+        expected_code = exact_code
+        adopt_expected_code(
+            expected_code,
+            pending_payloads,
+            structured_media,
+            record_signals,
+        )
+
         if canonical_post_url(page.url) != exact_post_url:
             page.goto(exact_post_url, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(4000)
@@ -517,9 +556,6 @@ def main():
         # Threads lazy-loads media in its newer div-based post layout.
         page.mouse.wheel(0, 500)
         page.wait_for_timeout(2500)
-
-        exact_path = urlparse(exact_post_url).path.rstrip("/")
-        exact_code = exact_path.split("/")[-1]
 
         # Network responses are tied to the resolved shortcode and preserve
         # carousel order without relying on Threads' mixed recommendation DOM.
@@ -594,10 +630,16 @@ def main():
               const postUrls = postAnchors
                 .map((anchor) => anchor.href)
                 .filter(Boolean);
+              const containsExactLink = (root) =>
+                [...root.querySelectorAll('a[href]')].some(
+                  (anchor) => normalizePath(anchor.href) === exactPath
+                );
 
               // Quotes and replies may be nested inside the requested post.
-              // Exclude only the nested foreign post's media subtree instead
-              // of rejecting the requested post's entire container.
+              // Exclude only a nested foreign-post subtree that does not also
+              // contain this post's own permalink. Walking up to a shared
+              // ancestor would mark the requested post's media as foreign
+              // and fail closed with "could not isolate".
               const foreignMediaRoots = postAnchors
                 .filter((anchor) => {
                   const path = normalizePath(anchor.href);
@@ -608,13 +650,16 @@ def main():
                   if (
                     nestedArticle &&
                     nestedArticle !== target &&
-                    target.contains(nestedArticle)
+                    target.contains(nestedArticle) &&
+                    !containsExactLink(nestedArticle)
                   ) {
                     return nestedArticle;
                   }
                   let node = anchor.parentElement;
                   while (node && node !== target) {
-                    if (mediaCount(node) > 0) return node;
+                    if (mediaCount(node) > 0 && !containsExactLink(node)) {
+                      return node;
+                    }
                     node = node.parentElement;
                   }
                   return null;

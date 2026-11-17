@@ -189,6 +189,51 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(browser.exact_post_media_from_json(payload, "EXACT"),
                          ["https://scontent-a.fbcdn.net/owned.mp4"])
 
+    def test_share_landing_json_is_replayed_once_the_permalink_shortcode_is_known(self):
+        payload = {
+            "requested": {"code": "DfyI6K1k_hX", "media_type": 1,
+                          "image_versions2": {"candidates": [
+                              {"url": "https://scontent-a.fbcdn.net/owned.jpg", "width": 1200, "height": 1200},
+                          ]}},
+            "neighbor": {"code": "OTHER", "media_type": 2,
+                         "video_versions": [{"url": "https://scontent-a.fbcdn.net/other.mp4"}]},
+        }
+        structured = []
+        pending = []
+        signals = {}
+        self.assertIsNone(browser.canonical_post_url("https://www.threads.com/share/BAY2v2hRVZ"))
+        browser.ingest_json_payload(payload, None, structured, signals, pending)
+        self.assertEqual(structured, [])
+        self.assertEqual(signals, {})
+        self.assertEqual(len(pending), 1)
+        browser.adopt_expected_code("DfyI6K1k_hX", pending, structured, signals)
+        self.assertEqual(structured, ["https://scontent-a.fbcdn.net/owned.jpg"])
+        self.assertEqual(pending, [])
+        self.assertTrue(signals["exactRecordSeen"])
+        self.assertTrue(signals["exactRecordHasImageVersions"])
+        self.assertFalse(signals.get("rootVideoDeclared"))
+
+    def test_adopting_a_share_shortcode_does_not_take_neighbor_or_nested_quote_media_when_root_has_media(self):
+        payload = {"code": "DfxN_m-DwfT", "media_type": 2,
+                   "video_versions": [{"url": "https://scontent-a.fbcdn.net/owned.mp4"}],
+                   "text_post_app_info": {"share_info": {"quoted_post": {
+                       "code": "QUOTE", "media_type": 2,
+                       "video_versions": [{"url": "https://scontent-a.fbcdn.net/quote.mp4"}],
+                   }}}}
+        structured = []
+        pending = []
+        browser.ingest_json_payload(payload, None, structured, None, pending)
+        browser.adopt_expected_code("DfxN_m-DwfT", pending, structured)
+        self.assertEqual(structured, ["https://scontent-a.fbcdn.net/owned.mp4"])
+
+    def test_a_plain_rate_limit_payload_without_a_shortcode_does_not_invent_media(self):
+        structured = []
+        pending = []
+        browser.ingest_json_payload({"status": "429"}, None, structured, None, pending)
+        browser.adopt_expected_code("EXACT", pending, structured)
+        self.assertEqual(structured, [])
+        self.assertEqual(pending, [])
+
 
 if __name__ == "__main__":
     unittest.main()
