@@ -20,9 +20,16 @@ test("Instagram fallback recovery receives a two-minute bounded lifecycle window
   );
 });
 
-test("other non-Facebook and non-Instagram media keeps the existing lifecycle cutoff", () => {
+test("Threads shares get a window long enough for the exact-post browser fallback", () => {
   assert.equal(
     mediaLifecycleCutoffMs("https://www.threads.com/share/example/"),
+    90000
+  );
+});
+
+test("other media keeps the existing lifecycle cutoff", () => {
+  assert.equal(
+    mediaLifecycleCutoffMs("https://www.youtube.com/watch?v=example"),
     undefined
   );
 });

@@ -8,6 +8,7 @@ const {
 } = require("../modules/media/messageLifecycle");
 const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
 const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 120000;
+const THREADS_LIFECYCLE_CUTOFF_MS = 90000;
 const fs = require("node:fs/promises");
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -1279,6 +1280,7 @@ async function processMediaMessage(message, lifecycle) {
 function mediaLifecycleCutoffMs(content) {
   if (findFacebookLinks(content).length) return FACEBOOK_LIFECYCLE_CUTOFF_MS;
   if (findInstagramLinks(content).length) return INSTAGRAM_LIFECYCLE_CUTOFF_MS;
+  if (findThreadsLinks(content).length) return THREADS_LIFECYCLE_CUTOFF_MS;
   return undefined;
 }
 
