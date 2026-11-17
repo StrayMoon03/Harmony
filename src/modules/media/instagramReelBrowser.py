@@ -6,6 +6,8 @@ import re
 import sys
 from urllib.parse import urlparse
 
+from chromiumExecutable import chromium_launch_kwargs
+
 DIAGNOSTIC_KEYS = (
     "helperStarted", "playwrightImported", "browserLaunched", "pageCreated",
     "cookiesLoaded", "cookieLoadFailed", "navigationCompleted",
@@ -118,7 +120,7 @@ def main(signals):
     code = reel_code(sys.argv[1])
     result = None
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"), args=["--no-sandbox", "--disable-dev-shm-usage"])
+        browser = playwright.chromium.launch(**chromium_launch_kwargs(playwright))
         signals["browserLaunched"] = True
         try:
             context = browser.new_context()

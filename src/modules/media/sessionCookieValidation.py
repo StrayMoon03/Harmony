@@ -149,13 +149,11 @@ def classify_browser_result(service, final_url, signals, expected_username=None)
 
 def inspect_with_browser(service, cookies):
     from playwright.sync_api import sync_playwright
+    from chromiumExecutable import chromium_launch_kwargs
 
-    executable = os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
-            headless=True,
-            executable_path=executable,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            **chromium_launch_kwargs(playwright)
         )
         context = browser.new_context(locale="en-US")
         context.add_cookies(cookies)

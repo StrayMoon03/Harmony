@@ -5,6 +5,9 @@ import sys
 from urllib.parse import urlparse
 
 
+from chromiumExecutable import chromium_launch_kwargs
+
+
 def exact_code(url):
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in ("instagram.com", "www.instagram.com"):
@@ -51,7 +54,7 @@ def main():
     from playwright.sync_api import sync_playwright
     code = exact_code(sys.argv[1])
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"), args=["--no-sandbox", "--disable-dev-shm-usage"])
+        browser = playwright.chromium.launch(**chromium_launch_kwargs(playwright))
         try:
             page = browser.new_page()
             page.goto(f"https://www.instagram.com/p/{code}/", wait_until="domcontentloaded", timeout=30000)

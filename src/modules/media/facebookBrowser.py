@@ -7,6 +7,7 @@ import time
 from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.sync_api import sync_playwright
+from chromiumExecutable import chromium_launch_kwargs
 
 PREFIX = "HARMONY_FACEBOOK_BROWSER:"
 ERROR_PREFIX = "HARMONY_FACEBOOK_BROWSER_ERROR:"
@@ -366,9 +367,7 @@ def main():
     identity_urls = [target_url]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
-            headless=True,
-            executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"),
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            **chromium_launch_kwargs(playwright)
         )
         try:
             context = browser.new_context(
