@@ -71,6 +71,8 @@ test("sends a redacted JSON payload with the expected auth headers when configur
   assert.equal(body.sourceUrl, "https://www.facebook.com/share/p/post-id/");
   assert.equal(body.discordMessageLink, jumpUrl);
   assert.equal(body.timestamp, occurred);
+  assert.equal(body.errorNumber, null);
+  assert.equal(body.errorId, null);
   assert.equal(body.fingerprint, fingerprint("Facebook", sanitizedErrorText(error)));
   assert.doesNotMatch(body.errorText, /FACEBOOK_USER_SECRET|FACEBOOK_SESSION_SECRET|SIGNED_CDN_SECRET|NETSCAPE_SESSION_SECRET|SIGNED_QUERY_SECRET/);
   assert.match(body.errorText, /c_user=\[REDACTED\]|\[SESSION COOKIE ROW REDACTED\]/);
@@ -157,8 +159,20 @@ test("payload uses the shared sanitizer and fingerprint helpers", () => {
     sourceUrl: "https://www.instagram.com/reel/abc/?igsh=SECRET",
     error,
     timestamp: "2026-11-16T15:00:00.000Z",
+    errorNumber: 437,
+    errorId: "HM-ABC123-XYZ",
   });
   assert.equal(payload.sourceUrl, safeUrl("https://www.instagram.com/reel/abc/"));
   assert.equal(payload.fingerprint, fingerprint("Instagram", payload.errorText));
+  assert.equal(payload.errorNumber, 437);
+  assert.equal(payload.errorId, "HM-ABC123-XYZ");
   assert.doesNotMatch(payload.sourceUrl, /igsh|SECRET/);
+  const missingIds = buildErrorAlertPayload({
+    platform: "Instagram",
+    sourceUrl: "https://www.instagram.com/reel/abc/",
+    error,
+    timestamp: "2026-11-16T15:00:00.000Z",
+  });
+  assert.equal(missingIds.errorNumber, null);
+  assert.equal(missingIds.errorId, null);
 });

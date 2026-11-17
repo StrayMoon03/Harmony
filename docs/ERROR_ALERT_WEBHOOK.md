@@ -11,6 +11,6 @@ These are ordinary server-side environment variables, loaded the same way as `HA
 | `HARMONY_ERROR_WEBHOOK_URL` | HTTPS (or HTTP) endpoint that receives the alert POST. |
 | `HARMONY_ERROR_WEBHOOK_KEY` | Shared secret sent as `Authorization: Bearer <key>` and `X-Automation-Key: <key>`. |
 
-The JSON body includes `platform`, a query-stripped `sourceUrl`, redacted `errorText`, a `fingerprint` shared with the private GitHub reporter, `discordMessageLink` when the original message link is already known, and an ISO `timestamp`. It does not include Discord user identity or media bytes.
+The JSON body includes `platform`, a query-stripped `sourceUrl`, redacted `errorText`, a `fingerprint` shared with the private GitHub reporter, `discordMessageLink` when the original message link is already known, an ISO `timestamp`, `errorNumber` (the GitHub issue number shown as Harmony Error #N in the Discord inbox, or `null` if no issue was filed), and `errorId` (the short `HM-…` Error ID from the inbox embed). It does not include Discord user identity or media bytes.
 
 Set both values in the Harmony Railway service variables (same place as `HARMONY_ERROR_GITHUB_TOKEN` and `HARMONY_ERROR_GITHUB_REPO`). For local runs, add them to `.env`. Restart or redeploy Harmony after changing them so the process picks up the new values.
