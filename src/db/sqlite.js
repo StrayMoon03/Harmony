@@ -612,6 +612,11 @@ function migrate(database) {
   if (!socialHealthColumns.has("last_failure_at")) database.exec("ALTER TABLE social_health_state ADD COLUMN last_failure_at TEXT");
   if (!socialHealthColumns.has("diagnostic_category")) database.exec("ALTER TABLE social_health_state ADD COLUMN diagnostic_category TEXT CHECK (diagnostic_category IN ('login_required', 'session_invalid', 'checkpoint', 'challenge', 'identity_mismatch', 'identity_unverified', 'missing_required_cookies', 'provider_auth_failure'))");
 
+  const verificationColumns = database.prepare("PRAGMA table_info(social_health_verification_attempts)").all();
+  if (!verificationColumns.some((column) => column.name === "session_fingerprint")) {
+    database.exec("ALTER TABLE social_health_verification_attempts ADD COLUMN session_fingerprint TEXT");
+  }
+
   const credentialRefreshColumns = new Set(
     database.prepare("PRAGMA table_info(credential_refresh_requests)").all().map((column) => column.name)
   );

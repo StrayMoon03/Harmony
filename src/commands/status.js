@@ -213,12 +213,12 @@ async function capabilitiesFor(interaction) {
   return resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
 }
 
-async function respondWithStatus(interaction, { update = false, notice = null } = {}) {
-  const capabilities = await capabilitiesFor(interaction);
+async function respondWithStatus(interaction, { update = false, notice = null, capabilities } = {}) {
+  capabilities ??= await capabilitiesFor(interaction);
   if (!capabilities.canDiagnose) {
     const payload = { content: "Only authorized server admins can view Harmony Status.", flags: MessageFlags.Ephemeral };
     if (update) return interaction.update({ content: payload.content, embeds: [], components: [] });
-    if (interaction.deferred || interaction.replied) return interaction.editReply({ content: payload.content, components: [] });
+    if (interaction.deferred || interaction.replied) return interaction.editReply({ content: payload.content, embeds: [], components: [] });
     return interaction.reply(payload);
   }
   const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
@@ -233,7 +233,7 @@ async function respondWithOwnerDiagnostics(interaction, { update = false } = {})
   if (!capabilities.canViewOwnerDiagnostics) {
     const payload = { content: "Owner diagnostics are available only to the server owner.", flags: MessageFlags.Ephemeral };
     if (update && interaction.message) return interaction.update({ content: payload.content, embeds: [], components: [] });
-    if (interaction.deferred || interaction.replied) return interaction.editReply({ content: payload.content, components: [] });
+    if (interaction.deferred || interaction.replied) return interaction.editReply({ content: payload.content, embeds: [], components: [] });
     return interaction.reply(payload);
   }
   const report = await runStatusCheck({ client: interaction.client, guild: interaction.guild, actorId: interaction.user.id });
@@ -258,15 +258,26 @@ async function handleStatusInteraction(interaction) {
   ]);
   const verificationMatch = /^harmony-status:verify:(instagram|facebook|youtube|threads)$/.exec(interaction.customId || "");
   if (!interaction.isButton?.() || (!actions.has(interaction.customId) && !verificationMatch)) return false;
-  if (verificationMatch) {
+  if (verificationMatch || interaction.customId === "harmony-status:refresh") {
+    await interaction.deferUpdate();
     const capabilities = await capabilitiesFor(interaction);
     if (!capabilities.canDiagnose) {
-      await interaction.update({ content: "Only authorized server admins can verify social sessions.", embeds: [], components: [] });
+      await respondWithStatus(interaction, { capabilities });
       return true;
     }
-    const result = await verifySocialSession(verificationMatch[1]);
-    const message = `${result.explanation} ${result.action}`;
-    await respondWithStatus(interaction, { update: true, notice: message });
+    const services = verificationMatch ? [verificationMatch[1]] : COOKIE_SERVICES;
+    const notices = [];
+    for (const service of services) {
+      try {
+        const result = await verifySocialSession(service);
+        if (verificationMatch || result.state !== "not_configured") {
+          notices.push(`${result.explanation} ${result.action}`);
+        }
+      } catch {
+        notices.push(`Harmony could not complete the ${SOCIAL[service]} verification. Try Verify ${SOCIAL[service]} again later.`);
+      }
+    }
+    await respondWithStatus(interaction, { capabilities, notice: notices.join("\n") });
     return true;
   }
   if (interaction.customId === "harmony-status:diagnostics" || interaction.customId === "harmony-status:diagnostics-refresh") {

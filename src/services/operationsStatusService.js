@@ -1,5 +1,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
+const { SESSION_PATH_ENV } = require("./runtimeSecrets");
+const { expectedInstagramUsername } = require("./sessionRefreshConfig");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const { getDb } = require("../db/sqlite");
 const socialHealthStore = require("../stores/socialHealthStore");
@@ -136,20 +139,15 @@ function recordSocialMaintenanceSuccess(platform, at = new Date().toISOString())
   // Called only after a submitted session passed pre-rotation validation and
   // post-activation verification. Ordinary media success keeps checkpoint state.
   try {
-    socialHealthStore.recordVerifiedSuccess(key, at, "refresh");
+    return socialHealthStore.recordVerifiedSuccess(key, at, "refresh");
   } catch {
     // A health-signal write must not turn a verified refresh into a failure.
+    return false;
   }
 }
 
 function sessionPath(platform) {
-  const envKey = {
-    instagram: "INSTAGRAM_COOKIES",
-    threads: "THREADS_COOKIES",
-    facebook: "FACEBOOK_COOKIES",
-    youtube: "YOUTUBE_COOKIES",
-  }[platform];
-  const configured = process.env[envKey];
+  const configured = process.env[SESSION_PATH_ENV[platform]];
   if (configured) return configured;
   if (platform === "instagram") return path.resolve(__dirname, "../../instagram-cookies.txt");
   if (platform === "facebook") return path.resolve(__dirname, "../../facebook-cookies.txt");
@@ -167,10 +165,45 @@ async function sessionConfigured(platform) {
   }
 }
 
+function sessionFingerprint(platform, contents) {
+  const hash = createHash("sha256").update(contents);
+  if (platform === "instagram") hash.update("\0").update(expectedInstagramUsername() || "");
+  return hash.digest("hex");
+}
+
+async function currentSessionFingerprint(platform) {
+  const filePath = sessionPath(platform);
+  if (!filePath) return null;
+  try {
+    const contents = await fs.readFile(filePath);
+    try {
+      return contents.length ? sessionFingerprint(platform, contents) : null;
+    } finally {
+      contents.fill(0);
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function checkSocial(platform) {
   const name = SOCIAL[platform];
   if (!name) return statusRow(`social-${platform}`, String(platform), STATUS.unknown, "This platform is not supported.");
   const health = socialHealthStore.get(platform);
+  const attempt = COOKIE_SERVICES.has(platform) ? socialHealthStore.getVerificationAttempt(platform) : null;
+  if (attempt?.session_fingerprint && (!health || attempt.last_attempt_at >= health.updated_at)) {
+    const fingerprint = await currentSessionFingerprint(platform);
+    if (fingerprint !== attempt.session_fingerprint) {
+      return statusRow(`social-${platform}`, name, STATUS.unknown,
+        fingerprint ? "The active session has changed since it was checked." : "The previously checked session is no longer available.",
+        fingerprint ? `Use Verify ${name} to check the active session.` : "Confirm the session configuration with the owner.");
+    }
+    if (attempt.last_result === "unknown") {
+      return statusRow(`social-${platform}`, name, STATUS.unknown,
+        "The latest authenticated check could not verify the active session.", "Try the service verification again later.", attempt.last_attempt_at);
+    }
+  }
+
   if (health?.state === "failure" && health.failure_kind === "owner") {
     const identityIssue = ["identity_mismatch", "identity_unverified"].includes(health.diagnostic_category);
     return statusRow(
@@ -229,7 +262,7 @@ async function checkSocial(platform) {
       ? "The authenticated session has not been recently verified."
       : "No saved authenticated session is configured. Public media may still work.",
     configured ? `Use Verify ${name} to check the saved session.` : "No action unless authenticated content is needed.",
-    socialHealthStore.getVerificationAttempt(platform)?.last_attempt_at || undefined
+    attempt?.last_attempt_at || undefined
   );
 }
 
@@ -247,23 +280,29 @@ async function verifySocialSession(platform, options = {}) {
   if (!filePath || !(await (options.isConfigured || sessionConfigured)(key))) {
     return verificationRow(key, "not_configured", `${name} has no saved session to verify.`, "Ask an administrator to configure the secure session.");
   }
+  let contents;
+  try {
+    contents = await (options.readFile || fs.readFile)(filePath, "utf8");
+  } catch {
+    return verificationRow(key, "unknown", `${name} active session could not be read.`, "Check the runtime session configuration.");
+  }
+  const fingerprint = sessionFingerprint(key, contents);
   const priorAttempt = socialHealthStore.getVerificationAttempt(key);
-  if (priorAttempt && Date.parse(timestamp) - Date.parse(priorAttempt.last_attempt_at) < SOCIAL_VERIFY_COOLDOWN_MS) {
+  if (priorAttempt?.session_fingerprint === fingerprint &&
+      Date.parse(timestamp) - Date.parse(priorAttempt.last_attempt_at) < SOCIAL_VERIFY_COOLDOWN_MS) {
     return verificationRow(key, "rate_limited", `${name} was checked recently.`, "Wait a few minutes before verifying again.", priorAttempt.last_attempt_at);
   }
 
-  // Persist the start before the network call to bound simultaneous clicks and
-  // avoid repeatedly contacting provider auth pages.
-  socialHealthStore.recordVerificationAttempt(key, timestamp, "unknown");
-  let contents = null;
-  let validation = { status: "INCONCLUSIVE" };
+  // Bound repeated requests for the same session while allowing a replacement to be tested immediately.
+  socialHealthStore.recordVerificationAttempt(key, timestamp, "unknown", fingerprint);
+  let validation;
   try {
-    contents = await (options.readFile || fs.readFile)(filePath, "utf8");
     validation = await (options.validator || validateSessionCookie)(key, contents);
   } catch {
     validation = { status: "INCONCLUSIVE" };
-  } finally {
-    contents = null;
+  }
+  if (!options.readFile && await currentSessionFingerprint(key) !== fingerprint) {
+    return verificationRow(key, "unknown", `${name} session changed during verification.`, `Use Verify ${name} to check the active session.`);
   }
 
   const result = String(validation?.status || "INCONCLUSIVE");
@@ -284,11 +323,16 @@ async function verifySocialSession(platform, options = {}) {
         : /challenge|checkpoint/i.test(String(validation?.category || "")) ? "challenge" : "checkpoint";
     recordSocialAuthFailure(key, timestamp, "owner", category);
     outcome = "owner";
-    response = verificationRow(key, "owner", `${name} requires owner attention.`, "Resolve the platform account check before retrying.", timestamp);
+    const identityIssue = category === "identity_unverified" || category === "identity_mismatch";
+    response = verificationRow(key, "owner",
+      identityIssue ? `${name} account identity could not be confirmed.` : `${name} requires owner attention.`,
+      identityIssue ? "Confirm the expected account identity and check again." : "Resolve the platform account check before retrying.", timestamp);
+  } else if (result === "INVALID_FORMAT") {
+    response = verificationRow(key, "unknown", `${name} active session is not in a readable cookies.txt format.`, "Check which session file Harmony loaded.", timestamp);
   } else {
     response = verificationRow(key, "unknown", `${name} session could not be verified right now.`, "Try again later; no session problem was inferred.", timestamp);
   }
-  socialHealthStore.recordVerificationAttempt(key, timestamp, outcome);
+  socialHealthStore.recordVerificationAttempt(key, timestamp, outcome, fingerprint);
   return response;
 }
 

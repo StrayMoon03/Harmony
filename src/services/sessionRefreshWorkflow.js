@@ -119,8 +119,17 @@ function createSessionRefreshWorkflow({
 
       let verified;
       verificationAttempted = true;
-      try { verified = await validator(service, candidateBuffer.toString("utf8")); }
-      catch { verified = { status: "INCONCLUSIVE" }; }
+      let activated;
+      try {
+        activated = runtime.readCurrentSession(service);
+        verified = activated.equals(candidateBuffer)
+          ? await validator(service, activated.toString("utf8"))
+          : { status: "INCONCLUSIVE" };
+      } catch {
+        verified = { status: "INCONCLUSIVE" };
+      } finally {
+        activated?.fill(0);
+      }
       if (verified?.status !== "AUTHENTICATED") {
         record(context, service, "activation", false);
         record(context, service, "verification", false);
@@ -143,10 +152,12 @@ function createSessionRefreshWorkflow({
 
       record(context, service, "activation", true);
       record(context, service, "verification", true);
-      onSuccess(service);
+      const healthSaved = onSuccess(service) !== false;
       complete(context, service);
       swap.commit();
-      return { ok: true, reason: "success", message: RESULT_MESSAGES.success };
+      const message = healthSaved ? RESULT_MESSAGES.success
+        : "Cookies were activated and verified. Harmony could not save the health result. Use Verify in Status / Health to check the active session.";
+      return { ok: true, reason: "success", message };
     } catch {
       let runtimeRestored = true;
       if (swap) {
