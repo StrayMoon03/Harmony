@@ -468,6 +468,10 @@ def main():
         browser = playwright.chromium.launch(
             **chromium_launch_kwargs(playwright, extra_args=CHROMIUM_ARGS)
         )
+        try:
+            print(f"Harmony Chromium version: {browser.version}", file=sys.stderr)
+        except Exception:
+            pass
         context = browser.new_context(
             viewport={"width": 1280, "height": 1600},
             user_agent=(
