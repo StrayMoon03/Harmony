@@ -90,13 +90,13 @@ function recordMemberCountActivity(guildId, kind, now = new Date()) {
   `).run(guildId, easternWeekKey(now), now.toISOString(), kind);
 }
 
-function seedYoutifulStaysMemberCountWeek(guildId) {
-  // The owner reported this activity for the week of November 9, 2026 (Eastern).
+function seedYoutifulStaysMemberCountWeeks(guildId) {
+  // Nov 9 is the original seed. Nov 16 adds the two owner-confirmed missing rejoins.
   getDb().prepare(`
     INSERT INTO member_count_week_seeds (guild_id, week_key, joined, left)
-    VALUES (?, '2026-11-09', 2, 1)
+    VALUES ($guild, '2026-11-09', 2, 1), ($guild, '2026-11-16', 2, 0)
     ON CONFLICT(guild_id, week_key) DO NOTHING
-  `).run(guildId);
+  `).run({ $guild: guildId });
 }
 
 function getWeeklyMemberCountActivity(guildId, now = new Date()) {
@@ -116,7 +116,7 @@ function getWeeklyMemberCountActivity(guildId, now = new Date()) {
 
 module.exports = {
   recordMemberCountActivity,
-  seedYoutifulStaysMemberCountWeek,
+  seedYoutifulStaysMemberCountWeeks,
   getWeeklyMemberCountActivity,
   getMemberCountSettings,
   getMemberCountAccounting,

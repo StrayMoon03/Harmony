@@ -271,14 +271,16 @@ async function refreshPublicCounters(guild, settings, snapshot) {
   return counts;
 }
 
-function observeMembershipChange(member, kind, now = new Date()) {
-  if (!member.user.bot) {
-    try {
-      recordMemberCountActivity(member.guild.id, kind, now);
-    } catch (error) {
-      console.error("Harmony could not save a member count event:", error);
-    }
+function recordObservedHumanActivity(guildId, kind, now) {
+  try {
+    recordMemberCountActivity(guildId, kind, now);
+  } catch (error) {
+    console.error("Harmony could not save a member count event:", { guildId, kind, error });
   }
+}
+
+function observeMembershipChange(member, kind, now = new Date()) {
+  if (!member.user.bot) recordObservedHumanActivity(member.guild.id, kind, now);
   scheduleMemberCountRefresh(member.guild);
 }
 
@@ -346,6 +348,7 @@ module.exports = {
   getMemberCounts,
   getMemberCountRoles,
   observeMembershipChange,
+  recordObservedHumanActivity,
   refreshMemberCounts,
   scheduleMemberCountRefresh,
   scheduleMemberCountRoleRefresh,

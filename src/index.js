@@ -4,7 +4,7 @@ require("dotenv").config();
 const { prepareRuntimeSecrets } = require("./services/runtimeSecrets");
 prepareRuntimeSecrets();
 
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const { Client, Events, GatewayIntentBits, Partials } = require("discord.js");
 const { handleMediaMessage } = require("./handlers/mediaHandler");
 const { getDb } = require("./db/sqlite");
 const forgetShareCommand = require("./commands/forgetShare");
@@ -65,6 +65,8 @@ const {
 const {
   scheduleMemberCountRoleRefresh,
   observeMembershipChange,
+  recordObservedHumanActivity,
+  scheduleMemberCountRefresh,
   startMemberCountScheduler,
 } = require("./services/memberCountService");
 const {
@@ -236,6 +238,11 @@ async function getConfiguredGreetingChannel(guild, settings) {
     : null;
 }
 
+// Discord.js can suppress the high-level join callback while a shard is getting ready.
+client.on(Events.Raw, ({ t, d }) => {
+  if (t === "GUILD_MEMBER_ADD" && !d.user.bot) recordObservedHumanActivity(d.guild_id, "join");
+});
+
 client.on("guildMemberAdd", async (member) => {
   console.log(
     "Greeting join event received:",
@@ -244,7 +251,7 @@ client.on("guildMemberAdd", async (member) => {
     member.guild.name
   );
 
-  observeMembershipChange(member, "join");
+  scheduleMemberCountRefresh(member.guild);
   if (member.user.bot) {
     console.log("Greeting skipped: joining account is a bot.");
     return;
