@@ -101,7 +101,11 @@ test("social health migration preserves legacy state rows and adds verification 
     updated_at TEXT NOT NULL,
     CHECK ((state = 'success' AND failure_kind IS NULL AND last_success_at IS NOT NULL) OR (state = 'failure' AND failure_kind IS NOT NULL))
   );
-  INSERT INTO social_health_state VALUES ('facebook', 'failure', 'session', NULL, '2026-11-07T00:00:00.000Z');`);
+  INSERT INTO social_health_state VALUES ('facebook', 'failure', 'session', NULL, '2026-11-07T00:00:00.000Z');
+  CREATE TABLE social_health_verification_attempts (
+    platform TEXT PRIMARY KEY, last_attempt_at TEXT NOT NULL, last_result TEXT NOT NULL
+  );
+  INSERT INTO social_health_verification_attempts VALUES ('facebook', '2026-11-07T00:05:00.000Z', 'unknown');`);
   migrate(database);
   const state = database.prepare("SELECT platform, state, failure_kind, success_kind, last_failure_at FROM social_health_state WHERE platform='facebook'").get();
   assert.equal(state.platform, "facebook");
@@ -109,7 +113,9 @@ test("social health migration preserves legacy state rows and adds verification 
   assert.equal(state.failure_kind, "session");
   assert.equal(state.success_kind, null);
   assert.equal(state.last_failure_at, null);
-  database.prepare("INSERT INTO social_health_verification_attempts VALUES ('facebook', '2026-11-07T00:05:00.000Z', 'unknown')").run();
-  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM social_health_verification_attempts").get().n, 1);
+  const attempt = database.prepare("SELECT * FROM social_health_verification_attempts WHERE platform = 'facebook'").get();
+  assert.equal(attempt.last_attempt_at, "2026-11-07T00:05:00.000Z");
+  assert.equal(attempt.last_result, "unknown");
+  assert.equal(attempt.session_fingerprint, null);
   database.close();
 });
