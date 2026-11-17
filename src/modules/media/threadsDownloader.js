@@ -460,14 +460,29 @@ function collectExactOpenGraphFallback(html, requestedPostUrl, options = {}) {
       metaContent(html, "og:image:url") ||
       metaContent(html, "twitter:image")
   );
-  if (!ogVideo && !ogImage) return null;
+  // Crawler HTML for a public post often embeds the exact post record (the
+  // JSON object whose "code" is this post's shortcode) with its real
+  // video_versions. That record is identity-checked by shortcode, so it is
+  // as trustworthy as the page's own og:url and gives the real video instead
+  // of only a thumbnail.
+  const scopedMedia = collectPostScopedJsonMedia(html, requestedPostUrl);
+  const scopedVideo = scopedMedia.find((item) => /\.mp4(?:$|[?#])/i.test(item)) || null;
+  const video = scopedVideo || ogVideo;
+  if (!video && !ogImage && scopedMedia.length === 0) return null;
+
+  const candidates = video
+    ? [...new Set([video, ...scopedMedia, ogVideo, ogImage].filter(Boolean))]
+    : scopedMedia.length
+      ? [...new Set([...scopedMedia, ogImage].filter(Boolean))]
+      : [ogImage];
 
   return {
     canonicalUrl: pageUrl,
-    video: ogVideo,
+    video,
     image: ogImage,
-    candidates: ogVideo ? [ogVideo, ogImage].filter(Boolean) : [ogImage],
-    videoPost: Boolean(ogVideo) || exactPostDeclaresVideo(html, expectedCode),
+    candidates,
+    scopedMediaCount: scopedMedia.length,
+    videoPost: Boolean(video) || exactPostDeclaresVideo(html, expectedCode),
     description,
     creator: extractThreadsCreator(pageUrl),
   };
@@ -495,35 +510,70 @@ async function fetchExactOpenGraphFallback(requestedPostUrl, options = {}) {
     "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
   ];
 
-  for (const candidate of urls) {
-    for (const userAgent of userAgents) {
-      try {
-        const cookieHeader = await readThreadsCookieHeader(
-          new URL(candidate).hostname
-        );
-        const response = await fetch(candidate, {
-          redirect: "follow",
-          headers: {
-            "User-Agent": userAgent,
-            Accept: "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-            ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-          },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!response.ok) continue;
-        const fallback = collectExactOpenGraphFallback(
-          await response.text(),
-          requestedPostUrl,
-          { knownText: options.knownText }
-        );
-        if (fallback) return fallback;
-      } catch {
-        // Try the next host or crawler UA.
+  // Public crawler pages do not need a session. Try them without cookies
+  // first: a logged-in-but-unconfirmed session can make Threads serve a
+  // stripped app shell. Fall back to the session only if anonymous fails.
+  const hasCookies = Boolean(process.env.THREADS_COOKIES);
+  const cookieModes = hasCookies ? [false, true] : [false];
+  let imageOnly = null;
+
+  for (const withCookies of cookieModes) {
+    for (const candidate of urls) {
+      for (const userAgent of userAgents) {
+        const attempt = {
+          host: (() => { try { return new URL(candidate).hostname; } catch { return ""; } })(),
+          agent: userAgent.startsWith("facebookexternalhit") ? "facebook" : "discord",
+          withCookies,
+          status: 0,
+          characters: 0,
+          matched: false,
+          hasVideo: false,
+          hasImage: false,
+          scopedMediaCount: 0,
+        };
+        try {
+          const cookieHeader = withCookies
+            ? await readThreadsCookieHeader(new URL(candidate).hostname)
+            : "";
+          const response = await fetch(candidate, {
+            redirect: "follow",
+            headers: {
+              "User-Agent": userAgent,
+              Accept: "text/html,application/xhtml+xml",
+              "Accept-Language": "en-US,en;q=0.9",
+              ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+            },
+            signal: AbortSignal.timeout(8000),
+          });
+          attempt.status = response.status;
+          if (!response.ok) {
+            console.log("Threads exact-post crawler attempt:", attempt);
+            continue;
+          }
+          const html = await response.text();
+          attempt.characters = html.length;
+          const fallback = collectExactOpenGraphFallback(
+            html,
+            requestedPostUrl,
+            { knownText: options.knownText }
+          );
+          attempt.matched = Boolean(fallback);
+          attempt.hasVideo = Boolean(fallback?.video);
+          attempt.hasImage = Boolean(fallback?.image);
+          attempt.scopedMediaCount = fallback?.scopedMediaCount || 0;
+          console.log("Threads exact-post crawler attempt:", attempt);
+          if (fallback?.video) return fallback;
+          if (fallback && !imageOnly) imageOnly = fallback;
+        } catch {
+          console.log("Threads exact-post crawler attempt:", { ...attempt, failed: true });
+        }
       }
     }
+    // An anonymous thumbnail is enough to stop; the session pass is only
+    // for pages anonymous crawlers could not open at all.
+    if (imageOnly) return imageOnly;
   }
-  return null;
+  return imageOnly;
 }
 
 function isThreadsShareUrl(url) {
@@ -629,20 +679,37 @@ async function resolveThreadsShareRedirect(url) {
   return null;
 }
 
-async function inspectThreadsWithBrowser(url) {
-  const pythonPath = process.env.PYTHON_PATH || "python3";
-  const cookiePath = process.env.THREADS_COOKIES || "";
+function logChromiumIdentity(stderr) {
+  // The Python helper reports its Chromium executable and version on stderr,
+  // which Node otherwise discards on success. Surface only those lines.
+  for (const line of String(stderr || "").split(/\r?\n/)) {
+    if (/^Harmony Chromium (executable|version):/.test(line)) {
+      console.log(line.slice(0, 300));
+    }
+  }
+}
 
-  console.log("Threads browser fallback starting.");
+async function inspectThreadsWithBrowser(url, browserOptions = {}) {
+  const pythonPath = process.env.PYTHON_PATH || "python3";
+  const cookiePath = browserOptions.withoutCookies
+    ? ""
+    : process.env.THREADS_COOKIES || "";
+  const timeoutMs = browserOptions.timeoutMs || 75000;
+
+  console.log(
+    browserOptions.withoutCookies
+      ? "Threads browser fallback starting (without cookies)."
+      : "Threads browser fallback starting."
+  );
 
   try {
-    const { stdout } = await withBrowserLock(() =>
+    const { stdout, stderr } = await withBrowserLock(() =>
       execFileAsync(
         pythonPath,
         [THREADS_BROWSER_HELPER, url, cookiePath],
         {
           windowsHide: true,
-          timeout: 75000,
+          timeout: timeoutMs,
           killSignal: "SIGKILL",
           maxBuffer: 5 * 1024 * 1024,
           encoding: "utf8",
@@ -650,6 +717,7 @@ async function inspectThreadsWithBrowser(url) {
       )
     );
 
+    logChromiumIdentity(stderr);
     const line = String(stdout)
       .split(/\r?\n/)
       .find((value) =>
@@ -699,15 +767,17 @@ async function inspectThreadsWithBrowser(url) {
           ? result.finalUrl
           : url,
       authFailure,
+      cookieCount,
     };
   } catch (error) {
+    logChromiumIdentity(error?.stderr);
     logThreadsBrowserDiagnostics(error?.stdout);
     if (
       error &&
       (error.killed || error.signal === "SIGKILL")
     ) {
       throw new Error(
-        "Threads browser took longer than 75 seconds."
+        `Threads browser took longer than ${Math.round(timeoutMs / 1000)} seconds.`
       );
     }
 
@@ -1049,10 +1119,14 @@ async function downloadThreadsMedia(url, options = {}) {
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
     if (candidates.length === 0) {
+      const browserStartedAt = Date.now();
+      let browserCookieCount = 0;
+      let browserTimedOut = false;
       try {
         const browserResult =
           await inspectThreadsWithBrowser(finalUrl);
         authFailure ||= browserResult.authFailure;
+        browserCookieCount = browserResult.cookieCount || 0;
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
         if (candidates.length === 0) {
@@ -1061,41 +1135,102 @@ async function downloadThreadsMedia(url, options = {}) {
           );
         }
       } catch (browserError) {
-        const fallback = typeof options.getDiscordEmbedFallback === "function"
-          ? await options.getDiscordEmbedFallback(finalUrl)
-          : options.discordEmbedFallback;
-        const fallbackCandidates = Array.isArray(fallback?.candidates)
-          ? fallback.candidates.map(validCdnUrl).filter(Boolean)
-          : [];
-        if (fallbackCandidates.length) {
-          candidates = fallbackCandidates;
-          finalUrl = fallback.finalUrl || finalUrl;
-          fallbackCreator = fallback.creator || null;
-          console.log(
-            `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
-          );
-        } else {
-          const identityUrl = isExactThreadsPostUrl(finalUrl)
-            ? finalUrl
-            : isExactThreadsPostUrl(url)
-              ? url
-              : null;
-          const openGraph = identityUrl
-            ? await fetchExactOpenGraphFallback(identityUrl, {
-                knownText: options.knownText || fallback?.description || null,
-              })
+        browserTimedOut = /took longer than/i.test(String(browserError?.message || ""));
+        const identityUrl = isExactThreadsPostUrl(finalUrl)
+          ? finalUrl
+          : isExactThreadsPostUrl(url)
+            ? url
             : null;
-          if (openGraph?.candidates?.length) {
-            candidates = openGraph.candidates;
-            finalUrl = openGraph.canonicalUrl || finalUrl;
-            fallbackCreator = openGraph.creator || fallbackCreator;
-            openGraphFallback = openGraph;
-            console.log(
-              "Threads using exact-post Open Graph media after browser and Discord preview found none."
+
+        const useOpenGraph = (openGraph, reason) => {
+          candidates = openGraph.candidates;
+          finalUrl = openGraph.canonicalUrl || finalUrl;
+          fallbackCreator = openGraph.creator || fallbackCreator;
+          openGraphFallback = openGraph;
+          console.log(
+            `Threads using exact-post crawler media (${reason}; video: ${Boolean(openGraph.video)}).`
+          );
+        };
+
+        // 1. The public crawler page for the exact post. It is fast and
+        //    often carries the real video, so try it before anything that
+        //    could only give a thumbnail.
+        const openGraph = identityUrl
+          ? await fetchExactOpenGraphFallback(identityUrl, {
+              knownText: options.knownText || null,
+            })
+          : null;
+        if (openGraph?.video) {
+          useOpenGraph(openGraph, "browser found none");
+        }
+
+        // 2. A browser session that found the exact record but no media may
+        //    be a degraded logged-in view. Retry once without cookies while
+        //    there is still time in the processing window.
+        if (
+          candidates.length === 0 &&
+          browserCookieCount > 0 &&
+          !browserTimedOut &&
+          !authFailure &&
+          Date.now() - browserStartedAt < 30000
+        ) {
+          try {
+            const anonymous = await inspectThreadsWithBrowser(finalUrl, {
+              withoutCookies: true,
+              timeoutMs: 45000,
+            });
+            if (anonymous.candidates.length) {
+              candidates = anonymous.candidates;
+              finalUrl = anonymous.finalUrl || finalUrl;
+              console.log(
+                `Threads cookieless browser retry found ${candidates.length} media candidate(s).`
+              );
+            }
+          } catch (retryError) {
+            console.warn(
+              "Threads cookieless browser retry failed:",
+              retryError instanceof Error ? retryError.message : retryError
             );
-          } else {
-            throw browserError;
           }
+        }
+
+        // 3. Discord's own embed of the exact message.
+        let fallback = null;
+        if (candidates.length === 0) {
+          fallback = typeof options.getDiscordEmbedFallback === "function"
+            ? await options.getDiscordEmbedFallback(finalUrl)
+            : options.discordEmbedFallback;
+          const fallbackCandidates = Array.isArray(fallback?.candidates)
+            ? fallback.candidates.map(validCdnUrl).filter(Boolean)
+            : [];
+          if (fallbackCandidates.length) {
+            candidates = fallbackCandidates;
+            finalUrl = fallback.finalUrl || finalUrl;
+            fallbackCreator = fallback.creator || null;
+            console.log(
+              `Threads using ${candidates.length} media candidate(s) from Discord's exact-message embed.`
+            );
+          }
+        }
+
+        // 4. The exact post's Open Graph thumbnail, labeled as a preview.
+        if (candidates.length === 0 && openGraph?.candidates?.length) {
+          const knownText = options.knownText || fallback?.description || null;
+          if (
+            !knownText ||
+            !openGraph.description ||
+            threadsPostTextsCompatible(knownText, openGraph.description)
+          ) {
+            useOpenGraph(openGraph, "browser and Discord preview found none");
+          }
+        }
+
+        if (candidates.length === 0) {
+          console.warn("Threads exact-post fallbacks found no media.", {
+            exactIdentity: Boolean(identityUrl),
+            crawlerMatched: Boolean(openGraph),
+          });
+          throw browserError;
         }
       }
     }
