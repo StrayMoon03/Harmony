@@ -8,9 +8,12 @@ function classifyAuthenticatedProviderFailure(error, { authenticatedRequest = fa
   if (/\/checkpoint\/|\/challenge\/|checkpoint(?: page|required| blocked)?|security challenge|account verification required|suspicious login/.test(text)) {
     return { kind: "owner", category: /challenge|verification/.test(text) ? "challenge" : "checkpoint" };
   }
+  if (/this content isn['’]?t available to everyone|can['’]?t be seen by certain audiences/.test(text)) {
+    return { kind: "session", category: "login_required" };
+  }
   // Exclude anti-bot prompts and transport/rate-limit failures: these do not
-  // prove that the account session is invalid.
-  if (/not logged in|login (?:is )?required|sign[ -]?in (?:is )?required|opened a login page|redirected to (?:the )?login|session (?:has )?expired|session is invalid|invalid session|authentication required|auth_required/i.test(text) &&
+  // prove that the account session is invalid. Do not treat a plain 429 as auth.
+  if (/not logged in|login (?:is )?required|sign[ -]?in (?:is )?required|opened a login page|redirect(?:ed)? to (?:the )?login|http redirect to login|session (?:has )?expired|session is invalid|invalid session|authentication required|auth_required/i.test(text) &&
       !/confirm.*not a bot|not a bot|rate.?limit|too many requests|\b429\b/i.test(text)) {
     return { kind: "session", category: /expired|invalid session/.test(text) ? "session_invalid" : "login_required" };
   }

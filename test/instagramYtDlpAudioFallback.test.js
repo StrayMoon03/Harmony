@@ -242,3 +242,59 @@ test("Instagram returns the first verified silent video only after all audio rec
     await fs.rm(result.rawDir, { recursive: true, force: true });
   }
 });
+
+test("Instagram reel login/audience walls keep socialAuthFailureKind after later fallbacks fail", async () => {
+  const audienceWall = new Error("ERROR: [Instagram] DfdPSrShNtb: This content isn't available to everyone: It can't be seen by certain audiences.");
+  await assert.rejects(async () => {
+    try {
+      await downloadMedia("https://www.instagram.com/reel/DfdPSrShNtb/", {
+        runInstagramYtDlpAttempts: async () => ({
+          result: null,
+          cookieAttempted: true,
+          failures: [
+            { error: audienceWall, useCookies: true },
+            { error: audienceWall, useCookies: false },
+          ],
+        }),
+        downloadWithGalleryDl: async () => {
+          throw new Error("[instagram][info] Waiting for 1 minutes until 05:15:11 (429 Too Many Requests)");
+        },
+        downloadInstagramReel: async () => {
+          throw new Error("Instagram browser could not verify the requested reel");
+        },
+      });
+    } catch (error) {
+      assert.equal(error.socialAuthFailureKind, "session");
+      assert.equal(error.socialAuthFailureCategory, "login_required");
+      assert.match(error.message, /isn't available to everyone/);
+      assert.match(error.message, /429 Too Many Requests/);
+      assert.match(error.message, /could not verify the requested reel/);
+      throw error;
+    }
+  }, /exhausted its safe download methods/);
+});
+
+test("Instagram reel rate limits alone do not become cookie auth failures", async () => {
+  await assert.rejects(async () => {
+    try {
+      await downloadMedia("https://www.instagram.com/reel/DfdPSrShNtb/", {
+        runInstagramYtDlpAttempts: async () => ({
+          result: null,
+          cookieAttempted: true,
+          failures: [
+            { error: new Error("[instagram][info] Waiting for 1 minutes until 05:15:11 (429 Too Many Requests)"), useCookies: true },
+          ],
+        }),
+        downloadWithGalleryDl: async () => {
+          throw new Error("[instagram][info] Waiting for 1 minutes until 05:15:11 (429 Too Many Requests)");
+        },
+        downloadInstagramReel: async () => {
+          throw new Error("Instagram browser could not verify the requested reel");
+        },
+      });
+    } catch (error) {
+      assert.equal(error.socialAuthFailureKind, undefined);
+      throw error;
+    }
+  }, /exhausted its safe download methods/);
+});
