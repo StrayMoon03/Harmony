@@ -297,7 +297,9 @@ async function verifySocialSession(platform, options = {}) {
   socialHealthStore.recordVerificationAttempt(key, timestamp, "unknown", fingerprint);
   let validation;
   try {
-    validation = await (options.validator || validateSessionCookie)(key, contents);
+    validation = await (options.validator || validateSessionCookie)(key, contents, {
+      diagnosticLogger: (details) => console.info("social_session_verify", JSON.stringify(details)),
+    });
   } catch {
     validation = { status: "INCONCLUSIVE" };
   }

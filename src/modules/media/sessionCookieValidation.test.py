@@ -1,6 +1,8 @@
 import importlib.util
 import pathlib
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 MODULE_PATH = pathlib.Path(__file__).with_name("sessionCookieValidation.py")
@@ -107,6 +109,60 @@ class SessionCookieValidationTests(unittest.TestCase):
         self.assertEqual(validator.classify_browser_result(
             "threads", "https://untrusted.example/", {"account_menu": True},
         ), "INCONCLUSIVE")
+
+    def test_instagram_diagnostics_distinguish_checkpoint_from_both_identity_failures(self):
+        edit_url = "https://www.instagram.com/accounts/edit/"
+        for url, username, expected_status, expected_evidence in (
+            ("https://www.instagram.com/challenge/private-identifier", None, "OWNER_REQUIRED", "challenge_detected"),
+            (edit_url, "other_account", "IDENTITY_MISMATCH", "username_mismatch"),
+            (edit_url, "", "IDENTITY_UNVERIFIABLE", "username_unreadable"),
+        ):
+            signals = {"instagram_edit_form": True, "instagram_username": username}
+            result = validator.classify_browser_result("instagram", url, signals, "expected.account")
+            self.assertEqual(result, expected_status)
+            self.assertEqual(validator.evidence_category("instagram", result, signals), expected_evidence)
+
+    def test_youtube_diagnostics_identify_the_missing_requirement(self):
+        for feed, avatar, sign_in, evidence in (
+            (False, False, False, "youtube_feed_missing"),
+            (True, False, False, "avatar_evidence_missing"),
+            (True, True, True, "youtube_sign_in_link_present"),
+        ):
+            signals = {"youtube_feed": feed, "youtube_avatar_present": avatar, "youtube_sign_in_link": sign_in}
+            self.assertEqual(validator.evidence_category("youtube", "INCONCLUSIVE", signals), evidence)
+
+    def test_threads_diagnostics_report_main_navigation_without_urls(self):
+        navigation = {"navigation": []}
+        page = SimpleNamespace(main_frame=object())
+        for status, url, frame in (
+            (301, "https://www.threads.net/?private=query", page.main_frame),
+            (200, "https://www.threads.com/@private-account", page.main_frame),
+            (200, "https://subresource.example/private", object()),
+        ):
+            request = SimpleNamespace(is_navigation_request=lambda: True, frame=frame)
+            response = SimpleNamespace(status=status, url=url, request=request)
+            validator.append_navigation_response("threads", page, response, navigation)
+        self.assertEqual(navigation["navigation"], [[301, "threads_net"], [200, "threads_com"]])
+        signals = {"account_menu": False}
+        result = validator.classify_browser_result("threads", "https://www.threads.com/", signals)
+        self.assertEqual(result, "INCONCLUSIVE")
+        self.assertEqual(validator.evidence_category("threads", result, signals), "account_menu_missing")
+
+    def test_probe_failure_keeps_stage_and_redacts_exception_text(self):
+        jar = "\n".join([
+            "# Netscape HTTP Cookie File",
+            cookie_line(".threads.com", "sessionid"),
+            cookie_line(".threads.com", "csrftoken"),
+        ])
+        diagnostics = {"stage": "cookie_parse", "navigation": []}
+
+        def fail_navigation(_service, _cookies, details):
+            details["stage"] = "navigation"
+            raise TimeoutError("private href and account")
+
+        with patch.object(validator, "inspect_with_browser", fail_navigation):
+            self.assertEqual(validator.validate("threads", jar, diagnostics), "INCONCLUSIVE")
+        self.assertEqual(diagnostics, {"stage": "navigation", "navigation": [], "error": "timeout"})
 
 
 if __name__ == "__main__":
