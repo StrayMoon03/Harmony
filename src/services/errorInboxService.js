@@ -1,6 +1,7 @@
 const { EmbedBuilder } = require("discord.js");
 const { getErrorInboxSettings } = require("../stores/errorInboxStore");
 const { reportMediaErrorToGitHub } = require("./githubErrorReporter");
+const { notifyErrorAlertWebhook } = require("./errorAlertWebhook");
 const { recordSocialAuthFailure, isExplicitAuthenticationFailure, authenticationFailureKind } = require("./operationsStatusService");
 
 const recentMediaErrors = new Map();
@@ -154,6 +155,15 @@ async function logMediaError(message, error) {
   await destination.send({
     embeds: [embed],
     allowedMentions: { parse: [] },
+  });
+
+  notifyErrorAlertWebhook({
+    platform: platformFromLink(link),
+    sourceUrl: link,
+    error,
+    fingerprint: githubReport?.fingerprint,
+    discordMessageLink: jumpUrl,
+    timestamp: new Date().toISOString(),
   });
 
   console.log(`Harmony media error reported as ${errorId} (${platform.toLowerCase()}).`);
