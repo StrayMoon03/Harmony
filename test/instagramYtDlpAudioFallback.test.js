@@ -53,6 +53,40 @@ test("Instagram keeps exact video when the IPv4 video+audio retry fails", async 
   }
 });
 
+test("Instagram /p/ posts keep the original video when a silent audio retry fails", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "harmony-instagram-post-retry-"));
+  const original = path.join(dir, "harmony-Dfv8-spDFgX.mp4");
+  const calls = [];
+  const execute = async (_binary, args) => {
+    calls.push(args);
+    if (calls.length === 1) {
+      await fs.writeFile(original, Buffer.alloc(2048));
+      return {
+        stdout: `HARMONY_FORMATS:${JSON.stringify([{ format_id: "video-only", ext: "mp4", height: 720, vcodec: "h264", acodec: "none" }])}\nHARMONY_FILE:${original}\n`,
+      };
+    }
+    throw new Error("simulated merge failure");
+  };
+
+  try {
+    const result = await downloadWithYtDlp("https://www.instagram.com/p/Dfv9B1ajDJk/", dir, {
+      useCookies: false,
+      execFileAsync: execute,
+      hasVideoStream: async () => true,
+      hasAudioStream: async () => false,
+    });
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0].path, original);
+    assert.equal(result.files[0].isVideo, true);
+    assert.equal(result.hasAudio, false);
+    await fs.stat(original);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every((args) => args.includes("--force-ipv4")));
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("Instagram accepts a video-only output from the IPv4 video+audio retry", async () => {
   const { result, dir } = await runSilentRetryScenario("silent");
   try {
