@@ -1,6 +1,6 @@
 """Validate a candidate Netscape cookie jar without persisting or printing it.
 
-The only stdout output is one of a small set of result codes. Browser text,
+Stdout contains a result code and bounded diagnostic metadata. Browser text,
 URLs, identities, cookie names/values, and exceptions are never returned.
 """
 import json
@@ -147,20 +147,86 @@ def classify_browser_result(service, final_url, signals, expected_username=None)
     return "INCONCLUSIVE"
 
 
-def inspect_with_browser(service, cookies):
+def document_category(service, url):
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    route = parsed.path.rstrip("/")
+    if host == "accounts.google.com":
+        return "google_sign_in"
+    if not any(host == base or host.endswith("." + base) for base in SERVICE_CONFIG[service]["domains"]):
+        return "external"
+    if path_is_auth_challenge(url):
+        return "challenge"
+    if re.search(r"/(?:accounts/login|login|signin)(?:/|$)", route, re.I):
+        return "login"
+    if service == "instagram" and route == "/accounts/edit":
+        return "instagram_edit"
+    if service == "youtube" and route.startswith("/feed/"):
+        return "youtube_feed"
+    if service == "threads":
+        return "threads_net" if host.endswith("threads.net") else "threads_com"
+    return "provider_other"
+
+
+def append_navigation_response(service, page, response, diagnostics):
+    request = response.request
+    # Only the main document. Subresources and iframe URLs are irrelevant.
+    if not request.is_navigation_request():
+        return
+    try:
+        if request.frame != page.main_frame:
+            return
+    except Exception:
+        return
+    navigation = diagnostics["navigation"]
+    if len(navigation) == 8:
+        navigation.pop(0)
+    navigation.append([response.status, document_category(service, response.url)])
+
+
+def evidence_category(service, outcome, signals):
+    if outcome == "OWNER_REQUIRED":
+        return "challenge_detected"
+    if outcome == "UNAUTHENTICATED":
+        return "login_detected"
+    if service == "instagram":
+        if outcome == "IDENTITY_MISMATCH":
+            return "username_mismatch"
+        if outcome == "IDENTITY_UNVERIFIABLE":
+            return "username_unreadable"
+        return "username_match" if outcome == "AUTHENTICATED" else "edit_form_missing"
+    if service == "youtube":
+        if not signals["youtube_feed"]:
+            return "youtube_feed_missing"
+        if not signals["youtube_avatar_present"]:
+            return "avatar_evidence_missing"
+        return "youtube_sign_in_link_present" if signals["youtube_sign_in_link"] else "avatar_found"
+    if service == "threads":
+        return "account_menu_found" if signals["account_menu"] else "account_menu_missing"
+    return "account_menu_found" if signals["facebook_account_menu"] else "account_menu_missing"
+
+
+def inspect_with_browser(service, cookies, diagnostics):
+    diagnostics["stage"] = "browser_import"
     from playwright.sync_api import sync_playwright
     from chromiumExecutable import chromium_launch_kwargs
 
+    diagnostics["stage"] = "browser_launch"
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             **chromium_launch_kwargs(playwright)
         )
+        diagnostics["stage"] = "cookie_setup"
         context = browser.new_context(locale="en-US")
         context.add_cookies(cookies)
         page = context.new_page()
+        page.on("response", lambda response: append_navigation_response(service, page, response, diagnostics))
+        diagnostics["stage"] = "navigation"
         page.goto(SERVICE_CONFIG[service]["url"], wait_until="domcontentloaded", timeout=20000)
         page.wait_for_timeout(1500)
         current_url = page.url
+        diagnostics["stage"] = "page_inspection"
+        diagnostics["document"] = document_category(service, current_url)
         signals = {
             "checkpoint": path_is_auth_challenge(current_url),
             "login_route": bool(re.search(r"/(?:accounts/login|login|signin)(?:/|$)", urlparse(current_url).path, re.I)),
@@ -192,30 +258,40 @@ def inspect_with_browser(service, cookies):
         elif service == "facebook":
             signals["facebook_account_menu"] = page.locator('[aria-label="Your profile"], [aria-label="Account"], [data-pagelet="ProfileCometLoggedInNavigationBar"]').count() > 0
         elif service == "youtube":
-            signals["youtube_account_avatar"] = (
+            signals["youtube_feed"] = (
                 urlparse(current_url).hostname in ("www.youtube.com", "youtube.com")
                 and urlparse(current_url).path.startswith("/feed/")
-                and page.locator('ytd-topbar-menu-button-renderer #avatar-btn img, button#avatar-btn img').count() > 0
-                and page.locator('a[href*="ServiceLogin"], a[href^="/signin"]').count() == 0
             )
+            signals["youtube_avatar_present"] = signals["youtube_feed"] and (
+                page.locator('ytd-topbar-menu-button-renderer #avatar-btn img, button#avatar-btn img').count() > 0
+            )
+            signals["youtube_sign_in_link"] = signals["youtube_avatar_present"] and (
+                page.locator('a[href*="ServiceLogin"], a[href^="/signin"]').count() > 0
+            )
+            signals["youtube_account_avatar"] = signals["youtube_avatar_present"] and not signals["youtube_sign_in_link"]
         status = classify_browser_result(
             service,
             current_url,
             signals,
             expected_username=os.environ.get("INSTAGRAM_EXPECTED_USERNAME") if service == "instagram" else None,
         )
+        diagnostics["evidence"] = evidence_category(service, status, signals)
         context.close()
         browser.close()
+        diagnostics["stage"] = "complete"
         return status
 
 
-def validate(service, contents):
+def validate(service, contents, diagnostics=None):
+    if diagnostics is None:
+        diagnostics = {"stage": "cookie_parse", "navigation": []}
     cookies, parse_status = parse_netscape_candidate_result(service, contents)
     if parse_status != "OK":
         return parse_status
     try:
-        return inspect_with_browser(service, cookies)
-    except Exception:
+        return inspect_with_browser(service, cookies, diagnostics)
+    except Exception as error:
+        diagnostics["error"] = "timeout" if type(error).__name__ == "TimeoutError" else "probe_error"
         return "INCONCLUSIVE"
     finally:
         for cookie in cookies:
@@ -225,13 +301,14 @@ def validate(service, contents):
 
 def main():
     result = "INCONCLUSIVE"
+    diagnostics = {"stage": "cookie_parse", "navigation": []}
     try:
         service = sys.argv[1]
         candidate = sys.stdin.read()
-        result = validate(service, candidate)
+        result = validate(service, candidate, diagnostics)
     except Exception:
         result = "INCONCLUSIVE"
-    sys.stdout.write(json.dumps({"status": result}, separators=(",", ":")))
+    sys.stdout.write(json.dumps({"status": result, "diagnostics": diagnostics}, separators=(",", ":")))
 
 
 if __name__ == "__main__":
