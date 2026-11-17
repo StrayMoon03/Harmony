@@ -23,7 +23,8 @@ const {
   getTikTokUploadOptions,
 } = require("../modules/media/tiktokDownloader");
 const { classify } = require("../modules/media/classifier");
-const { formatMediaCard, extractOriginalDate, formatXTextPost } = require("../modules/media/formatter");
+const { formatMediaCard, extractOriginalDate } = require("../modules/media/formatter");
+const { buildTextPostMessage } = require("../modules/media/textPostCard");
 const { extractMemberComment } = require("../modules/media/memberComment");
 const { platformHeart } = require("../modules/media/emojiConfig");
 const { uploadMedia } = require("../modules/media/uploader");
@@ -98,6 +99,52 @@ function buildSuccessfulCard(message, processedUrl, options) {
     }),
     safeToDelete: preservation.safeToDelete,
   };
+}
+
+/**
+ * Posts Harmony's text card for a text-only post and records the share.
+ * This is a success path: no error inbox entry or failure notice.
+ * textPost must come from the exact, verified post.
+ */
+async function sendTextPostCard(message, lifecycle, {
+  platform,
+  platformName,
+  mediaId,
+  originalUrl,
+  textPost,
+  creator: storedCreator,
+}) {
+  const preservation = extractMemberComment(message.content, originalUrl);
+  const payload = buildTextPostMessage({
+    platform: platformName,
+    text: textPost.text,
+    displayName: textPost.displayName,
+    handle: textPost.handle,
+    avatarUrl: textPost.avatarUrl,
+    originalUrl,
+    originalDate: textPost.originalDate,
+    sharedById: message.author.id,
+    memberComment: preservation.comment,
+  });
+  await lifecycle.markRetrieved();
+  const sent = await message.channel.send(payload);
+  await deleteOriginalAfterSuccess(message, [sent.id], preservation.safeToDelete);
+  const creator = storedCreator || (textPost.handle
+    ? `@${String(textPost.handle).replace(/^@+/, "")}`
+    : "Unknown creator");
+  shareStore.insert({
+    platform,
+    mediaId,
+    creator,
+    sharedBy: message.member?.displayName ?? message.author.username,
+    sharedById: message.author.id,
+    messageId: sent.id,
+    channelId: message.channel.id,
+    guildId: message.guild?.id ?? null,
+    url: originalUrl,
+  });
+  console.log(`${platformName} text-only post shared as a text card.`);
+  return sent;
 }
 
 /**
@@ -882,30 +929,23 @@ async function processMediaMessage(message, lifecycle) {
       const info = infoResult;
 
       if (downloadResult.linkOnly) {
-        let replacementMessageId = null;
         if (downloadResult.text) {
-          const preservation = extractMemberComment(message.content, originalUrl);
-          const textCard = formatXTextPost({
-            displayName: downloadResult.displayName,
-            handle: downloadResult.creator,
-            originalDate: downloadResult.originalDate || extractOriginalDate(info),
-            text: downloadResult.text,
-            originalUrl,
-            sharedById: message.author.id,
-            memberComment: preservation.comment,
-          });
-          await lifecycle.markRetrieved();
           recordSocialSuccess(platform);
-          const sent = await message.channel.send({
-            content: textCard,
-            allowedMentions: { parse: [] },
+          await sendTextPostCard(message, lifecycle, {
+            platform,
+            platformName: "X",
+            mediaId,
+            originalUrl,
+            creator: downloadResult.creator || "Unknown creator",
+            textPost: {
+              text: downloadResult.text,
+              displayName: downloadResult.displayName,
+              handle: downloadResult.creator,
+              avatarUrl: null,
+              originalDate: downloadResult.originalDate || extractOriginalDate(info),
+            },
           });
-          replacementMessageId = sent.id;
-          await deleteOriginalAfterSuccess(
-            message,
-            [sent.id],
-            preservation.safeToDelete
-          );
+          return;
         }
         shareStore.insert({
           platform,
@@ -915,16 +955,12 @@ async function processMediaMessage(message, lifecycle) {
             message.member?.displayName ??
             message.author.username,
           sharedById: message.author.id,
-          messageId: replacementMessageId || message.id,
+          messageId: message.id,
           channelId: message.channel.id,
           guildId: message.guild?.id ?? null,
           url: originalUrl,
         });
-        console.log(
-          downloadResult.text
-            ? "X text-only post replaced with Harmony's compact standalone post."
-            : "X text-only post preserved because exact post text was unavailable."
-        );
+        console.log("X text-only post preserved because exact post text was unavailable.");
         return;
       }
 
@@ -1208,6 +1244,17 @@ async function processMediaMessage(message, lifecycle) {
         }),
         getMediaInfo(originalUrl).catch(() => null),
       ]);
+      if (downloadResult.textOnly && downloadResult.textPost) {
+        recordMediaHealth("threads", downloadResult);
+        await sendTextPostCard(message, lifecycle, {
+          platform,
+          platformName: "Threads",
+          mediaId,
+          originalUrl,
+          textPost: downloadResult.textPost,
+        });
+        return;
+      }
       const classification = classify(
         downloadResult.files,
         originalUrl
@@ -1307,4 +1354,5 @@ module.exports = {
   sendAlreadySharedAndCleanup,
   uploadFacebookMediaOrPreserveOriginal,
   sendYouTubeStreamingPreview,
+  sendTextPostCard,
 };

@@ -65,6 +65,7 @@ def record_diagnostic_signals(value, expected_code, diagnostics):
     # tell a text post from a record whose media Threads withheld.
     text_only_seen = False
     any_media_declared = False
+    record_post_text(records, diagnostics)
     for record in records:
         if isinstance(record.get("media_type"), int):
             diagnostics["exactRecordMediaTypeSeen"] = True
@@ -101,6 +102,56 @@ def record_diagnostic_signals(value, expected_code, diagnostics):
         diagnostics["exactRecordTextOnly"] = True
     else:
         diagnostics.pop("exactRecordTextOnly", None)
+
+
+def record_post_text(records, diagnostics):
+    # Remember the caption and author of the exact post only. records holds
+    # nothing but records whose own code matches the requested post, so a
+    # quoted or reposted post's text is never collected. Two different texts
+    # for the same code are treated as unverifiable. Stored under internal
+    # "_" keys, which never reach the diagnostics line.
+    for record in records:
+        caption = record.get("caption")
+        text = caption.get("text") if isinstance(caption, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            continue
+        user = record.get("user") if isinstance(record.get("user"), dict) else {}
+        avatar = user.get("profile_pic_url")
+        taken_at = record.get("taken_at")
+        details = {
+            "text": text.strip(),
+            "username": user.get("username") if isinstance(user.get("username"), str) else None,
+            "fullName": user.get("full_name") if isinstance(user.get("full_name"), str) else None,
+            "avatarUrl": avatar if allowed_media_url(avatar) else None,
+            "takenAt": taken_at if isinstance(taken_at, int) and taken_at > 0 else None,
+        }
+        previous = diagnostics.get("_postText")
+        if previous is None:
+            diagnostics["_postText"] = details
+        elif previous["text"] != details["text"]:
+            diagnostics["_postTextConflict"] = True
+        else:
+            for key, value in details.items():
+                if previous.get(key) is None and value is not None:
+                    previous[key] = value
+
+
+def text_only_post_details(record_signals, exact_post_url):
+    """Text and author of a confirmed text-only exact post, or None."""
+    if not record_signals.get("exactRecordTextOnly"):
+        return None
+    if record_signals.get("_postTextConflict"):
+        return None
+    details = record_signals.get("_postText")
+    if not details:
+        return None
+    match = re.search(r"/@([^/?#]+)/post/", exact_post_url or "")
+    url_handle = match.group(1).lower() if match else None
+    username = (details.get("username") or "").lower()
+    # The record's author must be the account in the verified permalink.
+    if url_handle and username and url_handle != username:
+        return None
+    return dict(details)
 
 
 def emit_page_diagnostics(page, record_signals):
@@ -802,6 +853,9 @@ def main():
         "cookieCount": len(cookies),
         "candidates": ordered,
     }
+    text_post = text_only_post_details(record_signals, final_url)
+    if text_post:
+        result["textPost"] = text_post
     print("HARMONY_THREADS_BROWSER:" + json.dumps(result, separators=(",", ":")))
 
 

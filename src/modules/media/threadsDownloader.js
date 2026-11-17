@@ -701,6 +701,33 @@ function logChromiumIdentity(stderr) {
   }
 }
 
+/**
+ * Accepts the browser helper's text for a confirmed text-only exact post.
+ * The helper only reports text from the record whose code matches the
+ * requested post; the author must also match the verified permalink here.
+ */
+function sanitizeThreadsTextPost(raw, finalUrl) {
+  if (!raw || typeof raw !== "object") return null;
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  if (!text) return null;
+  const handle = typeof raw.username === "string" && /^[A-Za-z0-9._]{1,64}$/.test(raw.username)
+    ? raw.username
+    : null;
+  const urlHandle = String(extractThreadsCreator(finalUrl) || "").replace(/^@/, "");
+  if (urlHandle && handle && urlHandle.toLowerCase() !== handle.toLowerCase()) return null;
+  const takenAt = Number(raw.takenAt);
+  const avatarUrl = typeof raw.avatarUrl === "string" && raw.avatarUrl.length <= 2048
+    ? validCdnUrl(raw.avatarUrl)
+    : null;
+  return {
+    text: text.slice(0, 10000),
+    handle: handle || urlHandle || null,
+    displayName: typeof raw.fullName === "string" ? raw.fullName.trim().slice(0, 200) || null : null,
+    avatarUrl,
+    originalDate: Number.isFinite(takenAt) && takenAt > 0 ? new Date(takenAt * 1000).toISOString() : null,
+  };
+}
+
 async function inspectThreadsWithBrowser(url, browserOptions = {}) {
   const pythonPath = process.env.PYTHON_PATH || "python3";
   const cookiePath = browserOptions.withoutCookies
@@ -781,6 +808,12 @@ async function inspectThreadsWithBrowser(url, browserOptions = {}) {
       authFailure,
       cookieCount,
       textOnly: diagnostics.exactRecordTextOnly === true,
+      textPost: diagnostics.exactRecordTextOnly === true
+        ? sanitizeThreadsTextPost(
+          result.textPost,
+          typeof result.finalUrl === "string" ? result.finalUrl : url
+        )
+        : null,
     };
   } catch (error) {
     logChromiumIdentity(error?.stderr);
@@ -1132,6 +1165,19 @@ async function downloadThreadsMedia(url, options = {}) {
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
     let browserTextOnly = false;
+    const textOnlyResult = async (textPost) => {
+      await fs.rm(jobDir, { recursive: true, force: true });
+      console.log("Threads text-only post; sharing its text card.");
+      return {
+        files: [],
+        rawDir: null,
+        platform: "threads",
+        textOnly: true,
+        textPost,
+        creator: textPost.handle ? `@${textPost.handle}` : extractThreadsCreator(finalUrl),
+        ...(authFailure ? { socialAuthFailureKind: authFailure.kind, socialAuthFailureCategory: authFailure.category } : {}),
+      };
+    };
     if (candidates.length === 0) {
       const browserStartedAt = Date.now();
       let browserCookieCount = 0;
@@ -1144,6 +1190,12 @@ async function downloadThreadsMedia(url, options = {}) {
         browserTextOnly = browserResult.textOnly === true;
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
+        if (browserTextOnly && browserResult.textPost) {
+          // Threads' own exact record says the post has no photo or video.
+          // Anything else on the page (badges, avatars) is not the post's
+          // media, so share the post's text instead of downloading it.
+          return await textOnlyResult(browserResult.textPost);
+        }
         if (candidates.length === 0) {
           throw new Error(
             "Threads browser returned no media; checking the original message preview."
@@ -1194,6 +1246,10 @@ async function downloadThreadsMedia(url, options = {}) {
               withoutCookies: true,
               timeoutMs: 45000,
             });
+            if (anonymous.textOnly && anonymous.textPost) {
+              finalUrl = anonymous.finalUrl || finalUrl;
+              return await textOnlyResult(anonymous.textPost);
+            }
             if (anonymous.candidates.length) {
               candidates = anonymous.candidates;
               finalUrl = anonymous.finalUrl || finalUrl;
@@ -1470,4 +1526,5 @@ module.exports = {
   resolveThreadsShareRedirect,
   shouldUseScopedBrowserDirectly,
   logThreadsBrowserDiagnostics,
+  sanitizeThreadsTextPost,
 };

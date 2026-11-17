@@ -261,3 +261,71 @@ test('a text-only exact post fails with a plain text-only reason, not a media er
     getDiscordEmbedFallback: async () => null,
   }), /Threads post is text-only/);
 });
+
+function loadWithBrowserOutput(browserResult, diagnostics) {
+  const modulePath = path.join(__dirname, 'threadsDownloader.js');
+  const localRequire = createRequire(modulePath);
+  const exec = () => {};
+  exec[promisify.custom] = async () => ({
+    stdout: 'HARMONY_THREADS_DIAGNOSTICS:' + JSON.stringify(diagnostics)
+      + '\nHARMONY_THREADS_BROWSER:' + JSON.stringify(browserResult),
+  });
+  const fetched = [];
+  const module = { exports: {} };
+  const context = {
+    module, exports: module.exports, __dirname, process, console, Buffer, URL, AbortSignal,
+    require: (id) => id === 'node:child_process' ? { execFile: exec } : localRequire(id),
+    fetch: async (url) => {
+      fetched.push(url);
+      return new Response('<html>' + 'page without media '.repeat(100) + '</html>');
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
+  return { downloader: module.exports, fetched };
+}
+
+const TEXT_ONLY = { exactRecordSeen: true, exactRecordMediaTypeSeen: true, exactRecordTextOnly: true };
+
+test('a text-only exact post returns its verified text instead of failing', async () => {
+  const post = 'https://www.threads.com/@author/post/TEXT123';
+  const badge = 'https://scontent-a.fbcdn.net/badge.png';
+  const { downloader, fetched } = loadWithBrowserOutput({
+    finalUrl: post,
+    candidates: [badge],
+    textPost: {
+      text: 'Just words', username: 'author', fullName: 'Author Name',
+      avatarUrl: 'https://scontent-a.cdninstagram.com/a.jpg', takenAt: 1794919280,
+    },
+  }, TEXT_ONLY);
+  const result = await downloader.downloadThreadsMedia(post, { getDiscordEmbedFallback: async () => null });
+  assert.equal(result.textOnly, true);
+  assert.equal(result.files.length, 0);
+  assert.equal(result.rawDir, null);
+  assert.equal(result.creator, '@author');
+  assert.deepEqual({ ...result.textPost }, {
+    text: 'Just words', handle: 'author', displayName: 'Author Name',
+    avatarUrl: 'https://scontent-a.cdninstagram.com/a.jpg',
+    originalDate: '2026-11-17T12:41:20.000Z',
+  });
+  assert.equal(fetched.includes(badge), false);
+});
+
+test('text from a different author than the verified permalink is not used', async () => {
+  const post = 'https://www.threads.com/@author/post/TEXT123';
+  const { downloader } = loadWithBrowserOutput({
+    finalUrl: post, candidates: [], textPost: { text: 'Someone else', username: 'other' },
+  }, TEXT_ONLY);
+  await assert.rejects(downloader.downloadThreadsMedia(post, {
+    getDiscordEmbedFallback: async () => null,
+  }), /Threads post is text-only/);
+});
+
+test('text is ignored unless the exact record is confirmed text-only', async () => {
+  const post = 'https://www.threads.com/@author/post/TEXT123';
+  const { downloader } = loadWithBrowserOutput({
+    finalUrl: post, candidates: [], textPost: { text: 'Caption of a video', username: 'author' },
+  }, { exactRecordSeen: true, exactRecordMediaTypeSeen: true });
+  await assert.rejects(downloader.downloadThreadsMedia(post, {
+    getDiscordEmbedFallback: async () => null,
+  }), /browser returned no media|no media/);
+});
