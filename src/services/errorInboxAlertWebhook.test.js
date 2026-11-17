@@ -86,6 +86,11 @@ test("logMediaError posts to the webhook after a successful inbox send", async (
     assert.equal(body.sourceUrl, "https://www.instagram.com/reel/abc123/");
     assert.equal(body.discordMessageLink, "https://discord.com/channels/guild-1/source-1/msg-1");
     assert.match(body.errorText, /No audio stream/);
+    assert.equal(body.errorNumber, null);
+    assert.match(body.errorId, /^HM-[A-Z0-9]+-[A-Z0-9]+$/);
+    const inboxEmbed = first.sent[0].embeds[0];
+    const errorIdField = inboxEmbed.data.fields.find((field) => field.name === "Error ID");
+    assert.equal(body.errorId, errorIdField.value);
     assert.doesNotMatch(JSON.stringify(body), /igsh=SECRET|Member|member/);
 
     const repeat = messageFixture({ id: "hook-msg-1" });

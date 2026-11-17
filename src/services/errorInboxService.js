@@ -164,6 +164,8 @@ async function logMediaError(message, error) {
     fingerprint: githubReport?.fingerprint,
     discordMessageLink: jumpUrl,
     timestamp: new Date().toISOString(),
+    errorNumber: issueNumber,
+    errorId,
   });
 
   console.log(`Harmony media error reported as ${errorId} (${platform.toLowerCase()}).`);

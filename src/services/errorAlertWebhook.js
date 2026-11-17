@@ -22,6 +22,8 @@ function buildErrorAlertPayload({
   fingerprint: reportKey,
   discordMessageLink,
   timestamp,
+  errorNumber,
+  errorId,
 } = {}) {
   const errorText = sanitizedErrorText(error) || "No technical error details were available.";
   const platformName = platform || "Media";
@@ -32,6 +34,8 @@ function buildErrorAlertPayload({
     fingerprint: reportKey || fingerprint(platformName, errorText),
     discordMessageLink: safeUrl(discordMessageLink),
     timestamp: timestamp || new Date().toISOString(),
+    errorNumber: Number(errorNumber) || null,
+    errorId: errorId || null,
   };
 }
 
