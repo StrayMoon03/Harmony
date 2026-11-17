@@ -19,7 +19,7 @@ test("diagnostic logging permits only exact boolean signals, never private paylo
   assert.equal(safe.authenticationEvidence, 'not_confirmed');
   assert.equal(JSON.stringify(safe).includes('SECRET'), false);
   assert.equal(JSON.stringify(safe).includes('https:'), false);
-  assert.equal(Object.keys(safe).length, 13);
+  assert.equal(Object.keys(safe).length, 15);
 });
 
 test("new record diagnostics accept booleans only, never payload values", () => {
@@ -30,6 +30,18 @@ test("new record diagnostics accept booleans only, never payload values", () => 
   assert.equal(safe.exactRecordHasImageVersions, false);
   assert.equal(safe.exactNestedSameCodeRecordSeen, false);
   assert.equal(JSON.stringify(safe).includes('SECRET'), false);
+});
+
+test("text-only record diagnostics pass through as booleans", () => {
+  const safe = logThreadsBrowserDiagnostics('HARMONY_THREADS_DIAGNOSTICS:' + JSON.stringify({
+    exactRecordSeen: true, exactRecordMediaTypeSeen: true, exactRecordTextOnly: true,
+  }));
+  assert.equal(safe.exactRecordMediaTypeSeen, true);
+  assert.equal(safe.exactRecordTextOnly, true);
+  const unsafe = logThreadsBrowserDiagnostics('HARMONY_THREADS_DIAGNOSTICS:' + JSON.stringify({
+    exactRecordTextOnly: 'yes',
+  }));
+  assert.equal(unsafe.exactRecordTextOnly, false);
 });
 
 test("missing or malformed diagnostic output is harmless and unconfirmed", () => {

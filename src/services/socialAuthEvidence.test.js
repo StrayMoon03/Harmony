@@ -103,3 +103,9 @@ test("authenticated Instagram audience walls and login redirects are session evi
     null
   );
 });
+
+test("text-only Threads posts get a plain, non-cookie reason", () => {
+  const reason = safeReason(new Error("Threads post is text-only; it has no photo or video to share."));
+  assert.equal(reason, "This Threads post is text-only, so there was no photo or video to share.");
+  assert.doesNotMatch(reason, /refresh|cookies/i);
+});

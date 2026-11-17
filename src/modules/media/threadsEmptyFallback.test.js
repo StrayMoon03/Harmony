@@ -240,3 +240,24 @@ test('does not use Open Graph fallback for an unresolved share URL', async () =>
   }), /browser returned no media|share did not remain|could not inspect|no media/);
   assert.deepEqual(downloaded, []);
 });
+
+test('a text-only exact post fails with a plain text-only reason, not a media error', async () => {
+  const modulePath = path.join(__dirname, 'threadsDownloader.js');
+  const localRequire = createRequire(modulePath);
+  const exec = () => {};
+  exec[promisify.custom] = async () => ({
+    stdout: 'HARMONY_THREADS_DIAGNOSTICS:' + JSON.stringify({ exactRecordSeen: true, exactRecordMediaTypeSeen: true, exactRecordTextOnly: true })
+      + '\nHARMONY_THREADS_BROWSER:' + JSON.stringify({ candidates: [] }),
+  });
+  const post = 'https://www.threads.com/@author/post/TEXT123';
+  const module = { exports: {} };
+  const context = {
+    module, exports: module.exports, __dirname, process, console, Buffer, URL, AbortSignal,
+    require: (id) => id === 'node:child_process' ? { execFile: exec } : localRequire(id),
+    fetch: async () => new Response('<html>' + 'page without media '.repeat(100) + '</html>'),
+  };
+  vm.runInNewContext(fs.readFileSync(modulePath, 'utf8'), context, { filename: modulePath });
+  await assert.rejects(module.exports.downloadThreadsMedia(post, {
+    getDiscordEmbedFallback: async () => null,
+  }), /Threads post is text-only/);
+});

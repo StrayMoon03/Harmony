@@ -44,6 +44,9 @@ function safeReason(error) {
   if (error?.socialAuthFailureKind === "session") {
     return "The platform login cookies need to be refreshed.";
   }
+  if (/Threads post is text-only/i.test(text)) {
+    return "This Threads post is text-only, so there was no photo or video to share.";
+  }
   // Display-only. This must not be treated as health-store evidence.
   if (looksLikeLoginOrAudienceWall(text)) {
     return "The platform login cookies may need to be refreshed.";

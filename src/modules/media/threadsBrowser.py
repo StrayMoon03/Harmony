@@ -16,7 +16,8 @@ DIAGNOSTIC_KEYS = (
     "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
     "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
     "attachedVideoDeclared", "exactRecordHasImageVersions",
-    "exactNestedSameCodeRecordSeen",
+    "exactNestedSameCodeRecordSeen", "exactRecordMediaTypeSeen",
+    "exactRecordTextOnly",
 )
 
 # Prefer IPv4 on container hosts. Railway (and similar headless environments)
@@ -59,7 +60,16 @@ def record_diagnostic_signals(value, expected_code, diagnostics):
             for item in media.get("carousel_media") or []
         )
 
+    # Threads media_type 19 is a text-only post. Only a full record carries
+    # media_type; a bare code/permalink stub does not, so "seen" alone cannot
+    # tell a text post from a record whose media Threads withheld.
+    text_only_seen = False
+    any_media_declared = False
     for record in records:
+        if isinstance(record.get("media_type"), int):
+            diagnostics["exactRecordMediaTypeSeen"] = True
+        if record.get("media_type") == 19:
+            text_only_seen = True
         if declares_video(record):
             diagnostics["rootVideoDeclared"] = True
         if declares_images(record):
@@ -75,6 +85,22 @@ def record_diagnostic_signals(value, expected_code, diagnostics):
         )
         if declares_video(attached):
             diagnostics["attachedVideoDeclared"] = True
+        if attached and not declares_video(attached):
+            any_media_declared = True
+    # Payloads arrive one at a time; remember media from earlier payloads so
+    # a later bare text record never relabels a post that has media.
+    # Internal "_" keys never leave the helper (emit uses an allowlist).
+    if any_media_declared:
+        diagnostics["_attachedMediaDeclared"] = True
+    if text_only_seen:
+        diagnostics["_textOnlyRecord"] = True
+    has_media = any(diagnostics.get(key) for key in (
+        "rootVideoDeclared", "exactRecordHasImageVersions",
+        "attachedVideoDeclared", "_attachedMediaDeclared"))
+    if diagnostics.get("_textOnlyRecord") and not has_media:
+        diagnostics["exactRecordTextOnly"] = True
+    else:
+        diagnostics.pop("exactRecordTextOnly", None)
 
 
 def emit_page_diagnostics(page, record_signals):
@@ -107,7 +133,8 @@ def emit_page_diagnostics(page, record_signals):
     source = dict(signals) if isinstance(signals, dict) else {}
     source.update({key: value for key, value in record_signals.items()
                    if key in ("exactRecordSeen", "rootVideoDeclared", "attachedVideoDeclared",
-                              "exactRecordHasImageVersions", "exactNestedSameCodeRecordSeen")})
+                              "exactRecordHasImageVersions", "exactNestedSameCodeRecordSeen",
+                              "exactRecordMediaTypeSeen", "exactRecordTextOnly")})
     safe = {key: source.get(key) is True for key in DIAGNOSTIC_KEYS}
     print("HARMONY_THREADS_DIAGNOSTICS:" + json.dumps(safe, separators=(",", ":")))
 

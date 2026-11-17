@@ -24,7 +24,8 @@ function logThreadsBrowserDiagnostics(stdout) {
     "checkpointRoute", "restrictionNoticeVisible", "unavailableNoticeVisible",
     "accountMenuVisible", "exactRecordSeen", "rootVideoDeclared",
     "attachedVideoDeclared", "exactRecordHasImageVersions",
-    "exactNestedSameCodeRecordSeen",
+    "exactNestedSameCodeRecordSeen", "exactRecordMediaTypeSeen",
+    "exactRecordTextOnly",
   ];
   const line = String(stdout || "").split(/\r?\n/).find((value) =>
     value.startsWith("HARMONY_THREADS_DIAGNOSTICS:")
@@ -779,6 +780,7 @@ async function inspectThreadsWithBrowser(url, browserOptions = {}) {
           : url,
       authFailure,
       cookieCount,
+      textOnly: diagnostics.exactRecordTextOnly === true,
     };
   } catch (error) {
     logChromiumIdentity(error?.stderr);
@@ -1129,6 +1131,7 @@ async function downloadThreadsMedia(url, options = {}) {
     // page-wide candidates. The browser helper scopes extraction to the root
     // post article; if it cannot prove that scope, fail closed instead of
     // uploading unrelated media.
+    let browserTextOnly = false;
     if (candidates.length === 0) {
       const browserStartedAt = Date.now();
       let browserCookieCount = 0;
@@ -1138,6 +1141,7 @@ async function downloadThreadsMedia(url, options = {}) {
           await inspectThreadsWithBrowser(finalUrl);
         authFailure ||= browserResult.authFailure;
         browserCookieCount = browserResult.cookieCount || 0;
+        browserTextOnly = browserResult.textOnly === true;
         candidates = browserResult.candidates;
         finalUrl = browserResult.finalUrl || finalUrl;
         if (candidates.length === 0) {
@@ -1240,7 +1244,13 @@ async function downloadThreadsMedia(url, options = {}) {
           console.warn("Threads exact-post fallbacks found no media.", {
             exactIdentity: Boolean(identityUrl),
             crawlerMatched: Boolean(openGraph),
+            textOnly: browserTextOnly,
           });
+          if (browserTextOnly) {
+            throw new Error(
+              "Threads post is text-only; it has no photo or video to share."
+            );
+          }
           throw browserError;
         }
       }
@@ -1402,6 +1412,13 @@ async function downloadThreadsMedia(url, options = {}) {
 
     const files = retained.map((item) => item.file);
 
+    if (files.length === 0 && browserTextOnly && !openGraphFallback) {
+      // Only non-post artwork (for example a community badge) was on the
+      // page, and Threads' own record says the post is text-only.
+      throw new Error(
+        "Threads post is text-only; it has no photo or video to share."
+      );
+    }
     if (files.length === 0) {
       throw new Error(
         "Threads media URLs were found, but no usable photos or videos could be downloaded."
