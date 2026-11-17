@@ -1047,7 +1047,7 @@ test("Welcome Pass controls update one setting at a time, toggle mode, and edit 
 
 test("Welcome Pass Member Bias Roles mapping is interactive, safe, and reconciles only by explicit action", async () => {
   const { guild, addRole, addChannel } = createGuild("welcome-bias-role-manager");
-  const mappedRole = addRole("han-role", "Han Bias");
+  const mappedRole = addRole("han-role", "Han Bias", { editable: true });
   const panel = addChannel("bias-manager-panel");
   roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "bias-panel-message", enabled: true });
   const open = guardInteraction(guild, "harmony-admin-room:welcome", { channelId: panel.id, message: { id: "bias-panel-message" } });
@@ -1064,7 +1064,7 @@ test("Welcome Pass Member Bias Roles mapping is interactive, safe, and reconcile
   await room.handleAdminRoomInteraction(selectBias);
   assert.ok(selectBias.response.components.some((row) => row.components.some((component) => component.data.custom_id.includes("welcome-bias-role-value:Han"))));
 
-  const saveRole = guardInteraction(guild, "harmony-admin-room:welcome-bias-role-value:Han", { values: [mappedRole.id], isRoleSelectMenu: () => true });
+  const saveRole = guardInteraction(guild, "harmony-admin-room:welcome-bias-role-value:Han:0", { values: [mappedRole.id], isStringSelectMenu: () => true });
   await room.handleAdminRoomInteraction(saveRole);
   assert.equal(welcomePassStore.getWelcomePassBiasRole(guild.id, "Han").role_id, mappedRole.id);
   assert.match(saveRole.response.embeds[0].data.description, /Han members will use/);
@@ -1074,6 +1074,82 @@ test("Welcome Pass Member Bias Roles mapping is interactive, safe, and reconcile
   assert.match(reconcile.response.embeds[0].data.title, /Reconcile Existing Bias Roles/);
   assert.ok(reconcile.response.components.flatMap((row) => row.components).some((component) => component.data.custom_id === "harmony-admin-room:welcome-bias-reconcile-confirm"));
   assert.ok(welcomePassStore.getWelcomePassBiasRole(guild.id, "Han"), "opening configuration does not clear or run roles");
+});
+
+test("Welcome Pass bias picker pages through all assignable role IDs regardless of membership or mapping", async () => {
+  const { guild, addRole, addChannel } = createGuild("welcome-bias-paginated");
+  const panel = addChannel("bias-controls");
+  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "bias-panel-message", enabled: true });
+  await room.handleAdminRoomInteraction(guardInteraction(guild, "harmony-admin-room:welcome", {
+    channelId: panel.id, message: { id: "bias-panel-message" },
+  }));
+
+  const han = addRole("han-role", "Han", { editable: true });
+  const seungmin = addRole("seungmin-role", "Seungmin", { editable: true, members: new Map() });
+  const selectable = [han, seungmin];
+  for (let index = 26; index >= 0; index--) {
+    selectable.push(addRole(`community-${index}`, `Community ${String(index).padStart(2, "0")}`, { editable: true }));
+  }
+  addRole(guild.id, "@everyone", { editable: true });
+  addRole("managed", "Managed", { editable: true, managed: true });
+  addRole("bot", "Bot", { editable: true, tags: { botId: "bot-id" } });
+  addRole("integration", "Integration", { editable: true, tags: { integrationId: "integration-id" } });
+  addRole("high-role", "Above Harmony", { editable: false });
+  welcomePassStore.setWelcomePassBiasRole(guild.id, "Han", han.id);
+  const before = welcomePassStore.listWelcomePassBiasRoles(guild.id);
+
+  const fetch = guild.roles.fetch;
+  let fetches = 0;
+  guild.roles.fetch = async (id) => {
+    assert.equal(id, undefined, "role choices should come from a fresh guild role fetch");
+    fetches++;
+    return fetch();
+  };
+  const interact = async (action, values) => {
+    const interaction = guardInteraction(guild, `harmony-admin-room:welcome-bias-role-${action}`, {
+      values, isStringSelectMenu: () => Boolean(values),
+    });
+    await room.handleAdminRoomInteraction(interaction);
+    return interaction.response;
+  };
+  const select = (payload) => payload.components.flatMap((row) => row.components)
+    .map((component) => component.toJSON()).find((component) => component.custom_id.includes("welcome-bias-role-value"));
+  const button = (payload, label) => payload.components.flatMap((row) => row.components)
+    .map((component) => component.toJSON()).find((component) => component.label === label);
+
+  for (const memberCount of [0, 1]) {
+    assert.equal(seungmin.members.size, memberCount);
+    const first = await interact("bias", ["Seungmin"]);
+    assert.equal(select(first).type, 3);
+    assert.equal(select(first).options.length, 25);
+    assert.equal(button(first, "Previous").disabled, true);
+    const next = button(first, "Next").custom_id.split("welcome-bias-role-")[1];
+    const second = await interact(next);
+    assert.equal(button(second, "Next").disabled, true);
+    const options = [...select(first).options, ...select(second).options];
+    assert.deepEqual(options.map(({ label, value }) => [label, value]), selectable
+      .map(({ name, id }) => [name, id]).sort(([a], [b]) => a.localeCompare(b)));
+    assert.ok(options.some(({ value }) => value === seungmin.id));
+    assert.deepEqual(welcomePassStore.listWelcomePassBiasRoles(guild.id), before);
+    if (!memberCount) seungmin.members.set("member-id", {});
+  }
+
+  await interact("bias", ["Han"]);
+  const mappedPage = await interact("page:Han:1");
+  assert.ok(select(mappedPage).options.some(({ value, default: selected }) => value === han.id && selected));
+  assert.equal(button(mappedPage, "Clear Han Mapping").disabled, false);
+
+  const duplicate = await interact("value:Seungmin:1", [han.id]);
+  assert.match(duplicate.embeds[0].data.description, /already mapped to Han/);
+  const blocked = await interact("value:Seungmin:1", ["high-role"]);
+  assert.match(blocked.embeds[0].data.description, /cannot manage that role/);
+  assert.deepEqual(welcomePassStore.listWelcomePassBiasRoles(guild.id), before);
+
+  const saved = await interact("value:Seungmin:1", [seungmin.id]);
+  assert.match(saved.embeds[0].data.description, /Seungmin members will use/);
+  assert.equal(welcomePassStore.getWelcomePassBiasRole(guild.id, "Seungmin").role_id, seungmin.id);
+  assert.deepEqual(welcomePassStore.getWelcomePassBiasRole(guild.id, "Han"), before[0]);
+  assert.ok(fetches >= 9);
 });
 
 test("Welcome Pass can be set up through selectors without partially saving or clearing existing settings", async () => {
