@@ -92,9 +92,17 @@ function instagramReelShortcode(url) {
 }
 
 function isExactInstagramReelFile(filePath, shortcode, retry = false) {
+  const name = path.basename(filePath);
+  // A failed audio retry must not treat the original harmony-* file as its
+  // own output. /p/ posts have no reel shortcode, so the old "accept anything"
+  // fallback caused Harmony to delete the kept video and then fail at upload
+  // (Harmony-Errors #441).
+  if (retry) {
+    if (!name.startsWith("harmony-with-audio-")) return false;
+    return shortcode ? name.startsWith(`harmony-with-audio-${shortcode}.`) : true;
+  }
   if (!shortcode) return true;
-  const prefix = retry ? `harmony-with-audio-${shortcode}.` : `harmony-${shortcode}.`;
-  return path.basename(filePath).startsWith(prefix);
+  return name.startsWith(`harmony-${shortcode}.`);
 }
 
 function pauseInstagramRetry(signal) {
@@ -550,8 +558,11 @@ async function downloadWithYtDlp(url, jobDir, options = {}) {
       if (retryVideo) {
         const retryHasAudio = await checkAudio(retryVideo.path);
         if (!retryHasAudio) logInstagramFormatList("separate-stream retry", retry.formats);
+        const keep = new Set(retryPaths);
         await Promise.all(
-          paths.map((filePath) => fs.unlink(filePath).catch(() => {}))
+          paths
+            .filter((filePath) => !keep.has(filePath))
+            .map((filePath) => fs.unlink(filePath).catch(() => {}))
         );
         paths = retryPaths;
         files = retryFiles;
