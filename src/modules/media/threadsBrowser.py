@@ -8,6 +8,7 @@ import re
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
+from chromiumExecutable import chromium_launch_kwargs
 
 
 DIAGNOSTIC_KEYS = (
@@ -465,9 +466,7 @@ def main():
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
-            headless=True,
-            executable_path=os.environ.get("CHROMIUM_PATH", "/usr/bin/chromium"),
-            args=list(CHROMIUM_ARGS),
+            **chromium_launch_kwargs(playwright, extra_args=CHROMIUM_ARGS)
         )
         context = browser.new_context(
             viewport={"width": 1280, "height": 1600},
