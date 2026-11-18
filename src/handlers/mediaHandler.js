@@ -9,6 +9,9 @@ const {
 const FACEBOOK_LIFECYCLE_CUTOFF_MS = 90000;
 const INSTAGRAM_LIFECYCLE_CUTOFF_MS = 120000;
 const THREADS_LIFECYCLE_CUTOFF_MS = 90000;
+// X posts can carry up to 20 videos/photos; yt-dlp fetches each entry in
+// sequence, so multi-video posts routinely need more than the 20s default.
+const X_LIFECYCLE_CUTOFF_MS = 90000;
 const fs = require("node:fs/promises");
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { getMediaInfo } = require("../services/ytDlp");
@@ -1328,6 +1331,7 @@ function mediaLifecycleCutoffMs(content) {
   if (findFacebookLinks(content).length) return FACEBOOK_LIFECYCLE_CUTOFF_MS;
   if (findInstagramLinks(content).length) return INSTAGRAM_LIFECYCLE_CUTOFF_MS;
   if (findThreadsLinks(content).length) return THREADS_LIFECYCLE_CUTOFF_MS;
+  if (findXLinks(content).length) return X_LIFECYCLE_CUTOFF_MS;
   return undefined;
 }
 
@@ -1338,7 +1342,8 @@ async function handleMediaMessage(message) {
   // Facebook and Instagram exact-post browser work is deliberately serialized
   // so concurrent shares cannot compete for the same browser session. The
   // Instagram lifecycle also cancels its queued/in-flight fallback on timeout;
-  // other platforms retain the global 20-second cutoff.
+  // X gets a longer window for multi-video posts; other platforms retain the
+  // global 20-second cutoff.
   const cutoffMs = mediaLifecycleCutoffMs(message.content);
   const cancelWorkOnTimeout = findInstagramLinks(message.content).length > 0;
   return withMediaLifecycle(
