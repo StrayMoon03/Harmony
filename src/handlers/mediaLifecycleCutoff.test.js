@@ -27,6 +27,16 @@ test("Threads shares get a window long enough for the exact-post browser fallbac
   );
 });
 
+test("X/Twitter shares get a window long enough for multi-video posts", () => {
+  for (const url of [
+    "https://x.com/skzpositivity/status/2122737396379009098?a=VAC80eEI3nPf0AdqVCg&s=33",
+    "https://twitter.com/example/status/123",
+    "https://mobile.twitter.com/example/status/123",
+  ]) {
+    assert.equal(mediaLifecycleCutoffMs(url), 90000);
+  }
+});
+
 test("other media keeps the existing lifecycle cutoff", () => {
   assert.equal(
     mediaLifecycleCutoffMs("https://www.youtube.com/watch?v=example"),
