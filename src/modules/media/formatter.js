@@ -103,29 +103,8 @@ function extractOriginalDate(metadata) {
   return null;
 }
 
-function formatXTextPost({ displayName, handle, originalDate, text, originalUrl, sharedById, memberComment }) {
-  const date = originalDate ? new Date(originalDate) : null;
-  const dateText = date && !Number.isNaN(date.getTime())
-    ? date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })
-    : "Date unavailable";
-  const safeHandle = String(handle || "unknown").replace(/^@/, "");
-  const sharedBy = sharedById ? `<@${sharedById}>` : "Unknown member";
-  return [
-    "☁️ **X Post**",
-    `${displayName || safeHandle} (@${safeHandle})`,
-    "",
-    String(text || "").trim(),
-    "",
-    `Shared by ${sharedBy} • ${dateText}`,
-    originalUrl ? `[View on X](${originalUrl})` : null,
-    memberComment ? "" : null,
-    memberComment ? `💬 ${sharedBy}: ${memberComment}` : null,
-  ].filter((line) => line !== null).join("\n");
-}
-
 module.exports = {
   formatMediaCard,
   extractOriginalDate,
-  formatXTextPost,
   buttonUrlForPlatform,
 };

@@ -97,6 +97,60 @@ class DiagnosticsTests(unittest.TestCase):
         browser.record_diagnostic_signals({"code": "EXACT", "media_type": 19}, "EXACT", signals)
         self.assertFalse(signals.get("exactRecordTextOnly"))
 
+    def text_record(self, code="EXACT", text="Hello Stays", username="author"):
+        return {"code": code, "media_type": 19, "taken_at": 1794919280,
+                "caption": {"text": text},
+                "user": {"username": username, "full_name": "Author Name",
+                         "profile_pic_url": "https://scontent-a.cdninstagram.com/avatar.jpg"}}
+
+    def test_text_only_post_details_come_from_the_exact_record(self):
+        signals = {}
+        browser.record_diagnostic_signals(self.text_record(), "EXACT", signals)
+        details = browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT")
+        self.assertEqual(details, {
+            "text": "Hello Stays", "username": "author", "fullName": "Author Name",
+            "avatarUrl": "https://scontent-a.cdninstagram.com/avatar.jpg",
+            "takenAt": 1794919280,
+        })
+        safe = self.collect(Page({}), signals)
+        self.assertNotIn("Hello", json.dumps(safe))
+
+    def test_nested_foreign_post_text_is_never_used(self):
+        signals = {}
+        wrapper = {"code": "EXACT", "media_type": 19,
+                   "text_post_app_info": {"reply_to": self.text_record("OTHER", "Foreign text")}}
+        browser.record_diagnostic_signals(wrapper, "EXACT", signals)
+        self.assertIsNone(browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT"))
+
+    def test_text_details_need_confirmed_text_only_record(self):
+        signals = {}
+        record = dict(self.text_record(), media_type=2, video_versions=[{"url": "u"}])
+        browser.record_diagnostic_signals(record, "EXACT", signals)
+        self.assertIsNone(browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT"))
+
+    def test_conflicting_texts_or_wrong_author_are_rejected(self):
+        signals = {}
+        browser.record_diagnostic_signals(self.text_record(text="One"), "EXACT", signals)
+        browser.record_diagnostic_signals(self.text_record(text="Two"), "EXACT", signals)
+        self.assertIsNone(browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT"))
+        signals = {}
+        browser.record_diagnostic_signals(self.text_record(username="someone"), "EXACT", signals)
+        self.assertIsNone(browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT"))
+
+    def test_untrusted_avatar_host_is_dropped(self):
+        signals = {}
+        record = self.text_record()
+        record["user"]["profile_pic_url"] = "https://evil.example/a.jpg"
+        browser.record_diagnostic_signals(record, "EXACT", signals)
+        details = browser.text_only_post_details(
+            signals, "https://www.threads.com/@author/post/EXACT")
+        self.assertIsNone(details["avatarUrl"])
+
     def test_sibling_same_code_is_not_reported_as_nested(self):
         payload = [{"code": "EXACT"}, {"shortcode": "EXACT", "media_type": 2,
                    "video_versions": [{"url": "https://scontent-a.fbcdn.net/owned.mp4"}]}]
