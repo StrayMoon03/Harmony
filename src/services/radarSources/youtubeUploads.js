@@ -33,8 +33,8 @@ function parseFeed(xml, channelId = accountId) {
     };
   });
 }
-async function fetchItems({ source, since, fetchImpl }) {
-  const result = await requestText(source.source_url, { fetchImpl, headers: conditionalHeaders(source) });
+async function fetchItems({ source, since, fetchImpl, budget }) {
+  const result = await requestText(source.source_url, { fetchImpl, budget, headers: conditionalHeaders(source) });
   if (result.status === 304) return { notModified: true };
   const entries = parseFeed(result.text, source.account_id);
   const dates = entries.map((item) => item.publishedAt).filter(Boolean).sort();

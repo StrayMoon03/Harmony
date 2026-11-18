@@ -1,5 +1,5 @@
 const cheerio = require("cheerio");
-const { publicUrl, plainText, contentLinks, contentDigest, requestText } = require("./common");
+const { publicUrl, plainText, contentLinks, contentDigest, requestText, workBudget } = require("./common");
 const ORIGIN = "https://straykids.jype.com";
 const key = "jype-notice";
 function parseListing(html) {
@@ -38,29 +38,52 @@ function parseDetail(html, entry) {
     metadata: { noticeNumber: entry.noticeNumber, images, links, bodyHash: contentDigest(plainText(content.html())) },
   };
 }
-async function fetchItems({ source, since, fetchImpl }) {
-  const items = [];
-  const seen = new Set();
-  let cursor = source.cursor;
-  let complete = false;
-  for (let page = 1; page <= 20; page++) {
-    const result = await requestText(ORIGIN + "/notice?PgIndex=" + page, { fetchImpl });
-    const entries = parseListing(result.text);
-    cursor ||= entries[0].id;
-    if (page === 1) cursor = entries[0].id;
-    let reachedBoundary = entries.every((entry) => entry.publishedAt && entry.publishedAt < since.slice(0, 10));
-    for (const entry of entries) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      if (entry.publishedAt && entry.publishedAt < since.slice(0, 10)) {
-        continue;
-      }
-      const detail = await requestText(entry.url, { fetchImpl });
-      items.push(parseDetail(detail.text, entry));
-    }
-    // Always revisit the overlapping recent items, even when the first one is known.
-    if (reachedBoundary) { complete = true; break; }
-  }
-  return { items, cursor, limitation: complete ? null : "Notice page limit reached; requested history may be incomplete." };
+async function revisit(item, { fetchImpl, budget }) {
+  const entry = {
+    id: item.item_id, url: item.canonical_url, aliases: JSON.parse(item.aliases),
+    title: item.title, publishedAt: item.published_at, noticeNumber: JSON.parse(item.metadata).noticeNumber,
+  };
+  const response = await requestText(entry.url, { fetchImpl, budget });
+  return parseDetail(response.text, entry);
 }
-module.exports = { key, accountId: "straykids", url: ORIGIN + "/notice", parseListing, parseDetail, fetchItems };
+async function fetchItems({ source, since, fetchImpl, budget = workBudget(), now = new Date().toISOString(), knownIds = new Set() }) {
+  const saved = source.traversal_state ? JSON.parse(source.traversal_state) : null;
+  const state = saved || { page: 1, pending: [], since, coveredThrough: now, cursor: source.cursor };
+  const items = [];
+  let complete = false;
+  try {
+    // A resumed backlog does not hide newly published head items. At most two requests
+    // are used here, leaving the rest of this cycle's budget for continuation.
+    if (saved && budget.remaining > 2) {
+      const head = parseListing((await requestText(ORIGIN + "/notice?PgIndex=1", { fetchImpl, budget })).text);
+      const newest = head.find((entry) => !knownIds.has(entry.id));
+      if (newest) items.push(parseDetail((await requestText(newest.url, { fetchImpl, budget })).text, newest));
+    }
+    while (!complete) {
+      if (!state.pending.length) {
+        const response = await requestText(ORIGIN + "/notice?PgIndex=" + state.page, { fetchImpl, budget });
+        const entries = parseListing(response.text);
+        if (state.page === 1) state.cursor = entries[0].id;
+        if (entries.every((entry) => entry.publishedAt && entry.publishedAt < state.since.slice(0, 10))) {
+          complete = true;
+          break;
+        }
+        state.pending = entries.filter((entry) => !entry.publishedAt || entry.publishedAt >= state.since.slice(0, 10));
+        state.page++;
+      }
+      while (state.pending.length) {
+        const entry = state.pending[0];
+        // Checkpoint advances only after a complete, parsed detail response.
+        if (!items.some((item) => item.id === entry.id)) {
+          items.push(parseDetail((await requestText(entry.url, { fetchImpl, budget })).text, entry));
+        }
+        state.pending.shift();
+      }
+    }
+  } catch (error) {
+    if (error.message !== "source_budget_exhausted" && error.name !== "TimeoutError") throw error;
+  }
+  return { items, cursor: state.cursor, coveredThrough: state.coveredThrough || now, continuation: complete ? null : JSON.stringify(state),
+    limitation: complete ? null : "Notice work budget reached; saved traversal will resume next cycle." };
+}
+module.exports = { key, accountId: "straykids", url: ORIGIN + "/notice", parseListing, parseDetail, fetchItems, revisit };

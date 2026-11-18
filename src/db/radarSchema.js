@@ -51,5 +51,18 @@ function migrateRadar(database) {
     CREATE INDEX IF NOT EXISTS radar_discovery_review ON radar_discoveries(guild_id, review_state, id);
     CREATE INDEX IF NOT EXISTS radar_support_observation ON radar_support(observation_id);
   `);
+  // Additive upgrades also support databases initialized by an earlier Phase 1A build.
+  for (const [table, columns] of Object.entries({
+    radar_sources: { traversal_state: "TEXT", watch_cursor: "INTEGER NOT NULL DEFAULT 0" },
+    radar_observations: { correlation_key: "TEXT" },
+    radar_support: { active: "INTEGER NOT NULL DEFAULT 1", snapshot: "TEXT" },
+    radar_discoveries: { handoff_request: "TEXT", handoff_result: "TEXT" },
+    radar_deliveries: { checked_at: "TEXT", recovery_before: "TEXT" },
+  })) {
+    const existing = new Set(database.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
+    for (const [name, definition] of Object.entries(columns)) {
+      if (!existing.has(name)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  }
 }
 module.exports = { migrateRadar };

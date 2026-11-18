@@ -32,15 +32,20 @@ function contentLinks(html, base) {
   ];
   return [...new Set(values.map((value) => publicUrl(value, base)).filter(Boolean))].sort();
 }
-async function requestText(value, { fetchImpl = globalThis.fetch, headers = {} } = {}) {
+function workBudget({ requests = 12, milliseconds = 10000 } = {}) {
+  return { remaining: requests, deadline: Date.now() + milliseconds };
+}
+async function requestText(value, { fetchImpl = globalThis.fetch, headers = {}, budget } = {}) {
   let url = value;
   for (let redirects = 0; redirects <= 4; redirects++) {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" || !ALLOWED_HOSTS.has(parsed.hostname) || parsed.username || parsed.password) {
       throw new Error("blocked_source_destination");
     }
+    if (budget && (budget.remaining <= 0 || Date.now() >= budget.deadline)) throw new Error("source_budget_exhausted");
+    if (budget) budget.remaining--;
     const response = await fetchImpl(url, {
-      redirect: "manual", signal: AbortSignal.timeout(15000),
+      redirect: "manual", signal: AbortSignal.timeout(budget ? Math.max(1, Math.min(3000, budget.deadline - Date.now())) : 15000),
       headers: { "user-agent": "Harmony-SKZ-Radar/1.0", accept: "text/html,application/xml,application/json", ...headers },
     });
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
@@ -76,4 +81,4 @@ function conditionalHeaders(source) {
   if (source.last_modified) headers["if-modified-since"] = source.last_modified;
   return headers;
 }
-module.exports = { publicUrl, plainText, contentLinks, contentDigest, requestText, conditionalHeaders };
+module.exports = { workBudget, publicUrl, plainText, contentLinks, contentDigest, requestText, conditionalHeaders };

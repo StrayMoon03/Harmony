@@ -52,7 +52,7 @@ function listSources(guildId) {
 }
 function updateSource(id, patch) {
   const columns = new Set(["initialized_at", "catchup_since", "cursor", "etag", "last_modified", "last_attempt_at",
-    "last_success_at", "next_poll_at", "result", "error", "limitation", "enabled"]);
+    "last_success_at", "next_poll_at", "result", "error", "limitation", "enabled", "traversal_state", "watch_cursor"]);
   const entries = Object.entries(patch);
   if (!entries.length || entries.some(([key]) => !columns.has(key))) throw new Error("Invalid Radar source state.");
   getDb().prepare(`UPDATE radar_sources SET ${entries.map(([key]) => key + " = ?").join(",")} WHERE id = ?`)
@@ -65,18 +65,22 @@ function listDiscoveries(guildId) {
   return getDb().prepare("SELECT * FROM radar_discoveries WHERE guild_id = ? ORDER BY id DESC").all(guildId);
 }
 function supportingSources(discoveryId) {
-  return getDb().prepare(`SELECT o.*, s.provider, s.account_id, s.authority FROM radar_support a
+  return getDb().prepare(`SELECT o.*, s.provider, s.account_id, s.authority, a.active, a.snapshot FROM radar_support a
     JOIN radar_observations o ON o.id=a.observation_id JOIN radar_sources s ON s.id=o.source_id
-    WHERE a.discovery_id = ? ORDER BY o.id`).all(discoveryId);
+    WHERE a.discovery_id = ? ORDER BY o.id`).all(discoveryId)
+    .map((row) => row.active ? row : { ...row, ...JSON.parse(row.snapshot) });
 }
-function watchingBoundary(sourceId) {
-  return getDb().prepare(`SELECT MIN(o.published_at) AS earliest FROM radar_observations o
+function watchedItems(sourceId) {
+  return getDb().prepare(`SELECT DISTINCT o.* FROM radar_observations o
     JOIN radar_support a ON a.observation_id=o.id JOIN radar_discoveries d ON d.id=a.discovery_id
-    WHERE o.source_id=? AND d.review_state='Watching'`).get(sourceId).earliest;
+    WHERE o.source_id=? AND a.active=1 AND d.review_state='Watching' ORDER BY o.id`).all(sourceId);
+}
+function knownItems(sourceId) {
+  return new Set(getDb().prepare("SELECT item_id FROM radar_observations WHERE source_id=?").all(sourceId).map((row) => row.item_id));
 }
 function setReviewState(guildId, id, state) {
   if (!STATES.has(state)) throw new Error("Invalid Radar review state.");
-  return getDb().prepare("UPDATE radar_discoveries SET review_state=?, updated_at=? WHERE guild_id=? AND id=?")
+  return getDb().prepare("UPDATE radar_discoveries SET review_state=?, updated_at=? WHERE guild_id=? AND id=? AND handoff_result IS NULL")
     .run(state, new Date().toISOString(), guildId, id).changes > 0;
 }
 function ingest(source, item, classification, now = new Date().toISOString()) {
@@ -105,12 +109,34 @@ function ingest(source, item, classification, now = new Date().toISOString()) {
       item.updatedAt || null, now, now, contentHash, JSON.stringify(metadata));
     const observation = db.prepare("SELECT * FROM radar_observations WHERE source_id=? AND item_id=?").get(source.id, itemId);
     const prior = db.prepare(`SELECT d.* FROM radar_discoveries d JOIN radar_support a ON a.discovery_id=d.id
-      WHERE a.observation_id=? AND d.guild_id=? ORDER BY d.id LIMIT 1`).get(observation.id, source.guild_id);
+      WHERE a.observation_id=? AND a.active=1 AND d.guild_id=? ORDER BY d.id LIMIT 1`).get(observation.id, source.guild_id);
     if (!classification) return { observation, discovery: prior || null };
-    let discovery = prior;
+    const key = classification.correlationKey || null;
+    let previous = prior;
+    if (prior && (existing?.correlation_key || prior.correlation_key || null) !== key) {
+      // Preserve the previous evidence and owner decision; changed primary identity gets a fresh review.
+      db.prepare("UPDATE radar_support SET active=0, snapshot=? WHERE discovery_id=? AND observation_id=?")
+        .run(JSON.stringify({ ...existing, correlation_key: existing?.correlation_key || prior.correlation_key }), prior.id, observation.id);
+      db.prepare(`UPDATE radar_discoveries SET correlation_key=NULL WHERE id=? AND NOT EXISTS(
+        SELECT 1 FROM radar_support a JOIN radar_observations o ON o.id=a.observation_id
+        WHERE a.discovery_id=? AND a.active=1 AND o.correlation_key=?)`).run(prior.id, prior.id, prior.correlation_key);
+      previous = null;
+    }
+    db.prepare("UPDATE radar_observations SET correlation_key=? WHERE id=?").run(key, observation.id);
+    let discovery = previous;
     if (!discovery && classification.correlationKey) {
       discovery = db.prepare("SELECT * FROM radar_discoveries WHERE guild_id=? AND correlation_key=?")
         .get(source.guild_id, classification.correlationKey);
+      if (!discovery) {
+        // An exact former primary identity may return after an edit. Restore its
+        // original decision rather than manufacturing another review of the same video.
+        discovery = db.prepare(`SELECT d.* FROM radar_discoveries d JOIN radar_support a ON a.discovery_id=d.id
+          WHERE d.guild_id=? AND d.correlation_key IS NULL AND a.active=0
+          AND json_extract(a.snapshot,'$.correlation_key')=? ORDER BY d.id LIMIT 1`)
+          .get(source.guild_id, classification.correlationKey);
+        if (discovery) db.prepare("UPDATE radar_discoveries SET correlation_key=? WHERE id=?")
+          .run(classification.correlationKey, discovery.id);
+      }
     }
     if (!discovery) {
       const result = db.prepare(`INSERT INTO radar_discoveries(guild_id,title,summary,members,category,confidence,
@@ -119,23 +145,39 @@ function ingest(source, item, classification, now = new Date().toISOString()) {
           classification.category, classification.confidence, classification.correlationKey || null,
           classification.eligibility, classification.reason, now, now);
       discovery = getDiscovery(source.guild_id, Number(result.lastInsertRowid));
-    } else if (prior && existing?.content_hash !== contentHash) {
+    } else if (previous && existing?.content_hash !== contentHash) {
       // Edits enrich the same discovery without undoing an owner's decision or calendar handoff.
       db.prepare(`UPDATE radar_discoveries SET title=?, summary=?, members=?, category=?, confidence=?,
-        calendar_eligibility=CASE WHEN calendar_candidate_id IS NULL THEN ? ELSE calendar_eligibility END,
+        calendar_eligibility=CASE WHEN handoff_result IS NULL THEN ? ELSE calendar_eligibility END,
         updated_at=? WHERE id=?`)
         .run(title, summary, JSON.stringify(classification.members || []), classification.category,
           classification.confidence, classification.eligibility, now, discovery.id);
     }
-    db.prepare("INSERT OR IGNORE INTO radar_support(discovery_id,observation_id) VALUES(?,?)").run(discovery.id, observation.id);
+    db.prepare(`INSERT INTO radar_support(discovery_id,observation_id) VALUES(?,?)
+      ON CONFLICT(discovery_id,observation_id) DO UPDATE SET active=1,snapshot=NULL`).run(discovery.id, observation.id);
     return { observation, discovery: getDiscovery(source.guild_id, discovery.id) };
   });
 }
-function saveHandoff(guildId, id, targetGuildId, candidateId, details) {
-  getDb().prepare(`UPDATE radar_discoveries SET calendar_guild_id=?, calendar_candidate_id=?, event_date=?,
-    event_at=?, event_timezone=?, calendar_eligibility='Ready', eligibility_reason='Owner supplied calendar details.',
-    updated_at=? WHERE guild_id=? AND id=?`)
-    .run(targetGuildId, candidateId, details.date, details.at, details.timezone, new Date().toISOString(), guildId, id);
+function reserveHandoff(guildId, id, request) {
+  getDb().prepare("UPDATE radar_discoveries SET handoff_request=COALESCE(handoff_request,?) WHERE guild_id=? AND id=?")
+    .run(JSON.stringify(request), guildId, id);
+  return JSON.parse(getDiscovery(guildId, id).handoff_request);
+}
+function calendarEvent(guildId, id) {
+  return getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id=? AND id=?").get(guildId, id);
+}
+function saveHandoff(guildId, id, result) {
+  const record = result.record;
+  const candidate = result.kind === "candidate";
+  getDb().prepare(`UPDATE radar_discoveries SET calendar_guild_id=?, calendar_candidate_id=?, handoff_result=?,
+    event_date=?, event_at=?, event_timezone=?, review_state='Resolved', calendar_eligibility='Ready',
+    eligibility_reason='Calendar handoff completed; canonical calendar details retained.', updated_at=?
+    WHERE guild_id=? AND id=? AND handoff_result IS NULL`)
+    .run(result.guildId, candidate ? record.id : null, JSON.stringify(result),
+      candidate ? record.proposed_event_date : record.event_date,
+      candidate ? record.proposed_event_at : record.event_at,
+      candidate ? record.proposed_event_timezone : record.event_timezone,
+      new Date().toISOString(), guildId, id);
 }
 function delivery(discoveryId, channelId) {
   getDb().prepare(`INSERT INTO radar_deliveries(discovery_id,channel_id,token,started_at) VALUES(?,?,?,?)
@@ -143,12 +185,22 @@ function delivery(discoveryId, channelId) {
     .run(discoveryId, channelId, randomUUID(), new Date().toISOString());
   return getDb().prepare("SELECT * FROM radar_deliveries WHERE discovery_id=? AND channel_id=?").get(discoveryId, channelId);
 }
-function saveDelivery(discoveryId, channelId, messageId, contentHash) {
-  getDb().prepare("UPDATE radar_deliveries SET message_id=?, delivered_hash=? WHERE discovery_id=? AND channel_id=?")
-    .run(messageId, contentHash, discoveryId, channelId);
+function resetDeletedDelivery(discoveryId, channelId) {
+  getDb().prepare(`UPDATE radar_deliveries SET message_id=NULL, delivered_hash=NULL, checked_at=NULL,
+    recovery_before=NULL, token=?, started_at=? WHERE discovery_id=? AND channel_id=?`)
+    .run(randomUUID(), new Date().toISOString(), discoveryId, channelId);
+  return delivery(discoveryId, channelId);
+}
+function saveRecoveryProgress(discoveryId, channelId, before) {
+  getDb().prepare("UPDATE radar_deliveries SET recovery_before=? WHERE discovery_id=? AND channel_id=?")
+    .run(before, discoveryId, channelId);
+}
+function saveDelivery(discoveryId, channelId, messageId, contentHash, checkedAt = new Date().toISOString()) {
+  getDb().prepare("UPDATE radar_deliveries SET message_id=?, delivered_hash=?, checked_at=?, recovery_before=NULL WHERE discovery_id=? AND channel_id=?")
+    .run(messageId, contentHash, checkedAt, discoveryId, channelId);
 }
 module.exports = {
   CATEGORIES, hash, getSettings, listSettings, saveSettings, setEnabled, setDeliveryError,
   setCalendarTarget, ensureSources, listSources, updateSource, getDiscovery, listDiscoveries, supportingSources,
-  watchingBoundary, setReviewState, ingest, saveHandoff, delivery, saveDelivery,
+  watchedItems, knownItems, setReviewState, ingest, reserveHandoff, calendarEvent, saveHandoff, delivery, saveDelivery, resetDeletedDelivery, saveRecoveryProgress,
 };
