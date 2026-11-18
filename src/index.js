@@ -27,6 +27,9 @@ const birthdaysCommand = require("./commands/birthdays");
 const memberCountsCommand = require("./commands/memberCounts");
 const eventScheduleCommand = require("./commands/eventSchedule");
 const calendarCandidateCommand = require("./commands/calendarCandidate");
+const radarCommand = require("./commands/radar");
+const { startRadar } = require("./services/radarService");
+const { handleRadarInteraction } = require("./services/radarDiscord");
 const shareStore = require("./stores/shareStore");
 const {
   handleDeletedShare,
@@ -100,6 +103,7 @@ const commands = [
   memberCountsCommand,
   eventScheduleCommand,
   calendarCandidateCommand,
+  radarCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -203,6 +207,7 @@ client.once("clientReady", async () => {
   startMemberCountScheduler(client);
   startEventScheduler(client);
   startCalendarDiscovery(client);
+  startRadar(client);
 });
 
 client.on("guildCreate", async (guild) => {
@@ -422,6 +427,15 @@ client.on("messageDelete", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
+  if (interaction.customId?.startsWith("harmony-radar:")) {
+    try { await handleRadarInteraction(interaction); }
+    catch {
+      const payload = { content: "Radar could not finish this action. The saved discovery remains available.", flags: 64 };
+      if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => {});
+      else await interaction.reply(payload).catch(() => {});
+    }
+    return;
+  }
   try {
     if (await adminRoomCommand.handleAdminRoomInteraction(interaction)) return;
     if (await sessionRefreshService.handleRefreshInteraction(interaction)) return;

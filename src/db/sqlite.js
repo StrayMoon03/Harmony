@@ -30,6 +30,7 @@ function getDb() {
  * @param {import("node:sqlite").DatabaseSync} database
  */
 function migrate(database) {
+  require("./radarSchema").migrateRadar(database);
   database.exec(`
     CREATE TABLE IF NOT EXISTS shares (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
