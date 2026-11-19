@@ -54,7 +54,7 @@ const tick = () => new Promise(setImmediate);
 function workerFor(result, options = {}) {
   let calls = 0;
   const service = translation.createTranslationService({
-    provider: () => ({ id: "azure", available: true, translate: async (input, signal) => { calls++; return typeof result === "function" ? result(input, signal) : result; } }),
+    provider: () => ({ id: "google", available: true, translate: async (input, signal) => { calls++; return typeof result === "function" ? result(input, signal) : result; } }),
     detector: async () => "jpn", ...options,
   });
   return { ...service, calls: () => calls };
@@ -193,7 +193,7 @@ for (const [title, summary, language] of [
   const cached = worker.current(original);
   assert.equal(cached.status, "ready");
   assert.equal(cached.original_language, language);
-  assert.equal(cached.provider, "azure");
+  assert.equal(cached.provider, "google");
   const embed = discord.payload(result.discovery, [original], { translation: cached }).embeds[0].toJSON();
   assert.match(embed.title, /HAN announces/);
   assert.match(embed.description, /solo song/);
@@ -282,7 +282,7 @@ test("translation status/errors cannot create cross-source correlation", async (
 test("missing provider configuration falls back without external calls", async () => {
   const s = source();
   const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" }));
-  const worker = translation.createTranslationService({ provider: () => translation.azureProvider({}), detector: async () => "jpn" });
+  const worker = translation.createTranslationService({ provider: () => translation.googleProvider({}), detector: async () => "jpn" });
   worker.enqueue(cachedSource(discovery));
   await worker.whenIdle();
   assert.equal(worker.current(cachedSource(discovery)).status, "unavailable");
@@ -344,28 +344,29 @@ test("translation completion edits the existing card, preserving Ignored state a
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Ignored");
 });
 
-test("Azure uses bounded plain-text title/preview, auto-detection, HTTPS and configured credentials", async () => {
+test("Google uses Basic v2 NMT, plain text, auto-detection and header-only authentication", async () => {
   let request;
-  const provider = translation.azureProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "azure", AZURE_TRANSLATOR_KEY: "fake-test-key", AZURE_TRANSLATOR_REGION: "eastus" }, async (url, init) => {
+  const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake-test-key" }, async (url, init) => {
     request = { url, ...init };
-    return new Response(JSON.stringify([
-      { detectedLanguage: { language: "ja", score: 0.99 }, translations: [{ to: "en", text: translated.title }] },
-      { detectedLanguage: { language: "ja", score: 0.99 }, translations: [{ to: "en", text: translated.summary }] },
-    ]));
+    return new Response(JSON.stringify({ data: { translations: [
+      { detectedSourceLanguage: "ja", translatedText: translated.title },
+      { detectedSourceLanguage: "ja", translatedText: translated.summary },
+    ] } }));
   });
-  const result = await provider.translate({ title: "新曲", summary: "詳細" }, new AbortController().signal);
-  assert.equal(new URL(request.url).searchParams.get("from"), null);
-  assert.equal(new URL(request.url).searchParams.get("to"), "en");
-  assert.equal(request.headers["Ocp-Apim-Subscription-Key"], "fake-test-key");
-  assert.equal(request.headers["Ocp-Apim-Subscription-Region"], "eastus");
-  assert.deepEqual(JSON.parse(request.body), [{ Text: "新曲" }, { Text: "詳細" }]);
+  const controller = new AbortController();
+  const result = await provider.translate({ title: "新曲", summary: "詳細" }, controller.signal);
+  assert.equal(request.url, "https://translation.googleapis.com/language/translate/v2");
+  assert.equal(request.headers["x-goog-api-key"], "fake-test-key");
+  assert.equal(new URL(request.url).search, "");
+  assert.equal(request.redirect, "error");
+  assert.equal(request.signal, controller.signal);
+  assert.deepEqual(JSON.parse(request.body), { q: ["新曲", "詳細"], target: "en", format: "text", model: "nmt" });
   assert.equal(result.title, translated.title);
   assert.equal(result.language, "ja");
-  for (const endpoint of ["http://example.com", "https://example.com", "https://api.cognitive.microsofttranslator.com/evil"]) {
-    assert.equal(translation.azureProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "azure", AZURE_TRANSLATOR_KEY: "fake", AZURE_TRANSLATOR_ENDPOINT: endpoint }, () => assert.fail()).available, false);
-  }
+  assert.equal(translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google" }).available, false);
+  assert.equal(translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "azure", AZURE_TRANSLATOR_KEY: "legacy-key" }).available, false);
 });
-test("Azure rate limits share a cooldown and failed content is not retried on every poll", async () => {
+test("Google rate limits share a cooldown and failed content is not retried on every poll", async () => {
   const s = source();
   const discoveries = [ingest(s, item({ id: "a" })).discovery, ingest(s, item({ id: "b", url: "https://example.com/b" })).discovery];
   const worker = workerFor(() => { throw Object.assign(new Error("translator_http_429"), { retryAfterMs: 2 * 3600000 }); });
@@ -472,7 +473,7 @@ test("pending translation leases prevent duplicate requests and expired work rec
   const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" }));
   const now = Date.now();
   const original = cachedSource(discovery);
-  assert.equal(translationStore.claim(original, "azure", now, 1000), true);
+  assert.equal(translationStore.claim(original, "google", now, 1000), true);
   closeDb();
   let clock = now + 500;
   const restarted = workerFor(translated, { clock: () => clock });
@@ -501,10 +502,10 @@ test("a late translation of old content cannot become the current presentation a
 });
 
 test("a foreign title with English body retains the provider's non-English detected language", async () => {
-  const provider = translation.azureProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "azure", AZURE_TRANSLATOR_KEY: "fake" }, async () => new Response(JSON.stringify([
-    { detectedLanguage: { language: "ja" }, translations: [{ to: "en", text: "New release" }] },
-    { detectedLanguage: { language: "en" }, translations: [{ to: "en", text: "Details" }] },
-  ])));
+  const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake" }, async () => new Response(JSON.stringify({ data: { translations: [
+    { detectedSourceLanguage: "ja", translatedText: "New release" },
+    { detectedSourceLanguage: "en", translatedText: "Details" },
+  ] } })));
   const result = await provider.translate({ title: "新曲リリース", summary: "Details" }, new AbortController().signal);
   assert.equal(result.language, "ja");
 });
@@ -520,4 +521,84 @@ test("image-only announcements translate their title without inventing a body or
   assert.equal(embed.image.url, "https://example.com/poster.jpg");
   assert.match(embed.description, /Open the original announcement/);
   assert.equal(cachedSource(discovery).summary, "");
+});
+
+test("Google plain-text character references decode once without dropping literal angle brackets", async () => {
+  const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake" }, async () => new Response(JSON.stringify({ data: { translations: [
+    { detectedSourceLanguage: "ja", translatedText: "HAN&#39;s &quot;Song&quot; &amp; <Live> &amp;copy;" },
+  ] } })));
+  const result = await provider.translate({ title: "新曲", summary: "" }, new AbortController().signal);
+  assert.equal(result.title, 'HAN\'s "Song" & <Live> &copy;');
+  assert.equal(result.summary, "");
+});
+test("valid legacy Azure translations survive the switch without relabeling, requests or row changes", async () => {
+  const s = source();
+  const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" }));
+  store.setReviewState(s.guild_id, discovery.id, "Watching");
+  const original = cachedSource(discovery);
+  assert.equal(translationStore.claim(original, "azure", Date.now(), 1000), true);
+  translationStore.save(original, "azure", { status: "ready", ...translated });
+  const before = getDb().prepare("SELECT * FROM radar_translations WHERE observation_id=?").all(original.id);
+  closeDb();
+  const worker = workerFor(() => assert.fail("No request for hash-matched cached translation"));
+  worker.enqueue(cachedSource(discovery)); await worker.whenIdle();
+  assert.equal(worker.calls(), 0);
+  const current = worker.current(cachedSource(discovery));
+  assert.equal(current.provider, "azure");
+  assert.equal(current.status, "ready");
+  assert.match(discord.payload(discovery, [original], { translation: current }).embeds[0].toJSON().description, /Azure Translator/);
+  assert.deepEqual(getDb().prepare("SELECT * FROM radar_translations WHERE observation_id=?").all(original.id), before);
+  assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Watching");
+});
+test("changed source cannot use stale Azure cache and receives a separate Google result with the same discovery", async () => {
+  const s = source();
+  const value = item({ title: "HAN 新曲リリース", summary: "11月20日リリースです。" });
+  const { discovery } = ingest(s, value);
+  store.setReviewState(s.guild_id, discovery.id, "Ignored");
+  const original = cachedSource(discovery);
+  translationStore.claim(original, "azure", Date.now(), 1000);
+  translationStore.save(original, "azure", { status: "ready", ...translated });
+  const oldRow = translationStore.get(original, "azure");
+  const changed = ingest(s, { ...value, summary: "11月21日に変更です。" });
+  const worker = workerFor({ ...translated, summary: "The release date is now November 21." });
+  assert.equal(worker.current(cachedSource(changed.discovery)), null);
+  worker.enqueue(cachedSource(changed.discovery)); await worker.whenIdle();
+  assert.equal(worker.calls(), 1);
+  assert.equal(worker.current(cachedSource(changed.discovery)).provider, "google");
+  assert.equal(changed.discovery.id, discovery.id);
+  assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Ignored");
+  assert.deepEqual(translationStore.get(original, "azure"), oldRow);
+  assert.match(discord.payload(changed.discovery, [cachedSource(changed.discovery)], { translation: worker.current(cachedSource(changed.discovery)) }).embeds[0].toJSON().description, /Google Cloud Translation/);
+});
+test("failed legacy Azure entries do not block Google and successful Google cache takes precedence", async () => {
+  const s = source();
+  const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" }));
+  const original = cachedSource(discovery);
+  translationStore.claim(original, "azure", Date.now(), 1000);
+  translationStore.save(original, "azure", { status: "failed", error: "translator_http_403", retryAt: Date.now() + 86400000 });
+  const worker = workerFor(translated);
+  worker.enqueue(original); await worker.whenIdle();
+  assert.equal(worker.calls(), 1);
+  assert.equal(worker.current(original).provider, "google");
+  // An independently present old success must not replace the completed Google result.
+  translationStore.save(original, "azure", { status: "ready", ...translated, title: "Old Azure title" });
+  assert.equal(worker.current(original).provider, "google");
+  assert.equal(worker.current(original).translated_title, translated.title);
+});
+test("Google errors retain existing sanitized HTTP/backoff contract without persisting response secrets", async () => {
+  const s = source();
+  const { discovery } = ingest(s, item({ title: "新曲リリース" }));
+  const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake-secret-key" }, async () => new Response('private provider diagnostic fake-secret-key', { status: 429, headers: { "retry-after": "172800" } }));
+  const worker = translation.createTranslationService({ provider: () => provider, detector: async () => "jpn" });
+  worker.enqueue(cachedSource(discovery)); await worker.whenIdle();
+  const result = worker.current(cachedSource(discovery));
+  assert.equal(result.error, "translator_http_429");
+  assert.ok(Date.parse(result.next_retry_at) >= Date.now() + 47 * 3600000);
+  assert.doesNotMatch(JSON.stringify(result), /fake-secret-key|private provider diagnostic/);
+});
+test("Google malformed/oversized responses fail safely instead of generating a false translated result", async () => {
+  for (const body of ['{}', '{"data":{"translations":[]}}', '{"data":{"translations":[{"translatedText":""}]}}', 'x'.repeat(32769)]) {
+    const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake" }, async () => new Response(body));
+    await assert.rejects(provider.translate({ title: "新曲", summary: "" }, new AbortController().signal), /translator_(invalid_response|response_too_large)/);
+  }
 });

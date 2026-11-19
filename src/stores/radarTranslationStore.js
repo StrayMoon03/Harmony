@@ -11,6 +11,10 @@ function get(source, provider) {
     .get(source.id, sourceHash, provider);
   return row?.input_hash === inputHash ? row : null;
 }
+function legacyCompleted(source) {
+  const row = get(source, "azure");
+  return row && ["ready", "skipped"].includes(row.status) ? row : null;
+}
 function claim(source, provider, now, leaseMs) {
   const existing = get(source, provider);
   if (existing && (["ready", "skipped", "unavailable"].includes(existing.status) ||
@@ -36,4 +40,4 @@ function save(source, provider, result, now = Date.now()) {
     .run(result.status, result.language || null, result.title || null, result.summary || null,
       result.error || null, result.retryAt ? new Date(result.retryAt).toISOString() : null, new Date(now).toISOString(), source.id, sourceHash, provider);
 }
-module.exports = { identity, get, claim, reusable, save };
+module.exports = { identity, get, legacyCompleted, claim, reusable, save };

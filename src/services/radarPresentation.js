@@ -59,7 +59,7 @@ function cardView(discovery, source, translation) {
   const translated = translation?.status === "ready";
   const title = translated ? translation.translated_title : source?.title || discovery.title;
   const summary = translated ? translation.translated_summary : preview(source?.summary || discovery.summary, title);
-  const language = translated ? "Machine translated to English · " + (translation.provider === "azure" ? "Azure Translator" : "Translation")
+  const language = translated ? "Machine translated to English · " + ({ google: "Google Cloud Translation", azure: "Azure Translator" }[translation.provider] || "Translation")
     : translation?.status === "skipped" ? null
       : translation?.status === "pending" ? "English translation pending · Original source text"
       : translation?.status ? "English translation unavailable · Original source text"

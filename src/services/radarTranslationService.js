@@ -1,5 +1,6 @@
 const cache = require("../stores/radarTranslationStore");
 const { clip } = require("./radarPresentation");
+const cheerio = require("cheerio");
 const TIMEOUT_MS = 3000;
 const RETRY_MS = 60 * 60 * 1000;
 const MAX_QUEUE = 100;
@@ -16,28 +17,18 @@ async function detectLanguage(text) {
   const { franc } = await import("franc-min");
   return franc(text, { minLength: 30 });
 }
-function azureProvider(env = process.env, fetchImpl = globalThis.fetch) {
-  if (env.HARMONY_RADAR_TRANSLATION_PROVIDER !== "azure") return { id: "disabled", available: false };
-  const key = env.AZURE_TRANSLATOR_KEY;
-  const base = env.AZURE_TRANSLATOR_ENDPOINT || "https://api.cognitive.microsofttranslator.com";
-  let endpoint;
-  try {
-    const url = new URL(base);
-    if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash || url.pathname !== "/" ||
-        !(url.hostname === "api.cognitive.microsofttranslator.com" || /^[a-z0-9-]+\.cognitiveservices\.azure\.com$/.test(url.hostname))) throw new Error();
-    endpoint = new URL(url.hostname === "api.cognitive.microsofttranslator.com" ? "/translate" : "/translator/text/v3.0/translate", url);
-    endpoint.search = "api-version=3.0&to=en&textType=plain";
-  } catch { return { id: "azure-invalid-endpoint", available: false }; }
-  if (!key) return { id: "azure-missing-key", available: false };
+function googleProvider(env = process.env, fetchImpl = globalThis.fetch) {
+  if (env.HARMONY_RADAR_TRANSLATION_PROVIDER !== "google") return { id: "disabled", available: false };
+  const key = env.GOOGLE_CLOUD_TRANSLATION_API_KEY;
+  if (!key) return { id: "google-missing-key", available: false };
   return {
-    id: "azure", available: true,
+    id: "google", available: true,
     async translate(input, signal) {
       const texts = [input.title, input.summary].filter(Boolean);
-      const response = await fetchImpl(endpoint.href, {
+      const response = await fetchImpl("https://translation.googleapis.com/language/translate/v2", {
         method: "POST", redirect: "error", signal,
-        headers: { "Content-Type": "application/json; charset=UTF-8", "Ocp-Apim-Subscription-Key": key,
-          ...(env.AZURE_TRANSLATOR_REGION ? { "Ocp-Apim-Subscription-Region": env.AZURE_TRANSLATOR_REGION } : {}) },
-        body: JSON.stringify(texts.map((Text) => ({ Text }))),
+        headers: { "Content-Type": "application/json; charset=UTF-8", "x-goog-api-key": key },
+        body: JSON.stringify({ q: texts, target: "en", format: "text", model: "nmt" }),
       });
       if (!response.ok) {
         const error = new Error("translator_http_" + response.status);
@@ -53,15 +44,19 @@ function azureProvider(env = process.env, fetchImpl = globalThis.fetch) {
         if (size > 32768) throw new Error("translator_response_too_large");
         chunks.push(Buffer.from(chunk));
       }
-      const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const data = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.data?.translations;
       if (!Array.isArray(data) || data.length !== texts.length) throw new Error("translator_invalid_response");
-      const translated = data.map((entry) => entry.translations?.find((value) => value.to === "en")?.text);
+      const translated = data.map((entry) => entry?.translatedText);
       if (translated.some((text) => typeof text !== "string" || !text.trim())) throw new Error("translator_invalid_response");
-      return { title: translated[0], summary: translated[1] || "", language: data.find((entry) => entry.detectedLanguage?.language && entry.detectedLanguage.language !== "en")?.detectedLanguage.language || data.at(-1).detectedLanguage?.language || "und" };
+      // Google can return HTML character references even for plain text. Decode
+      // once while retaining literal angle brackets rather than parsing them as tags.
+      const decode = (text) => cheerio.load(text.replaceAll("<", "&lt;").replaceAll(">", "&gt;"), null, false).root().text();
+      return { title: decode(translated[0]), summary: translated[1] ? decode(translated[1]) : "",
+        language: data.find((entry) => entry.detectedSourceLanguage && entry.detectedSourceLanguage !== "en")?.detectedSourceLanguage || data.at(-1).detectedSourceLanguage || "und" };
     },
   };
 }
-function createTranslationService({ provider = () => azureProvider(), detector = detectLanguage, timeoutMs = TIMEOUT_MS, clock = Date.now } = {}) {
+function createTranslationService({ provider = () => googleProvider(), detector = detectLanguage, timeoutMs = TIMEOUT_MS, clock = Date.now } = {}) {
   const pending = new Map();
   const waiting = [];
   const idle = [];
@@ -70,7 +65,10 @@ function createTranslationService({ provider = () => azureProvider(), detector =
   let scheduled = false;
   let cooldown = 0;
   function current(source) {
-    try { return cache.get(source, provider().id); } catch { return null; }
+    try {
+      const selected = cache.get(source, provider().id);
+      return selected?.status === "ready" || selected?.status === "skipped" ? selected : cache.legacyCompleted(source) || selected;
+    } catch { return null; }
   }
   function enqueue(source, callbackKey, onReady) {
     try { enqueueInternal(source, callbackKey, onReady); } catch { /* Enrichment cannot prevent the original card. */ }
@@ -83,6 +81,9 @@ function createTranslationService({ provider = () => azureProvider(), detector =
       if (onReady) pending.get(key).callbacks.set(callbackKey, onReady);
       return;
     }
+    // Keep successful, hash-matched legacy results without relabeling or billing
+    // again solely because the provider changed. New/changed content uses Google.
+    if (cache.legacyCompleted(source)) return;
     const row = cache.get(source, selected.id);
     if (row && (["ready", "skipped", "unavailable"].includes(row.status) || Date.parse(row.next_retry_at) > clock() || Date.parse(row.lease_until) > clock())) return;
     if (pending.size >= MAX_QUEUE) return; // Original cards still deliver; next poll can enqueue the remaining work.
@@ -156,4 +157,4 @@ function createTranslationService({ provider = () => azureProvider(), detector =
   return { enqueue, current, whenIdle };
 }
 const service = createTranslationService();
-module.exports = { TIMEOUT_MS, detectLanguage, azureProvider, createTranslationService, ...service };
+module.exports = { TIMEOUT_MS, detectLanguage, googleProvider, createTranslationService, ...service };
