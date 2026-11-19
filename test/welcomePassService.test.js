@@ -168,6 +168,14 @@ test("manual STAY-role changes without a pending Welcome Pass approval do not an
   assert.equal(env.staff.sent.length, 0);
 });
 
+test("concurrent assignment requests share the same operation instead of granting roles twice", async () => {
+  const env = environment({ guildId: "coalesced-assignment" });
+  addApprovedLink("YS-CONCUR01", env);
+  let grants = 0; env.member.roles.add = async () => { grants++; await new Promise(setImmediate); };
+  const results = await Promise.all([service.assignApprovedWelcomePass(env.client, "YS-CONCUR01"), service.assignApprovedWelcomePass(env.client, "YS-CONCUR01")]);
+  assert.equal(grants, 1); assert.equal(env.release.sent.length, 1); assert.equal(env.staff.sent.length, 1); assert.equal(results[0].status, "assigned");
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });

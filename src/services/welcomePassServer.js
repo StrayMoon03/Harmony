@@ -4,6 +4,7 @@ const {
   normalizeWelcomePassCode,
   isValidWelcomePassCode,
   recordWelcomePassApproval,
+  linkSelectedWelcomePassMember,
 } = require("../stores/welcomePassStore");
 const { saveWelcomePassBirthdayProfile } = require("../stores/birthdayStore");
 const { normalizeBiases } = require("./memberBiases");
@@ -14,6 +15,9 @@ const {
 } = require("./welcomePassService");
 const { sendWelcomePassSubmissionAlert } = require("./welcomePassSubmissionService");
 const { startSessionRefreshWebService } = require("./sessionRefreshWebService");
+
+const { selectedMember, listMembers } = require("./welcomePassMemberService");
+const approvalJobs = new Set();
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -73,7 +77,7 @@ function startWelcomePassServer(client) {
       return;
     }
 
-    if (request.method !== "POST" || !["/welcome-pass/approved", "/welcome-pass/submitted"].includes(url.pathname)) {
+    if (request.method !== "POST" || !["/welcome-pass/approved", "/welcome-pass/submitted", "/welcome-pass/members", "/welcome-pass/member"].includes(url.pathname)) {
       sendJson(response, 404, { error: "not_found" });
       return;
     }
@@ -96,6 +100,17 @@ function startWelcomePassServer(client) {
 
     try {
       const body = await readJsonBody(request);
+      if (url.pathname === "/welcome-pass/members") {
+        sendJson(response, 200, { ok: true, ...await listMembers(client, body.after) });
+        return;
+      }
+      if (url.pathname === "/welcome-pass/member") {
+        const code = normalizeWelcomePassCode(body.code);
+        if (!isValidWelcomePassCode(code)) { sendJson(response, 400, { error: "invalid_confirmation_code" }); return; }
+        const checked = await selectedMember(client, code, body.userId);
+        sendJson(response, checked.ok ? 200 : 409, checked);
+        return;
+      }
       if (url.pathname === "/welcome-pass/submitted") {
         const reference = normalizeWelcomePassCode(body.reference);
         const discordUsername = typeof body.discordUsername === "string" ? body.discordUsername.trim() : "";
@@ -139,11 +154,6 @@ function startWelcomePassServer(client) {
         return;
       }
 
-      recordWelcomePassApproval({
-        code,
-        approverName: body.approverName,
-      });
-
       const birthdayOptIn =
         body.birthdayOptIn === true &&
         validMmdd(body.birthdayMmdd);
@@ -158,39 +168,56 @@ function startWelcomePassServer(client) {
         sendJson(response, 400, { error: "invalid_member_bias_selection" });
         return;
       }
-      saveWelcomePassBirthdayProfile({
-        code,
-        celebrationEnabled: birthdayOptIn,
-        birthdayMmdd: birthdayOptIn ? String(body.birthdayMmdd) : null,
-        birthdayName: birthdayOptIn
-          ? String(body.birthdayName || "").trim().slice(0, 80)
-          : null,
-        discordUsername: String(body.discordUsername || "").slice(0, 100),
-        timezone: birthdayOptIn
-          ? String(body.timezone || "").trim().slice(0, 100)
-          : null,
-        biases: memberBiases,
-      });
+      if (approvalJobs.has(code)) { sendJson(response, 409, { error: "approval_in_progress" }); return; }
+      approvalJobs.add(code);
+      try {
+        // Validate selected identity and all fields before recording approval.
+        let matchResult;
+        if (body.discordMemberId !== undefined) {
+          const checked = await selectedMember(client, code, body.discordMemberId);
+          if (!checked.ok) { sendJson(response, 409, { error: checked.reason }); return; }
+          const linked = linkSelectedWelcomePassMember({ code, guildId: checked.guildId, userId: checked.userId });
+          if (!linked.ok) { sendJson(response, 409, { error: linked.reason }); return; }
+          matchResult = { status: "admin_selected", guildId: checked.guildId, userId: checked.userId };
+        }
+        recordWelcomePassApproval({ code, approverName: body.approverName });
+        saveWelcomePassBirthdayProfile({
+          code,
+          celebrationEnabled: birthdayOptIn,
+          birthdayMmdd: birthdayOptIn ? String(body.birthdayMmdd) : null,
+          birthdayName: birthdayOptIn
+            ? String(body.birthdayName || "").trim().slice(0, 80)
+            : null,
+          discordUsername: String(body.discordUsername || "").slice(0, 100),
+          timezone: birthdayOptIn
+            ? String(body.timezone || "").trim().slice(0, 100)
+            : null,
+          biases: memberBiases,
+        });
 
-      const matchResult = await autoLinkWelcomePassByDiscordUsername(
-        client,
-        code,
-        String(body.discordUsername || "").slice(0, 100)
-      );
-      const result = await assignApprovedWelcomePass(client, code);
-      const pending = [
-        "waiting_for_link",
-        "waiting_for_setup",
-        "member_missing",
-        "manual_role_required",
-      ].includes(result.status);
+        matchResult = matchResult || await autoLinkWelcomePassByDiscordUsername(
+          client,
+          code,
+          String(body.discordUsername || "").slice(0, 100)
+        );
+        const result = await assignApprovedWelcomePass(client, code);
+        const pending = [
+          "waiting_for_link",
+          "waiting_for_setup",
+          "member_missing",
+          "manual_role_required",
+        ].includes(result.status);
 
-      sendJson(response, pending ? 202 : 200, {
-        ok: true,
-        code,
-        status: result.status,
-        matchStatus: matchResult.status,
-      });
+        const accepted = pending || ["assigned", "already_assigned", "reconciled"].includes(result.status);
+        console.info("Welcome Pass approval processed:", code, result.status);
+        sendJson(response, accepted ? (pending ? 202 : 200) : 503, {
+          ok: accepted,
+          recorded: true,
+          code,
+          status: result.status,
+          matchStatus: matchResult.status,
+        });
+      } finally { approvalJobs.delete(code); }
     } catch (error) {
       if (error.message === "body_too_large") {
         sendJson(response, 413, { error: "body_too_large" });

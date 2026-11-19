@@ -56,7 +56,8 @@ function makeEnvironment(guildId = "welcome-review-guild") {
     name: "Youtiful STAY",
     members: {
       cache: members,
-      fetch: async (id) => id ? members.get(id) || null : members,
+      fetch: async (id) => id ? members.get(typeof id === "object" ? id.user : id) || null : members,
+      list: async () => members,
     },
     roles: {
       cache: new Map([[role.id, role]]),
@@ -289,6 +290,107 @@ test("staff confirmation distinguishes a member who already had STAY", async (t)
   assert.equal(response.status, 200);
   assert.equal(env.roleGrants, 0);
   assert.ok(env.sent.some((item) => item.content.includes("member already had STAY")));
+});
+
+
+function numericMember(env) {
+  env.guild.members.cache.clear();
+  env.member.id = "1005965496505602139";
+  env.member.user.username = "gothicbfly";
+  env.guild.members.cache.set(env.member.id, env.member);
+  return env.member.id;
+}
+test("matched submission then explicit approval is recorded, grants role and acknowledges; retries never replay admission", async (t) => {
+  const env = makeEnvironment("full-approval-pipeline");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  await post(baseUrl, "/welcome-pass/submitted", submittedPayload("YS-PIPE0001"));
+  assert.equal(env.roleGrants, 0);
+  const payload = { code: "YS-PIPE0001", discordUsername: env.member.user.username, approverName: "Kris" };
+  const first = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal(first.status, 200); assert.equal((await first.json()).recorded, true);
+  const count = env.sent.length;
+  const retry = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal((await retry.json()).status, "already_assigned");
+  assert.equal(env.sent.length, count); assert.equal(env.roleGrants, 1);
+});
+test("admin selection validates current membership without approving; corrected explicit approval uses member ID", async (t) => {
+  const env = makeEnvironment("correct-member-pipeline"); const userId = numericMember(env);
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const body = { code: "YS-CORRECT1", userId };
+  const selected = await post(baseUrl, "/welcome-pass/member", body);
+  assert.equal(selected.status, 200); assert.equal((await selected.json()).userId, userId);
+  assert.equal(welcomePassStore.getWelcomePassAssignment(body.code), null); assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
+  const approved = await post(baseUrl, "/welcome-pass/approved", { code: body.code, discordUsername: "TracieNew", discordMemberId: userId });
+  assert.equal(approved.status, 200); assert.equal((await approved.json()).matchStatus, "admin_selected"); assert.equal(env.roleGrants, 1);
+  assert.equal(welcomePassStore.getWelcomePassAssignment(body.code).user_id, userId);
+});
+test("leaving before correction/save or approval fails safely; bots and conflicting active/completed passes rejected", async (t) => {
+  const env = makeEnvironment("selection-safety"); const userId = numericMember(env);
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const body = { code: "YS-SAFETY01", userId };
+  env.guild.members.cache.clear();
+  assert.equal((await post(baseUrl, "/welcome-pass/member", body)).status, 409);
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", { code: body.code, discordMemberId: userId })).status, 409);
+  assert.equal(welcomePassStore.getWelcomePassAssignment(body.code), null);
+  env.guild.members.cache.set(userId, env.member); env.member.user.bot = true;
+  assert.equal((await post(baseUrl, "/welcome-pass/member", body)).status, 409); env.member.user.bot = false;
+  welcomePassStore.linkWelcomePassCode({ code: "YS-OTHER001", guildId: env.guild.id, userId });
+  assert.equal((await post(baseUrl, "/welcome-pass/member", body)).status, 409);
+  welcomePassStore.markWelcomePassAssigned("YS-OTHER001");
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", { code: body.code, discordMemberId: userId })).status, 409);
+  assert.equal(env.roleGrants, 0);
+});
+test("member endpoints require bridge authentication; roster pagination includes all humans without exposing other member data", async (t) => {
+  const env = makeEnvironment("roster-pagination"); numericMember(env);
+  let options;
+  const page = new Map(Array.from({ length: 100 }, (_, index) => {
+    const id = String(1005965496505602100n + BigInt(index)); return [id, { id, user: { username: "stay" + index, bot: index === 1, privateEmail: "never expose" }, displayName: "STAY " + index }];
+  }));
+  env.guild.members.list = async (value) => { options = value; return value.after ? new Map() : page; };
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  assert.equal((await post(baseUrl, "/welcome-pass/members", {}, "wrong")).status, 401);
+  assert.equal((await post(baseUrl, "/welcome-pass/member", { code: "YS-PAGING01", userId: env.member.id }, "wrong")).status, 401);
+  const result = await (await post(baseUrl, "/welcome-pass/members", {})).json();
+  assert.equal(result.members.length, 99); assert.equal(result.after, [...page.keys()].at(-1)); assert.equal(options.limit, 100); assert.doesNotMatch(JSON.stringify(result), /privateEmail|never expose/);
+  const next = await (await post(baseUrl, "/welcome-pass/members", { after: result.after })).json();
+  assert.equal(options.after, result.after); assert.equal(next.after, null);
+});
+test("role failure does not return success and retry grants once; concurrent callbacks cannot duplicate role operations", async (t) => {
+  const env = makeEnvironment("role-failure-retry");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const add = env.member.roles.add; env.member.roles.add = async () => { throw new Error("Discord unavailable"); };
+  const payload = { code: "YS-RETRY001", discordUsername: env.member.user.username };
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", payload)).status, 500); assert.equal(env.sent.length, 0);
+  env.member.roles.add = add;
+  const replies = await Promise.all([post(baseUrl, "/welcome-pass/approved", payload), post(baseUrl, "/welcome-pass/approved", payload)]);
+  assert.ok(replies.some((reply) => reply.status === 200)); assert.equal(env.roleGrants, 1); assert.equal(env.sent.length, 2);
+});
+test("missing configured role returns a real private failure, not approval success", async (t) => {
+  const env = makeEnvironment("role-missing-failure"); env.guild.roles.cache.clear(); env.guild.roles.fetch = async () => null;
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const response = await post(baseUrl, "/welcome-pass/approved", { code: "YS-MISSING1", discordUsername: env.member.user.username });
+  assert.equal(response.status, 503); const body = await response.json(); assert.equal(body.ok, false); assert.equal(body.status, "role_missing");
+});
+test("invalid bias cannot persist approval before validation", async (t) => {
+  const env = makeEnvironment("approval-field-validation");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const response = await post(baseUrl, "/welcome-pass/approved", { code: "YS-INVALID1", biases: ["not-a-member"] });
+  assert.equal(response.status, 400); assert.equal(welcomePassStore.getWelcomePassAssignment("YS-INVALID1"), null);
+});
+test("unmatched alert gives the approved admin-correction instructions and self-service fallback", async (t) => {
+  const env = makeEnvironment("match-instructions");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const response = await post(baseUrl, "/welcome-pass/approved", { code: "YS-NOMATCH1", discordUsername: "TracieNew" });
+  assert.equal(response.status, 202); assert.equal((await response.json()).recorded, true);
+  assert.match(env.sent[0].content, /Discord Member Match Needed/); assert.match(env.sent[0].content, /select the correct Discord member before approving/); assert.match(env.sent[0].content, /harmony-pass/); assert.equal(env.roleGrants, 0);
+});
+test("harmony-pass confirmation-code fallback still links and admits a previously unmatched approved pass", async (t) => {
+  const env = makeEnvironment("self-service-fallback"); const code = "YS-SELFS001";
+  welcomePassStore.recordWelcomePassApproval({ code, approverName: "Kris" });
+  const command = require("../src/commands/linkWelcomePass"); const replies = [];
+  await command.execute({ guild: env.guild, user: env.member.user, client: env.client, options: { getString: () => code }, deferReply: async () => {}, editReply: async (reply) => replies.push(reply),
+    user: { ...env.member.user, id: env.member.id } });
+  assert.equal(env.roleGrants, 1); assert.match(replies[0], /all set/);
 });
 
 test.after(() => {
