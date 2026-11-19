@@ -34,7 +34,7 @@ function parseDetail(html, entry) {
   const images = [...new Set(content.find("img").map((_, el) => publicUrl($(el).attr("src"), entry.url)).get().filter(Boolean))].sort();
   const title = entry.title || $(".title, .tit").filter((_, el) => $(el).text().trim()).first().text().trim() || "JYPE announcement";
   return {
-    ...entry, title, summary: plainText(content.html()).slice(0, 6000),
+    ...entry, title, summary: plainText(content.html()),
     metadata: { noticeNumber: entry.noticeNumber, images, links, bodyHash: contentDigest(plainText(content.html())) },
   };
 }

@@ -21,7 +21,7 @@ function parsePage(text) {
     return {
       id, url: ORIGIN + "/artist/StrayKids/info/" + id,
       aliases: ["https://www.straykidsjapan.com/info/archive/?" + id],
-      title: plainText(entry.title), summary: plainText(article).slice(0, 6000),
+      title: plainText(entry.title), summary: plainText(article),
       publishedAt: /^\d{4}\.\d{2}\.\d{2}$/.test(entry.date || "") ? entry.date.replaceAll(".", "-") : null,
       metadata: { sourceCategory: entry.category || null, images, links, bodyHash: contentDigest(plainText(article)) },
     };

@@ -1,4 +1,5 @@
 const test = require("node:test");
+process.env.HARMONY_RADAR_TRANSLATION_PROVIDER = "disabled";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -19,7 +20,7 @@ const youtube = require("../src/services/radarSources/youtubeUploads");
 const sony = require("../src/services/radarSources/sonyInfo");
 const { requestText, workBudget } = require("../src/services/radarSources/common");
 
-test.after(() => { closeDb(); fs.rmSync(temp, { recursive: true, force: true }); });
+test.after(async () => { await require("../src/services/radarTranslationService").whenIdle(); closeDb(); fs.rmSync(temp, { recursive: true, force: true }); });
 let sequence = 0;
 function source(provider = "jype-notice") {
   const guild = "radar-test-" + ++sequence;

@@ -23,7 +23,7 @@ function parseFeed(xml, channelId = accountId) {
     return {
       id, url: "https://www.youtube.com/watch?v=" + id,
       aliases: ["https://youtu.be/" + id], title: String(entry.title || "Official Stray Kids upload"),
-      summary: String(entry["media:group"]?.["media:description"] || "").slice(0, 6000),
+      summary: String(entry["media:group"]?.["media:description"] || ""),
       publishedAt: validTimestamp(entry.published), updatedAt: validTimestamp(entry.updated),
       metadata: {
         channelId, links: ["https://www.youtube.com/watch?v=" + id],
