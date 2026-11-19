@@ -186,6 +186,39 @@ function linkWelcomePassCode({ code, guildId, userId }) {
   return { ok: true, code: normalizedCode };
 }
 
+// Admin-selected identity is only linked during explicit approval, never on edit.
+function checkWelcomePassMember({ code, guildId, userId }) {
+  const db = getDb();
+  const own = db.prepare("SELECT * FROM welcome_pass_links WHERE code=?").get(normalizeWelcomePassCode(code));
+  if (own?.assigned_at && (own.guild_id !== guildId || own.user_id !== userId)) return { ok: false, reason: "completed_pass" };
+  const other = db.prepare("SELECT code FROM welcome_pass_links WHERE guild_id=? AND user_id=? AND code!=?")
+    .get(guildId, userId, normalizeWelcomePassCode(code));
+  return other ? { ok: false, reason: "member_pass_conflict" } : { ok: true };
+}
+function linkSelectedWelcomePassMember(input) {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const checked = checkWelcomePassMember(input);
+    let result = checked;
+    if (checked.ok) {
+      const own = db.prepare("SELECT * FROM welcome_pass_links WHERE code=?").get(normalizeWelcomePassCode(input.code));
+      if (own && !own.assigned_at) {
+        db.prepare("UPDATE welcome_pass_links SET guild_id=?, user_id=?, linked_at=? WHERE code=? AND assigned_at IS NULL")
+          .run(input.guildId, input.userId, new Date().toISOString(), normalizeWelcomePassCode(input.code));
+        result = { ok: true };
+      } else {
+        result = linkWelcomePassCode(input);
+      }
+    }
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function recordWelcomePassApproval({ code, approverName }) {
   const normalizedCode = normalizeWelcomePassCode(code);
   getDb().prepare(`
@@ -284,6 +317,8 @@ module.exports = {
   removeWelcomePassBiasRole,
   linkWelcomePassCode,
   recordWelcomePassApproval,
+  checkWelcomePassMember,
+  linkSelectedWelcomePassMember,
   claimWelcomePassSubmissionAlert,
   markWelcomePassSubmissionAlertDelivered,
   getWelcomePassSubmissionAlert,

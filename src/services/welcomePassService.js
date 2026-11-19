@@ -179,15 +179,14 @@ async function notifyDiscordUsernameIssue(
 
   await channel.send({
     content: [
-      "⚠️ **Welcome Pass needs a Discord match**",
+      "⚠️ **Discord Member Match Needed**",
       "",
+      "Harmony could not find an exact Discord username match for " + discordUsername.replaceAll("`", "") + ", so no role was granted.",
+      "",
+      "Admin: Please check that the Discord name entered on the Welcome Pass matches the member's actual Discord username. If it does not, edit the Welcome Pass and select the correct Discord member before approving.",
+      "",
+      "If you cannot determine which Discord account belongs to this submission, the member can still use /harmony-pass with their confirmation code to verify their account.",
       "Confirmation: `" + code + "`",
-      "Discord @username entered: `" +
-        discordUsername.replaceAll("`", "") +
-        "`",
-      "Harmony did not find one exact @username in this server.",
-      "",
-      "No role was granted. Ask the member to run `/harmony-pass` with their confirmation code.",
     ].join("\n"),
     allowedMentions: { parse: [] },
   }).catch((error) => {
@@ -263,7 +262,15 @@ async function autoLinkWelcomePassByDiscordUsername(
   };
 }
 
-async function assignApprovedWelcomePass(client, code, { sendMessages = true } = {}) {
+const assignmentJobs = new Map();
+function assignApprovedWelcomePass(client, code, options = {}) {
+  const key = String(code).trim().toUpperCase();
+  if (assignmentJobs.has(key)) return assignmentJobs.get(key);
+  const job = assignApprovedWelcomePassInternal(client, code, options).finally(() => assignmentJobs.delete(key));
+  assignmentJobs.set(key, job);
+  return job;
+}
+async function assignApprovedWelcomePassInternal(client, code, { sendMessages = true } = {}) {
   const assignment = getWelcomePassAssignment(code);
   if (!assignment) return { status: "approval_missing" };
   if (!assignment.guild_id || !assignment.user_id) {
