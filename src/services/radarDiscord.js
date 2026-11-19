@@ -7,37 +7,44 @@ const store = require("../stores/radarStore");
 const { resolveAdminCapabilities } = require("./operationsStatusService");
 const { submitCalendarCandidate, localToUtc, validTimezone } = require("./eventSchedulerService");
 
+const presentation = require("./radarPresentation");
+const translation = require("./radarTranslationService");
+const { classifyObservation } = require("./radarClassification");
 const deliveries = new Map();
 const handoffs = new Map();
 const EXISTENCE_CHECK_MS = 60 * 60 * 1000;
-function payload(discovery, sources) {
-  const source = sources[0];
+function payload(discovery, sources, options = {}) {
+  const source = presentation.primarySource(discovery, sources);
+  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null));
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:ignore:" + discovery.id).setLabel("Ignore").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:watch:" + discovery.id).setLabel("Watch for Details").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:calendar:" + discovery.id).setLabel("Add to Calendar").setStyle(ButtonStyle.Primary)
       .setDisabled(Boolean(discovery.handoff_result)),
   );
-  const embed = new EmbedBuilder().setTitle(discovery.title.slice(0, 256))
-    .setDescription((discovery.summary || "Open the source to review this announcement.").slice(0, 1800))
+  if (source) controls.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Original announcement").setURL(source.canonical_url));
+  const embed = new EmbedBuilder().setTitle(view.title)
+    .setDescription(view.summary + (view.language ? "\n\n*" + view.language + "*" : ""))
     .setColor(discovery.review_state === "Watching" ? 0xfee75c : 0x5865f2)
     .setFooter({ text: "SKZ Radar #" + discovery.id })
     .addFields(
       { name: "Review", value: discovery.review_state, inline: true },
       { name: "Category", value: discovery.category, inline: true },
-      { name: "Confidence", value: discovery.confidence, inline: true },
+      { name: "Confidence", value: discovery.confidence === "rule-based" ? "Rule-based" : "Uncertain", inline: true },
       { name: "Timing", value: [
-        source?.published_at ? "Published " + source.published_at : "Publication time unknown",
-        "Discovered " + discovery.created_at,
-        discovery.event_date ? "Calendar date " + discovery.event_date : "Event / release date unconfirmed",
+        "Published: " + (presentation.formatDate(source?.published_at) || "Not provided"),
+        ...(discovery.event_at || discovery.event_date ? ["Calendar date: " + (presentation.formatDate(discovery.event_at || discovery.event_date) || "Unconfirmed")] : []),
+        "Discovered: " + (presentation.formatDate(discovery.created_at) || "Not provided"),
       ].join("\n") },
       { name: "Calendar", value: discovery.handoff_result && JSON.parse(discovery.handoff_result).kind === "event"
-        ? "Linked to existing calendar event #" + JSON.parse(discovery.handoff_result).record.id + "."
+        ? "Ready · Linked to existing calendar event #" + JSON.parse(discovery.handoff_result).record.id + "."
         : discovery.calendar_candidate_id
-        ? "Sent for calendar review as candidate #" + discovery.calendar_candidate_id + "."
-        : discovery.calendar_eligibility + " — " + discovery.eligibility_reason },
-      { name: "Supporting sources", value: sources.slice(0, 8)
-        .map((item) => "[" + item.provider + " · " + item.authority + "](" + item.canonical_url + ")").join("\n").slice(0, 1024) || "Source unavailable" },
+        ? "Ready · Sent for calendar review as candidate #" + discovery.calendar_candidate_id + "."
+        : discovery.calendar_eligibility + (discovery.calendar_eligibility === "Potential" ? " · Confirm a date with Add to Calendar." : "") },
+      ...(view.originalTitle ? [{ name: "Original title", value: view.originalTitle }] : []),
+      { name: "Supporting sources", value: sources.slice(0, 3)
+        .map((item) => "[" + ({ "jype-notice": "JYPE Notice", "sony-info": "Sony Japan Info", "youtube-uploads": "Official YouTube" }[item.provider] || "Source") + "](" + item.canonical_url.replace(/[()]/g, encodeURIComponent) + ")").join("\n") +
+        (sources.length > 3 ? "\n+" + (sources.length - 3) + " more sources saved" : "") || "Source unavailable" },
     );
   if (source) embed.setURL(source.canonical_url);
   const images = source ? JSON.parse(source.metadata).images : [];
@@ -74,8 +81,17 @@ async function syncRadarChannel(client, guildId, { now = new Date() } = {}) {
       const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
       const channel = guild.channels.cache.get(settings.channel_id) || await guild.channels.fetch(settings.channel_id);
       if (!channel?.isTextBased() || !channel.messages?.fetch) throw new Error("Radar destination is unavailable.");
-      const queue = store.listDiscoveries(guildId).map((discovery) => {
-        const body = payload(discovery, store.supportingSources(discovery.id));
+      const onTranslated = () => {
+        const active = deliveries.get(guildId);
+        return Promise.resolve(active).then(() => syncRadarChannel(client, guildId));
+      };
+      const queue = store.listDiscoveries(guildId).map((saved) => {
+        const sources = store.supportingSources(saved.id);
+        const source = presentation.primarySource(saved, sources);
+        const discovery = source ? store.saveClassification(guildId, saved.id, classifyObservation(source, { title: source.title, url: source.canonical_url })) : saved;
+        // Queue enrichment without awaiting it; original-language cards and polling progress now.
+        if (source) translation.enqueue(source, guildId, onTranslated);
+        const body = payload(discovery, sources);
         const fingerprint = store.hash(body);
         const reference = store.delivery(discovery.id, channel.id);
         const changed = reference.delivered_hash !== fingerprint || !reference.message_id;

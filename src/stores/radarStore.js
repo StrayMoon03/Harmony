@@ -86,7 +86,10 @@ function setReviewState(guildId, id, state) {
 function ingest(source, item, classification, now = new Date().toISOString()) {
   if (!item.id || !item.url) throw new Error("Radar item identity is required.");
   const title = normalize(item.title) || "Untitled announcement";
-  const summary = normalize(item.summary).slice(0, 6000);
+  const summary = normalize(item.summary);
+  // Complete source text belongs to the observation. Keep the existing
+  // discovery/calendar-note bound so this pass does not expand handoff payloads.
+  const discoverySummary = summary.slice(0, 6000);
   const metadata = item.metadata || {};
   const contentHash = hash([title, summary, item.publishedAt || null, metadata]);
   return transaction((db) => {
@@ -141,22 +144,31 @@ function ingest(source, item, classification, now = new Date().toISOString()) {
     if (!discovery) {
       const result = db.prepare(`INSERT INTO radar_discoveries(guild_id,title,summary,members,category,confidence,
         correlation_key,calendar_eligibility,eligibility_reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(source.guild_id, title, summary, JSON.stringify(classification.members || []),
+        .run(source.guild_id, title, discoverySummary, JSON.stringify(classification.members || []),
           classification.category, classification.confidence, classification.correlationKey || null,
           classification.eligibility, classification.reason, now, now);
       discovery = getDiscovery(source.guild_id, Number(result.lastInsertRowid));
-    } else if (previous && existing?.content_hash !== contentHash) {
+    } else if (previous && (existing?.content_hash !== contentHash || previous.category !== classification.category || previous.confidence !== classification.confidence || previous.members !== JSON.stringify(classification.members || []))) {
       // Edits enrich the same discovery without undoing an owner's decision or calendar handoff.
       db.prepare(`UPDATE radar_discoveries SET title=?, summary=?, members=?, category=?, confidence=?,
         calendar_eligibility=CASE WHEN handoff_result IS NULL THEN ? ELSE calendar_eligibility END,
         updated_at=? WHERE id=?`)
-        .run(title, summary, JSON.stringify(classification.members || []), classification.category,
+        .run(title, discoverySummary, JSON.stringify(classification.members || []), classification.category,
           classification.confidence, classification.eligibility, now, discovery.id);
     }
     db.prepare(`INSERT INTO radar_support(discovery_id,observation_id) VALUES(?,?)
       ON CONFLICT(discovery_id,observation_id) DO UPDATE SET active=1,snapshot=NULL`).run(discovery.id, observation.id);
     return { observation, discovery: getDiscovery(source.guild_id, discovery.id) };
   });
+}
+function saveClassification(guildId, id, classification) {
+  // Only derived classification changes. Identity, support, owner choices and handoff stay intact.
+  getDb().prepare(`UPDATE radar_discoveries SET category=?, confidence=?, members=?,
+    calendar_eligibility=CASE WHEN handoff_result IS NULL THEN ? ELSE calendar_eligibility END
+    WHERE guild_id=? AND id=? AND (category!=? OR confidence!=? OR members!=?)`)
+    .run(classification.category, classification.confidence, JSON.stringify(classification.members || []), classification.eligibility, guildId, id,
+      classification.category, classification.confidence, JSON.stringify(classification.members || []));
+  return getDiscovery(guildId, id);
 }
 function reserveHandoff(guildId, id, request) {
   getDb().prepare("UPDATE radar_discoveries SET handoff_request=COALESCE(handoff_request,?) WHERE guild_id=? AND id=?")
@@ -202,5 +214,5 @@ function saveDelivery(discoveryId, channelId, messageId, contentHash, checkedAt 
 module.exports = {
   CATEGORIES, hash, getSettings, listSettings, saveSettings, setEnabled, setDeliveryError,
   setCalendarTarget, ensureSources, listSources, updateSource, getDiscovery, listDiscoveries, supportingSources,
-  watchedItems, knownItems, setReviewState, ingest, reserveHandoff, calendarEvent, saveHandoff, delivery, saveDelivery, resetDeletedDelivery, saveRecoveryProgress,
+  watchedItems, knownItems, setReviewState, ingest, saveClassification, reserveHandoff, calendarEvent, saveHandoff, delivery, saveDelivery, resetDeletedDelivery, saveRecoveryProgress,
 };

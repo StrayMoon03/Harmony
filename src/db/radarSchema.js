@@ -48,6 +48,14 @@ function migrateRadar(database) {
       started_at TEXT NOT NULL, delivered_hash TEXT,
       PRIMARY KEY(discovery_id, channel_id)
     );
+    CREATE TABLE IF NOT EXISTS radar_translations (
+      observation_id INTEGER NOT NULL REFERENCES radar_observations(id), source_hash TEXT NOT NULL,
+      provider TEXT NOT NULL, input_hash TEXT NOT NULL, input_title TEXT NOT NULL, input_summary TEXT NOT NULL,
+      original_language TEXT, translated_title TEXT, translated_summary TEXT,
+      status TEXT NOT NULL CHECK(status IN ('pending','ready','skipped','unavailable','failed')),
+      error TEXT, next_retry_at TEXT, lease_until TEXT, updated_at TEXT NOT NULL,
+      PRIMARY KEY(observation_id,source_hash,provider)
+    );
     CREATE INDEX IF NOT EXISTS radar_discovery_review ON radar_discoveries(guild_id, review_state, id);
     CREATE INDEX IF NOT EXISTS radar_support_observation ON radar_support(observation_id);
   `);
