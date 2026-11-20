@@ -1,5 +1,4 @@
 const {
-  FAILURE_TEXT,
   isHandledMediaTimeout,
   withMediaLifecycle,
   sendStandaloneNotice,
@@ -80,6 +79,7 @@ const { resolveCreator } = require("../modules/media/creator");
 const shareStore = require("../stores/shareStore");
 const { formatDiscordTimestamp } = require("../utils/discordTimestamp");
 const { logMediaError } = require("../services/errorInboxService");
+const { publicFailureText } = require("../services/mediaErrorReasons");
 const { recordSocialSuccess, recordSocialAuthFailure } = require("../services/operationsStatusService");
 
 function recordMediaHealth(platform, result) {
@@ -255,7 +255,7 @@ async function replyWithHarmonyError(message, error, lifecycle) {
   });
 
   if (lifecycle && !(await lifecycle.finishFailure())) return;
-  await sendStandaloneNotice(message, FAILURE_TEXT, "failure", {
+  await sendStandaloneNotice(message, publicFailureText(error, message?.content), "failure", {
     autoDeleteMs: 5000,
   }).catch(() => {});
 }

@@ -37,3 +37,13 @@ test("all successful media-card branches preserve creator handoff before formatt
   assert.match(source, /sharedById: message\.author\.id/);
   assert.match(source, /memberComment: preservation\.comment/);
 });
+
+test("Facebook login-wall failures use a specific public message without changing other platforms", () => {
+  assert.match(source, /publicFailureText\(error, message\?\.content\)/);
+  assert.match(source, /sendStandaloneNotice\(message, publicFailureText\(/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf("async function replyWithHarmonyError")),
+    /sendStandaloneNotice\(message, FAILURE_TEXT/
+  );
+});
+
