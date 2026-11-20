@@ -75,6 +75,15 @@ function migrate(database) {
       UNIQUE (guild_id, user_id)
     );
 
+    CREATE TABLE IF NOT EXISTS welcome_pass_departures (
+      code TEXT PRIMARY KEY,
+      guild_id TEXT,
+      user_id TEXT,
+      linked_at TEXT,
+      assigned_at TEXT,
+      departed_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS welcome_pass_approvals (
       code           TEXT PRIMARY KEY,
       approver_name  TEXT NOT NULL,
