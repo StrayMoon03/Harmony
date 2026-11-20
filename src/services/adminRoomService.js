@@ -617,7 +617,7 @@ function welcomePickerPayload(field) {
     new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
       .setCustomId(`harmony-admin-room:welcome-${field}-select`)
       .setPlaceholder(`Choose ${labels[field][0].replace(/^Choose /, "").toLowerCase()}`)
-      .setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)),
+      .setChannelTypes(...(field === "member" ? [ChannelType.GuildText, ChannelType.GuildAnnouncement] : [ChannelType.GuildText])).setMinValues(1).setMaxValues(1)),
     back,
   ]);
 }
@@ -653,6 +653,7 @@ function welcomeMessagePromptPayload(guild, userId, kind, notice = null) {
 }
 
 async function saveWelcomeManagerField(interaction, field, value, promptMessage = false) {
+  const render = (payload) => interaction.deferred ? interaction.editReply(payload) : interaction.update(payload);
   const settings = welcomePassStore.getWelcomePassSettings(interaction.guildId);
   const isComplete = Boolean(settings?.role_id && settings?.channel_id && settings?.release_channel_id);
   let notice;
@@ -660,7 +661,7 @@ async function saveWelcomeManagerField(interaction, field, value, promptMessage 
     try {
       await welcomePassService.updateWelcomePassSetting(interaction.client, interaction.guildId, field, value);
     } catch (error) {
-    await interaction.update(promptMessage
+    await render(promptMessage
       ? welcomeMessagePromptPayload(interaction.guild, interaction.user.id, field === "entryChannelId" ? "entry" : "approved", `Setting was not changed: ${error.message || "Please check the selected value."}`)
       : welcomePassPage(interaction.guild, interaction.user.id, `Setting was not changed: ${error.message || "Please check the selected value."}`));
       return;
@@ -699,9 +700,9 @@ async function saveWelcomeManagerField(interaction, field, value, promptMessage 
     }
   }
   if (promptMessage && ["entryChannelId", "releaseChannelId"].includes(field)) {
-    await interaction.update(welcomeMessagePromptPayload(interaction.guild, interaction.user.id, field === "entryChannelId" ? "entry" : "approved", notice));
+    await render(welcomeMessagePromptPayload(interaction.guild, interaction.user.id, field === "entryChannelId" ? "entry" : "approved", notice));
   } else {
-    await interaction.update(welcomePassPage(interaction.guild, interaction.user.id, notice));
+    await render(welcomePassPage(interaction.guild, interaction.user.id, notice));
   }
 }
 
@@ -1780,10 +1781,17 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   if (["welcome-entry-select", "welcome-private-select", "welcome-member-select"].includes(action)) {
+    // Discord's interaction deadline also covers cache misses and reconciliation.
+    await interaction.deferUpdate();
     const channelId = interaction.values?.[0];
     const channel = channelId && (interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null));
-    if (!channel || channel.guildId !== interaction.guildId || channel.type !== ChannelType.GuildText) {
-      await interaction.reply({ content: "Choose a text channel in this server.", flags: MessageFlags.Ephemeral });
+    if (!hasActiveWelcomeNavigation(interaction)) {
+      await interaction.editReply(pagePayload("Welcome Pass", "Open Welcome Pass from the current Admin Controls panel."));
+      return true;
+    }
+    const allowedTypes = action === "welcome-member-select" ? [ChannelType.GuildText, ChannelType.GuildAnnouncement] : [ChannelType.GuildText];
+    if (!channel || channel.guildId !== interaction.guildId || !allowedTypes.includes(channel.type)) {
+      await interaction.editReply(welcomePassPage(interaction.guild, interaction.user.id, "Setting was not changed: choose a text channel in this server."));
       return true;
     }
     const field = action === "welcome-entry-select" ? "entryChannelId"
