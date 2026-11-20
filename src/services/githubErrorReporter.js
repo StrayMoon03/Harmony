@@ -1,5 +1,6 @@
 const { getErrorMonitorSettings } = require("../stores/errorMonitorStore");
 const { safeUrl, sanitizedErrorText, fingerprint } = require("./errorReportSanitize");
+const { FACEBOOK_LOGIN_WALL_INBOX_TEXT, isFacebookLoginOrCheckpointWall } = require("./mediaErrorReasons");
 
 const recentReports = new Map();
 const pendingReports = new Map();
@@ -79,10 +80,14 @@ async function reportMediaErrorToGitHub(message, error) {
   if (pendingReports.has(dedupeKey)) return pendingReports.get(dedupeKey);
 
   const title = `[${platform}] Harmony media failure (${reportKey})`;
+  const facebookWallNote = isFacebookLoginOrCheckpointWall(error, originalUrl)
+    ? [`- **Reason:** ${FACEBOOK_LOGIN_WALL_INBOX_TEXT}`, ""]
+    : [];
   const body = [
     "## Automatic Harmony error report",
     "",
     `- **Platform:** ${platform}`,
+    ...facebookWallNote,
     `- **Occurred:** ${new Date().toISOString()}`,
     `- **Fingerprint:** \`${reportKey}\``,
     `- **Source link:** ${safeUrl(originalUrl) || "Not available"}`,

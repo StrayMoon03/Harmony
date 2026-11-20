@@ -3,6 +3,7 @@ const { getErrorInboxSettings } = require("../stores/errorInboxStore");
 const { reportMediaErrorToGitHub } = require("./githubErrorReporter");
 const { notifyErrorAlertWebhook } = require("./errorAlertWebhook");
 const { recordSocialAuthFailure, isExplicitAuthenticationFailure, authenticationFailureKind } = require("./operationsStatusService");
+const { safeReason } = require("./mediaErrorReasons");
 
 const recentMediaErrors = new Map();
 const ERROR_DEDUPE_MS = 5 * 60 * 1000;
@@ -21,58 +22,6 @@ function platformFromLink(url) {
   if (value.includes("youtube.com") || value.includes("youtu.be")) return "YouTube";
   if (value.includes("x.com") || value.includes("twitter.com")) return "X";
   return "Media link";
-}
-
-function looksLikeLoginOrAudienceWall(text) {
-  if (/this content isn['’]?t available to everyone|can['’]?t be seen by certain audiences/i.test(text)) {
-    return true;
-  }
-  if (/confirm.{0,40}not a bot|\bnot a bot\b/i.test(text)) return false;
-  return /\blogin required\b|http redirect to login|redirect(?:ed)? to (?:the )?login(?: page)?/i.test(text);
-}
-
-function safeReason(error) {
-  const text = [
-    error?.message,
-    error?.stderr,
-    typeof error === "string" ? error : "",
-  ].filter(Boolean).join(" ");
-
-  if (error?.socialAuthFailureKind === "owner") {
-    return "The platform account needs a security check by its owner (then refresh cookies).";
-  }
-  if (error?.socialAuthFailureKind === "session") {
-    return "The platform login cookies need to be refreshed.";
-  }
-  if (/Threads post is text-only/i.test(text)) {
-    return "This Threads post is text-only, so there was no photo or video to share.";
-  }
-  // Display-only. This must not be treated as health-store evidence.
-  if (looksLikeLoginOrAudienceWall(text)) {
-    return "The platform login cookies may need to be refreshed.";
-  }
-  if (/no audio|audio stream|silent/i.test(text)) {
-    return "The downloaded video did not contain a usable audio track.";
-  }
-  if (/requested format is not available|no formats found/i.test(text)) {
-    return "The platform did not provide a downloadable media format Harmony could use.";
-  }
-  if (/below.{0,20}(?:size|byte) threshold|too small|file size|signature rejection/i.test(text)) {
-    return "The retrieved media could not be used for posting.";
-  }
-  if (/compress|too large|size limit|under Discord limit/i.test(text)) {
-    return "The media could not be reduced safely to Discord’s upload limit.";
-  }
-  if (/timeout|timed out|SIGKILL/i.test(text)) {
-    return "The platform took too long to return usable media.";
-  }
-  if (/verify|verified|exact post|expose media|linkOnly|FACEBOOK_UNVERIFIED_MEDIA/i.test(text)) {
-    return "Harmony could not verify media belonging to this exact post.";
-  }
-  if (/unsupported URL|extract|download|retrieve|no media/i.test(text)) {
-    return "Harmony could not retrieve usable media from this link.";
-  }
-  return "Harmony encountered an unexpected media-processing error.";
 }
 
 function makeErrorId() {
@@ -157,7 +106,7 @@ async function logMediaError(message, error) {
       { name: "Server", value: serverName, inline: true },
       { name: "Channel", value: channelName, inline: true },
       { name: "Posted by", value: memberName, inline: true },
-      { name: "Reason", value: safeReason(error) },
+      { name: "Reason", value: safeReason(error, link) },
       { name: "Original link", value: link || "No link was captured." },
       ...(issueNumber
         ? [{ name: "Incident", value: `#${issueNumber}`, inline: true }]

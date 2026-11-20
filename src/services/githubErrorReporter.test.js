@@ -57,3 +57,39 @@ test('sanitizes session cookie values and signed attachment parameters before pr
     if (oldToken === undefined) delete process.env.HARMONY_ERROR_GITHUB_TOKEN; else process.env.HARMONY_ERROR_GITHUB_TOKEN = oldToken;
   }
 });
+
+test('Facebook login/checkpoint walls include a private-post reason in the issue body', async () => {
+  const originalFetch = global.fetch;
+  const oldRepo = process.env.HARMONY_ERROR_GITHUB_REPO;
+  const oldToken = process.env.HARMONY_ERROR_GITHUB_TOKEN;
+  process.env.HARMONY_ERROR_GITHUB_REPO = 'test/errors';
+  process.env.HARMONY_ERROR_GITHUB_TOKEN = 'fake-test-token';
+  let body;
+  global.fetch = async (_url, options) => {
+    body = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ number: 10, html_url: 'https://github.com/test/errors/issues/10' }));
+  };
+  const { FACEBOOK_LOGIN_WALL_INBOX_TEXT } = require('./mediaErrorReasons');
+  try {
+    await reportMediaErrorToGitHub(
+      { content: 'https://www.facebook.com/share/v/19n8uUUV5m/' },
+      new Error('Facebook opened a login or checkpoint page')
+    );
+    assert.ok(body.includes(`- **Reason:** ${FACEBOOK_LOGIN_WALL_INBOX_TEXT}`));
+    assert.match(body, /private group|limited to certain people/i);
+    assert.match(body, /cookies may need refreshing/i);
+
+    body = undefined;
+    await reportMediaErrorToGitHub(
+      { content: 'https://www.instagram.com/p/abc123/' },
+      new Error('[instagram][error] HTTP redirect to login page (https://www.instagram.com/accounts/login/)')
+    );
+    assert.ok(body);
+    assert.equal(body.includes('**Reason:**'), false);
+    assert.doesNotMatch(body, /private group/i);
+  } finally {
+    global.fetch = originalFetch;
+    if (oldRepo === undefined) delete process.env.HARMONY_ERROR_GITHUB_REPO; else process.env.HARMONY_ERROR_GITHUB_REPO = oldRepo;
+    if (oldToken === undefined) delete process.env.HARMONY_ERROR_GITHUB_TOKEN; else process.env.HARMONY_ERROR_GITHUB_TOKEN = oldToken;
+  }
+});
