@@ -646,10 +646,18 @@ function welcomeMessagePromptPayload(guild, userId, kind, notice = null) {
     ? (settings?.entry_message || draft?.entryMessage || greeting?.entrance_message || greetingStore.DEFAULT_ENTRANCE_MESSAGE)
     : (settings?.release_message || draft?.releaseMessage || welcomePassStore.DEFAULT_RELEASE_MESSAGE);
   const action = entry ? "welcome-entry-message-edit" : "welcome-approved-message-edit";
-  return pagePayload(title, [notice, channelId ? `**Channel:** <#${channelId}>` : "**Channel:** Select a channel in the manager first.", "**Current message:**", message, "Use `{member}` where Harmony should mention the member."].filter(Boolean).join("\n\n"), [
+  const components = [];
+  if (!entry) {
+    components.push(new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder()
+      .setCustomId("harmony-admin-room:welcome-member-select")
+      .setPlaceholder("Choose approved member welcome channel")
+      .setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)));
+  }
+  components.push(
     new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`harmony-admin-room:${action}`).setLabel("Edit Message").setStyle(ButtonStyle.Primary)),
     new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("harmony-admin-room:welcome:ephemeral").setLabel("Back to Welcome Pass").setStyle(ButtonStyle.Secondary)),
-  ]);
+  );
+  return pagePayload(title, [notice, channelId ? `**Channel:** <#${channelId}>` : "**Channel:** Select a channel in the manager first.", "**Current message:**", message, "Use `{member}` where Harmony should mention the member."].filter(Boolean).join("\n\n"), components);
 }
 
 async function saveWelcomeManagerField(interaction, field, value, promptMessage = false) {
