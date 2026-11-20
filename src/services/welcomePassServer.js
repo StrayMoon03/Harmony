@@ -5,6 +5,8 @@ const {
   isValidWelcomePassCode,
   recordWelcomePassApproval,
   linkSelectedWelcomePassMember,
+  archiveWelcomePassDeparture,
+  getWelcomePassDeparture,
 } = require("../stores/welcomePassStore");
 const { saveWelcomePassBirthdayProfile } = require("../stores/birthdayStore");
 const { normalizeBiases } = require("./memberBiases");
@@ -12,6 +14,7 @@ const { validMmdd } = require("./birthdayService");
 const {
   autoLinkWelcomePassByDiscordUsername,
   assignApprovedWelcomePass,
+  isWelcomePassAssignmentRunning,
 } = require("./welcomePassService");
 const { sendWelcomePassSubmissionAlert } = require("./welcomePassSubmissionService");
 const { startSessionRefreshWebService } = require("./sessionRefreshWebService");
@@ -77,7 +80,7 @@ function startWelcomePassServer(client) {
       return;
     }
 
-    if (request.method !== "POST" || !["/welcome-pass/approved", "/welcome-pass/submitted", "/welcome-pass/members", "/welcome-pass/member"].includes(url.pathname)) {
+    if (request.method !== "POST" || !["/welcome-pass/approved", "/welcome-pass/submitted", "/welcome-pass/members", "/welcome-pass/member", "/welcome-pass/departed"].includes(url.pathname)) {
       sendJson(response, 404, { error: "not_found" });
       return;
     }
@@ -153,6 +156,14 @@ function startWelcomePassServer(client) {
         sendJson(response, 400, { error: "invalid_confirmation_code" });
         return;
       }
+
+      if (url.pathname === "/welcome-pass/departed") {
+        if (approvalJobs.has(code) || isWelcomePassAssignmentRunning(code)) { sendJson(response, 409, { error: "approval_in_progress" }); return; }
+        archiveWelcomePassDeparture(code);
+        sendJson(response, 200, { ok: true, recorded: true, code, status: "departed" });
+        return;
+      }
+      if (getWelcomePassDeparture(code)) { sendJson(response, 410, { error: "departed" }); return; }
 
       const birthdayOptIn =
         body.birthdayOptIn === true &&

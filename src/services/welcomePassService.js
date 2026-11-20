@@ -272,6 +272,7 @@ function assignApprovedWelcomePass(client, code, options = {}) {
 }
 async function assignApprovedWelcomePassInternal(client, code, { sendMessages = true } = {}) {
   const assignment = getWelcomePassAssignment(code);
+  if (assignment?.departed_at) return { status: "departed" };
   if (!assignment) return { status: "approval_missing" };
   if (!assignment.guild_id || !assignment.user_id) {
     return { status: "waiting_for_link" };
@@ -494,6 +495,7 @@ module.exports = {
   configureWelcomePass,
   updateWelcomePassSetting,
   assignApprovedWelcomePass,
+  isWelcomePassAssignmentRunning: (code) => assignmentJobs.has(String(code).trim().toUpperCase()),
   handleManualWelcomePassRoleAdded,
   assignAllApprovedWelcomePasses,
 };

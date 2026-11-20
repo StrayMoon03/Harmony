@@ -176,6 +176,16 @@ test("concurrent assignment requests share the same operation instead of grantin
   assert.equal(grants, 1); assert.equal(env.release.sent.length, 1); assert.equal(env.staff.sent.length, 1); assert.equal(results[0].status, "assigned");
 });
 
+test("departure archive and populated approval/link history survive idempotent database reinitialization", async () => {
+  const env = environment({ guildId: "departure-schema-history" }); addApprovedLink("YS-SCHEMA01", env);
+  const before = store.getWelcomePassAssignment("YS-SCHEMA01");
+  store.archiveWelcomePassDeparture("YS-SCHEMA01");
+  closeDb(); getDb(); closeDb(); getDb();
+  const history = store.getWelcomePassAssignment("YS-SCHEMA01");
+  assert.equal(history.user_id, before.user_id); assert.equal(history.guild_id, before.guild_id); assert.equal(history.approved_at, before.approved_at); assert.equal(history.approver_name, before.approver_name);
+  assert.ok(history.departed_at); assert.equal(store.getWelcomePassSettings(env.guildId).role_id, "stay-role");
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });

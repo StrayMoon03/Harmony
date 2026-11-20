@@ -151,6 +151,7 @@ function removeWelcomePassBiasRole(guildId, bias) {
 function linkWelcomePassCode({ code, guildId, userId }) {
   const normalizedCode = normalizeWelcomePassCode(code);
   const db = getDb();
+  if (getWelcomePassDeparture(normalizedCode)) return { ok: false, reason: "departed" };
   const existingCode = db.prepare(
     "SELECT * FROM welcome_pass_links WHERE code = ?"
   ).get(normalizedCode);
@@ -188,12 +189,13 @@ function linkWelcomePassCode({ code, guildId, userId }) {
 
 // Admin-selected identity is only linked during explicit approval, never on edit.
 function checkWelcomePassMember({ code, guildId, userId }) {
+  if (getWelcomePassDeparture(code)) return { ok: false, reason: "departed" };
   const db = getDb();
   const own = db.prepare("SELECT * FROM welcome_pass_links WHERE code=?").get(normalizeWelcomePassCode(code));
   if (own?.assigned_at && (own.guild_id !== guildId || own.user_id !== userId)) return { ok: false, reason: "completed_pass" };
   const other = db.prepare("SELECT code FROM welcome_pass_links WHERE guild_id=? AND user_id=? AND code!=?")
     .get(guildId, userId, normalizeWelcomePassCode(code));
-  return other ? { ok: false, reason: "member_pass_conflict" } : { ok: true };
+  return other ? { ok: false, reason: "member_pass_conflict", conflictCode: other.code } : { ok: true };
 }
 function linkSelectedWelcomePassMember(input) {
   const db = getDb();
@@ -217,6 +219,24 @@ function linkSelectedWelcomePassMember(input) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function getWelcomePassDeparture(code) {
+  return getDb().prepare("SELECT * FROM welcome_pass_departures WHERE code=?").get(normalizeWelcomePassCode(code)) || null;
+}
+function archiveWelcomePassDeparture(code) {
+  const normalized = normalizeWelcomePassCode(code);
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const link = db.prepare("SELECT * FROM welcome_pass_links WHERE code=?").get(normalized);
+    db.prepare(`INSERT OR IGNORE INTO welcome_pass_departures(code,guild_id,user_id,linked_at,assigned_at,departed_at)
+      VALUES(?,?,?,?,?,?)`).run(normalized, link?.guild_id || null, link?.user_id || null, link?.linked_at || null, link?.assigned_at || null, new Date().toISOString());
+    // Preserve the entire link in history before releasing its UNIQUE active-member slot.
+    db.prepare("DELETE FROM welcome_pass_links WHERE code=?").run(normalized);
+    db.exec("COMMIT");
+    return getWelcomePassDeparture(normalized);
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
 function recordWelcomePassApproval({ code, approverName }) {
@@ -267,9 +287,13 @@ function getWelcomePassAssignment(code) {
       l.guild_id,
       l.user_id,
       l.linked_at,
-      l.assigned_at
+      l.assigned_at,
+      l.departed_at
     FROM welcome_pass_approvals a
-    LEFT JOIN welcome_pass_links l ON l.code = a.code
+    LEFT JOIN (
+      SELECT code,guild_id,user_id,linked_at,assigned_at,NULL AS departed_at FROM welcome_pass_links
+      UNION ALL SELECT code,guild_id,user_id,linked_at,assigned_at,departed_at FROM welcome_pass_departures
+    ) l ON l.code = a.code
     WHERE a.code = ?
   `).get(normalizeWelcomePassCode(code)) || null;
 }
@@ -279,7 +303,7 @@ function listPendingWelcomePassApprovals() {
     SELECT a.code
     FROM welcome_pass_approvals a
     LEFT JOIN welcome_pass_links l ON l.code = a.code
-    WHERE l.assigned_at IS NULL
+    WHERE l.assigned_at IS NULL AND a.code NOT IN (SELECT code FROM welcome_pass_departures)
   `).all();
 }
 
@@ -317,6 +341,8 @@ module.exports = {
   removeWelcomePassBiasRole,
   linkWelcomePassCode,
   recordWelcomePassApproval,
+  archiveWelcomePassDeparture,
+  getWelcomePassDeparture,
   checkWelcomePassMember,
   linkSelectedWelcomePassMember,
   claimWelcomePassSubmissionAlert,

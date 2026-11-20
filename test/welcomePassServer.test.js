@@ -393,6 +393,40 @@ test("harmony-pass confirmation-code fallback still links and admits a previousl
   assert.equal(env.roleGrants, 1); assert.match(replies[0], /all set/);
 });
 
+test("departure archives a completed link without role/messages; returning new code admits without restoring history", async (t) => {
+  const env = makeEnvironment("departure-new-pass"); const userId = numericMember(env);
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const original = { code: "YS-OLDHIST1", discordUsername: env.member.user.username, approverName: "Original admin" };
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", original)).status, 200);
+  const old = welcomePassStore.getWelcomePassAssignment(original.code);
+  const counts = { roles: env.roleGrants, messages: env.sent.length };
+  assert.equal((await post(baseUrl, "/welcome-pass/departed", { code: original.code }, "wrong")).status, 401);
+  const first = await post(baseUrl, "/welcome-pass/departed", { code: original.code });
+  assert.equal(first.status, 200); assert.equal((await first.json()).recorded, true);
+  const archived = welcomePassStore.getWelcomePassAssignment(original.code);
+  assert.equal(archived.user_id, userId); assert.equal(archived.assigned_at, old.assigned_at); assert.equal(archived.approved_at, old.approved_at); assert.equal(archived.approver_name, old.approver_name); assert.ok(archived.departed_at);
+  assert.equal(env.roleGrants, counts.roles); assert.equal(env.sent.length, counts.messages);
+  await post(baseUrl, "/welcome-pass/departed", { code: original.code });
+  assert.deepEqual(welcomePassStore.getWelcomePassAssignment(original.code), archived);
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", original)).status, 410);
+  assert.equal(welcomePassStore.linkWelcomePassCode({ code: original.code, guildId: env.guild.id, userId }).reason, "departed");
+  const newer = { ...original, code: "YS-NEWHIST1", discordMemberId: userId };
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", newer)).status, 200);
+  assert.equal(welcomePassStore.getWelcomePassAssignment(newer.code).user_id, userId);
+  assert.deepEqual(welcomePassStore.getWelcomePassAssignment(original.code), archived);
+  assert.equal(welcomePassStore.listPendingWelcomePassApprovals().some((entry) => entry.code === original.code), false);
+});
+test("archived pending and never-linked passes cannot be linked/granted on startup or late callbacks", async (t) => {
+  const env = makeEnvironment("departed-unlinked");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const code = "YS-PENDHIS1"; welcomePassStore.recordWelcomePassApproval({ code, approverName: "Admin" });
+  assert.equal((await post(baseUrl, "/welcome-pass/departed", { code })).status, 200);
+  const service = require("../src/services/welcomePassService");
+  await service.assignAllApprovedWelcomePasses(env.client);
+  assert.equal((await service.assignApprovedWelcomePass(env.client, code)).status, "departed");
+  assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });

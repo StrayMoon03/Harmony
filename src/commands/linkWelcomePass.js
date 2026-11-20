@@ -49,8 +49,9 @@ async function execute(interaction) {
   });
 
   if (!linked.ok) {
-    const message =
-      linked.reason === "claimed"
+    const message = linked.reason === "departed"
+      ? "That Welcome Pass is a historical departed record. Please complete a new Welcome Pass to receive a new confirmation code."
+      : linked.reason === "claimed"
         ? "That confirmation code is already connected to another Discord account. Please ask an admin for help."
         : "Your STAY role was already granted from a different confirmation code. Please ask an admin if this needs changing.";
     await interaction.editReply(message);
