@@ -7,6 +7,8 @@ const {
   linkSelectedWelcomePassMember,
   archiveWelcomePassDeparture,
   getWelcomePassDeparture,
+  getWelcomePassAssignment,
+  getWelcomePassSettings,
 } = require("../stores/welcomePassStore");
 const { saveWelcomePassBirthdayProfile } = require("../stores/birthdayStore");
 const { normalizeBiases } = require("./memberBiases");
@@ -164,6 +166,10 @@ function startWelcomePassServer(client) {
         return;
       }
       if (getWelcomePassDeparture(code)) { sendJson(response, 410, { error: "departed" }); return; }
+      if ((body.requireAdmission !== undefined && typeof body.requireAdmission !== "boolean")
+        || (body.requireAdmission === true && (typeof body.discordMemberId !== "string" || !/^\d{17,20}$/.test(body.discordMemberId)))) {
+        sendJson(response, 400, { error: "invalid_discord_member" }); return;
+      }
 
       const birthdayOptIn =
         body.birthdayOptIn === true &&
@@ -187,6 +193,9 @@ function startWelcomePassServer(client) {
         if (body.discordMemberId !== undefined) {
           const checked = await selectedMember(client, code, body.discordMemberId);
           if (!checked.ok) { sendJson(response, 409, { error: checked.reason }); return; }
+          if (body.requireAdmission === true && getWelcomePassSettings(checked.guildId)?.grant_mode === "manual") {
+            sendJson(response, 409, { error: "manual_role_required" }); return;
+          }
           const linked = linkSelectedWelcomePassMember({ code, guildId: checked.guildId, userId: checked.userId });
           if (!linked.ok) { sendJson(response, 409, { error: linked.reason }); return; }
           matchResult = { status: "admin_selected", guildId: checked.guildId, userId: checked.userId };
@@ -212,6 +221,22 @@ function startWelcomePassServer(client) {
           String(body.discordUsername || "").slice(0, 100)
         );
         const result = await assignApprovedWelcomePass(client, code);
+        let discordMember;
+        if (body.requireAdmission === true) {
+          // A historical assigned_at alone is not proof of CURRENT admission.
+          const assignment = getWelcomePassAssignment(code);
+          const guild = client.guilds.cache.get(matchResult.guildId) || await client.guilds.fetch(matchResult.guildId);
+          const member = await guild.members.fetch({ user: body.discordMemberId, force: true }).catch((error) => {
+            if (error.code === 10007) return null;
+            throw error;
+          });
+          const settings = getWelcomePassSettings(matchResult.guildId);
+          if (!["assigned", "already_assigned", "reconciled"].includes(result.status) || !assignment?.assigned_at
+            || assignment.user_id !== body.discordMemberId || assignment.guild_id !== guild.id || !member || member.id !== body.discordMemberId || member.user.bot || !settings?.role_id || !member.roles.cache.has(settings.role_id)) {
+            sendJson(response, 409, { ok: false, recorded: true, code, status: result.status, error: "selected_admission_not_confirmed" }); return;
+          }
+          discordMember = { id: member.id, username: member.user.username, guildId: guild.id };
+        }
         const pending = [
           "waiting_for_link",
           "waiting_for_setup",
@@ -227,6 +252,7 @@ function startWelcomePassServer(client) {
           code,
           status: result.status,
           matchStatus: matchResult.status,
+          ...(discordMember ? { admitted: true, discordMember } : {}),
         });
       } finally { approvalJobs.delete(code); }
     } catch (error) {
