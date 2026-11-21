@@ -1,4 +1,4 @@
-const { listWelcomePassSettings, checkWelcomePassMember } = require("../stores/welcomePassStore");
+const { listWelcomePassSettings, getWelcomePassSettings, checkWelcomePassMember } = require("../stores/welcomePassStore");
 
 async function welcomePassGuild(client) {
   const settings = listWelcomePassSettings();
@@ -22,9 +22,13 @@ async function selectedMember(client, code, userId) {
 async function listMembers(client, after) {
   if (after && !/^\d{17,20}$/.test(after)) throw new Error("invalid_member_cursor");
   const guild = await welcomePassGuild(client);
+  const roleId = getWelcomePassSettings(guild.id)?.role_id;
+  // Fail closed if the authoritative Approved Role cannot be resolved. Never
+  // substitute pass status, role names, staff roles, or an unfiltered roster.
+  if (!roleId || !await guild.roles.fetch(roleId)) throw new Error("welcome_pass_approved_role_unavailable");
   const page = await guild.members.list({ limit: 100, ...(after ? { after } : {}) });
   const all = [...page.values()];
-  return { members: all.filter((member) => !member.user.bot).map((member) => ({
+  return { members: all.filter((member) => !member.user.bot && !member.roles.cache.has(roleId)).map((member) => ({
     id: member.id, username: member.user.username, displayName: member.displayName || member.user.globalName || member.user.username,
   })), after: all.length === 100 ? all.at(-1).id : null };
 }
