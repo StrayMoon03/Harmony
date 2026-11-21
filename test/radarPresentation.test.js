@@ -98,15 +98,15 @@ test("preview removes repeated raw URLs and track-list boilerplate without alter
   assert.ok(observation.summary.includes(url));
   assert.deepEqual(JSON.parse(observation.metadata).links, [url]);
 });
-test("publication date, confirmed timing and discovery time render separately without raw ISO timestamps", () => {
+test("confirmed timing is distinct from compacted publication/discovery metadata without raw ISO timestamps", () => {
   const s = source();
   const { discovery } = ingest(s);
   const input = { ...discovery, event_at: "2026-11-20T11:00:00.000Z", event_date: "2026-11-20" };
   const body = discord.payload(input, store.supportingSources(discovery.id));
-  const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "Timing").value;
-  assert.match(timing, /Published: Nov 18, 2026/);
-  assert.match(timing, /Calendar date: <t:\d+:f>/);
-  assert.match(timing, /Discovered: <t:\d+:f>/);
+  const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "Important timing").value;
+  assert.doesNotMatch(timing, /Published|Discovered|Nov 18/);
+  assert.match(timing, /Confirmed calendar date: <t:\d+:f>/);
+  assert.equal(store.supportingSources(discovery.id)[0].published_at, "2026-11-18");
   assert.doesNotMatch(JSON.stringify(body), /2026-11-19T04:37:56\.872Z|2026-11-20T11:00:00/);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).created_at, "2026-11-19T04:37:56.872Z");
   assert.equal(presentation.formatDate("2026-02-30"), null);
@@ -138,7 +138,7 @@ const classifications = [
   ["公開しました", "Unknown"],
 ];
 for (const [title, category] of classifications) test("classification: " + title + " → " + category, () => {
-  assert.equal(classifyObservation({ provider: "sony-info" }, item({ title })).category, category);
+  assert.equal(classifyObservation({ provider: "sony-info" }, item({ title, summary: "" })).category, category);
 });
 test("incidental ticketing body/translated wording cannot override an ambiguous primary source title", () => {
   const classification = classifyObservation({ provider: "sony-info" }, item({ title: "準備中", summary: "Tickets and applications for an album preorder are mentioned in legal boilerplate.", translatedTitle: "Album released" }));
@@ -287,8 +287,8 @@ test("missing provider configuration falls back without external calls", async (
   await worker.whenIdle();
   assert.equal(worker.current(cachedSource(discovery)).status, "unavailable");
   const embed = discord.payload(discovery, store.supportingSources(discovery.id), { translation: worker.current(cachedSource(discovery)) }).embeds[0].toJSON();
-  assert.match(embed.title, /新曲/);
-  assert.match(embed.description, /translation unavailable/);
+  assert.equal(embed.title, "Official announcement · Release");
+  assert.match(embed.description, /Translation not configured/);
 });
 test("failed translation still delivers original-language cards and never persists raw provider errors", async (t) => {
   const s = source();
@@ -300,8 +300,8 @@ test("failed translation still delivers original-language cards and never persis
   await discord.syncRadarChannel(f.client, s.guild_id);
   await worker.whenIdle(); await tick(); await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0].embeds[0].title, /新曲/);
-  assert.match(f.sent[0].embeds[0].description, /translation unavailable/);
+  assert.equal(f.sent[0].embeds[0].title, "Official announcement · Release");
+  assert.match(f.sent[0].embeds[0].description, /Translation failed\/unavailable/);
   assert.equal(worker.current(cachedSource(discovery)).error, "translator_failed");
   assert.equal(store.getSettings(s.guild_id).delivery_error, null);
 });
@@ -398,13 +398,13 @@ test("translation-cache failure cannot prevent original Discord delivery", async
   const f = fixture(s.guild_id);
   await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0].embeds[0].title, /新曲/);
+  assert.equal(f.sent[0].embeds[0].title, "Official announcement · Release");
   assert.equal(store.getSettings(s.guild_id).delivery_error, null);
 });
 test("pending enrichment is labeled pending and failure is labeled unavailable", () => {
   const s = source();
   const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" }));
-  for (const [status, expected] of [["pending", /translation pending/], ["failed", /translation unavailable/]]) {
+  for (const [status, expected] of [["pending", /Translation pending/], ["failed", /Translation failed\/unavailable/]]) {
     assert.match(discord.payload(discovery, store.supportingSources(discovery.id), { translation: { status } }).embeds[0].toJSON().description, expected);
   }
 });
@@ -498,7 +498,8 @@ test("a late translation of old content cannot become the current presentation a
   assert.equal(changed.discovery.id, discovery.id);
   assert.equal(worker.current(cachedSource(changed.discovery)), null);
   assert.equal(worker.current(original).status, "ready");
-  assert.match(discord.payload(changed.discovery, store.supportingSources(discovery.id)).embeds[0].toJSON().title, /変更/);
+  assert.doesNotMatch(discord.payload(changed.discovery, store.supportingSources(discovery.id)).embeds[0].toJSON().title, /HAN announces/);
+  assert.equal(cachedSource(changed.discovery).title, "HAN 新曲の配信日変更");
 });
 
 test("a foreign title with English body retains the provider's non-English detected language", async () => {
@@ -601,4 +602,127 @@ test("Google malformed/oversized responses fail safely instead of generating a f
     const provider = translation.googleProvider({ HARMONY_RADAR_TRANSLATION_PROVIDER: "google", GOOGLE_CLOUD_TRANSLATION_API_KEY: "fake" }, async () => new Response(body));
     await assert.rejects(provider.translate({ title: "新曲", summary: "" }, new AbortController().signal), /translator_(invalid_response|response_too_large)/);
   }
+});
+
+test("YouTube preview suppresses hashtags, streaming URLs, social prompts and a repeated title before translation", () => {
+  const value = { title: "SKZ CODE episode 99", summary: "SKZ CODE episode 99 #StrayKids #SKZ #StrayKids New episode premieres on November 23. Subscribe to our channel! Follow us on Instagram https://instagram.com/example Listen now https://example.com/music" };
+  const input = presentation.translationInput(value);
+  assert.equal(input.title, value.title);
+  assert.match(input.summary, /New episode premieres on November 23/);
+  assert.doesNotMatch(input.summary, /#|https?:|Subscribe|Follow|Listen now|SKZ CODE/);
+  assert.ok(value.summary.includes("#StrayKids"));
+});
+test("generic titles classify from retained Japanese/Korean lead context and explicit Sony category", () => {
+  for (const [provider, summary, metadata, expected] of [
+    ["jype-notice", "스트레이 키즈 팝업스토어가 오픈합니다.", {}, "Pop-up"],
+    ["sony-info", "HANの新曲が配信リリース決定！", {}, "Release"],
+    ["sony-info", "Stray Kids listening party announced for November 25.", {}, "Event"],
+    ["sony-info", "Applications open November 21 for the concert.", {}, "Ticketing"],
+    ["sony-info", "詳細は近日公開。", { sourceCategory: "Release" }, "Release"],
+    ["jype-notice", "詳細は近日公開。", {}, "Unknown"],
+  ]) {
+    const result = classifyObservation({ provider }, { title: "Details", summary, metadata, url: "https://example.com/info" });
+    assert.equal(result.category, expected);
+    assert.equal(result.correlationKey, null);
+    assert.notEqual(result.confidence, "high");
+  }
+});
+test("body content does not override a specific primary subject or use discarded legal/track context", () => {
+  assert.equal(classifyObservation({ provider: "sony-info" }, item({ title: "Album release", summary: "Watch the making movie and apply for tickets now." })).category, "Release");
+  for (const summary of ["Details soon. Track List 01. Music Video", "Details soon. Application instructions Tickets now available."]) {
+    assert.equal(classifyObservation({ provider: "sony-info" }, item({ title: "Details", summary })).category, "Unknown");
+  }
+});
+test("source/category and English announcement lead while review metadata stays compact", () => {
+  const s = source();
+  const { discovery } = ingest(s, item({ title: "HAN 新曲リリース", summary: "新曲を11月20日に発売します。" }));
+  const embed = discord.payload(discovery, store.supportingSources(discovery.id), { translation: { status: "ready", provider: "google", translated_title: "HAN announces a new song", translated_summary: "Release date: November 20. Track List 01. Song" } }).embeds[0].toJSON();
+  assert.equal(embed.author.name, "Sony Japan Info • Release");
+  assert.equal(embed.title, "HAN announces a new song");
+  assert.doesNotMatch(embed.description, /新曲|Track List|https?:/);
+  assert.match(embed.fields.find(f => f.name === "Important timing").value, /Release: November 20/);
+  assert.match(embed.fields.find(f => f.name === "Official Source").value, /https:\/\/www.sonymusic/);
+  assert.deepEqual(embed.fields.map(f => f.name), ["Important timing", "Official Source", "Review / Calendar"]);
+  assert.equal(embed.footer.text, "SKZ Radar #" + discovery.id);
+});
+test("foreign fallback is compact and distinguishes not configured, pending and failure", () => {
+  for (const [cache, configured, expected] of [
+    [null, false, "Translation not configured"],
+    [{ status: "unavailable", provider: "google-missing-key" }, true, "Translation not configured"],
+    [{ status: "pending", provider: "google" }, true, "Translation pending"],
+    [{ status: "failed", provider: "google" }, true, "Translation failed/unavailable"],
+  ]) {
+    const view = presentation.cardView({ category: "Release" }, { title: "新曲リリース", summary: "日本語の長い記事。".repeat(1000) }, cache, { translationConfigured: configured });
+    assert.equal(view.language, expected);
+    assert.equal(view.title, "Official announcement · Release");
+    assert.ok(view.summary.length < 100);
+    assert.doesNotMatch(view.summary, /日本語/);
+  }
+});
+test("candidate timing preserves event/release/application/deadline meaning without guessing dates", () => {
+  for (const [text, expected] of [
+    ["Event date: November 25, 2026 at 19:00 JST.", "Event: November 25, 2026 at 19:00 JST"],
+    ["Release date: 2026-11-25.", "Release: 2026-11-25"],
+    ["Applications open November 20. Applications close November 24.", "Application opens: November 20|Application closes: November 24"],
+    ["Deadline: November 24 at 18:00 KST.", "Deadline: November 24 at 18:00 KST"],
+    ["11月24日発売決定。", "Release: 11月24日"],
+    ["11월 24일 발매.", "Release: 11월 24일"],
+    ["Published November 20. More details soon.", ""],
+    ["Event next month; time to be confirmed.", ""],
+    ["Applications close November 20 for the event November 25.", ""],
+    ["Published November 20 for the release November 25.", ""],
+    ["Release track 1/2 preview.", ""],
+    ["Album release\n2026.11.18\nDetails forthcoming.", ""],
+  ]) assert.equal(presentation.candidateTiming(text).join("|"), expected);
+});
+test("informational body timing never writes calendar truth or changes identity, support, decisions or delivery", async () => {
+  for (const state of ["Ignored", "Watching", "Resolved"]) {
+    const s = source("jype-notice");
+    const value = item({ title: "Details", summary: "Listening party event date: November 25, 2026 at 19:00 JST." });
+    const { discovery } = ingest(s, value, { category: "Unknown", confidence: "uncertain", members: [], eligibility: "Unknown", reason: "Owner confirmation required", correlationKey: null });
+    store.setReviewState(s.guild_id, discovery.id, state);
+    const before = store.getDiscovery(s.guild_id, discovery.id);
+    const full = cachedSource(before);
+    const f = fixture(s.guild_id);
+    await discord.syncRadarChannel(f.client, s.guild_id);
+    const reference = store.delivery(discovery.id, "radar-channel");
+    await discord.syncRadarChannel(f.client, s.guild_id);
+    const after = store.getDiscovery(s.guild_id, discovery.id);
+    assert.equal(after.category, "Event");
+    for (const key of ["id", "review_state", "event_at", "event_date", "calendar_candidate_id", "handoff_result", "correlation_key"]) assert.equal(after[key], before[key], key);
+    assert.deepEqual(cachedSource(after), full);
+    assert.equal(f.sent.length, 1);
+    assert.equal(store.delivery(discovery.id, "radar-channel").message_id, reference.message_id);
+    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /informational/);
+  }
+});
+
+test("classification scans bounded cleaned source context beyond presentation-selected sentences", () => {
+  const neutral = "Details are being prepared. Further information will follow. " + "Please check this page for updates. ".repeat(35);
+  for (const [provider, evidence, expected] of [
+    ["sony-info", "HANの新曲が配信リリース決定！", "Release"],
+    ["jype-notice", "스트레이 키즈 팝업스토어가 오픈합니다.", "Pop-up"],
+    ["sony-info", "A listening party is announced.", "Event"],
+  ]) {
+    const value = item({ title: "Details", summary: neutral + evidence });
+    assert.ok(value.summary.indexOf(evidence) > 900);
+    assert.ok(!presentation.preview(value.summary, value.title, 900).includes(evidence));
+    assert.equal(classifyObservation({ provider }, value).category, expected);
+  }
+});
+test("late track/legal/application boilerplate cannot supply classification evidence", () => {
+  const neutral = "Details are being prepared. Further information will follow. Please check back for updates. ";
+  for (const tail of [
+    "Track List 01. Music Video 02. New album release.",
+    "Terms and conditions: Concert ticket applications open now.",
+    "Application instructions: Apply now for concert tickets.",
+    "注意事項 コンサートのチケット先行受付開始。",
+  ]) {
+    const value = item({ title: "Details", summary: neutral + tail });
+    assert.equal(classifyObservation({ provider: "sony-info" }, value).category, "Unknown");
+  }
+});
+test("classification context is bounded independently of Discord preview limits", () => {
+  const value = item({ title: "Details", summary: "Details forthcoming. ".repeat(1100) + "New album release announced." });
+  assert.equal(classifyObservation({ provider: "sony-info" }, value).category, "Unknown");
 });
