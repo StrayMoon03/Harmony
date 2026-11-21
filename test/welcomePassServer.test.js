@@ -340,20 +340,67 @@ test("leaving before correction/save or approval fails safely; bots and conflict
   assert.equal((await post(baseUrl, "/welcome-pass/approved", { code: body.code, discordMemberId: userId })).status, 409);
   assert.equal(env.roleGrants, 0);
 });
-test("member endpoints require bridge authentication; roster pagination includes all humans without exposing other member data", async (t) => {
+test("member endpoints require bridge authentication; roster pagination excludes bots/STAY without exposing other member data", async (t) => {
   const env = makeEnvironment("roster-pagination"); numericMember(env);
   let options;
   const page = new Map(Array.from({ length: 100 }, (_, index) => {
-    const id = String(1005965496505602100n + BigInt(index)); return [id, { id, user: { username: "stay" + index, bot: index === 1, privateEmail: "never expose" }, displayName: "STAY " + index }];
+    const id = String(1005965496505602100n + BigInt(index)); return [id, { id, user: { username: "stay" + index, bot: index === 1, privateEmail: "never expose" }, roles: { cache: new Set(index === 2 ? ["stay-role"] : []) }, displayName: "STAY " + index }];
   }));
   env.guild.members.list = async (value) => { options = value; return value.after ? new Map() : page; };
   const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
   assert.equal((await post(baseUrl, "/welcome-pass/members", {}, "wrong")).status, 401);
   assert.equal((await post(baseUrl, "/welcome-pass/member", { code: "YS-PAGING01", userId: env.member.id }, "wrong")).status, 401);
   const result = await (await post(baseUrl, "/welcome-pass/members", {})).json();
-  assert.equal(result.members.length, 99); assert.equal(result.after, [...page.keys()].at(-1)); assert.equal(options.limit, 100); assert.doesNotMatch(JSON.stringify(result), /privateEmail|never expose/);
+  assert.equal(result.members.length, 98); assert.equal(result.after, [...page.keys()].at(-1)); assert.equal(options.limit, 100); assert.doesNotMatch(JSON.stringify(result), /privateEmail|never expose/);
   const next = await (await post(baseUrl, "/welcome-pass/members", { after: result.after })).json();
   assert.equal(options.after, result.after); assert.equal(next.after, null);
+});
+
+test("picker eligibility follows actual configured STAY role, includes staff without STAY and updates after role changes", async (t) => {
+  const env = makeEnvironment("picker-actual-roles");
+  const make = (index, roles, bot = false) => {
+    const id = String(1005965496505602100n + BigInt(index));
+    return { id, user: { username: "member" + index, bot }, displayName: "Member " + index, roles: { cache: new Set(roles) } };
+  };
+  const human = make(1, []), admin = make(2, ["topline"]), mod = make(3, ["skijigi"]);
+  const stay = make(4, ["stay-role"]), staffStay = make(5, ["topline", "stay-role"]), bot = make(6, [], true), stayBot = make(7, ["stay-role"], true);
+  let roster = new Map([human, admin, mod, stay, staffStay, bot, stayBot].map((m) => [m.id, m]));
+  env.guild.members.list = async () => roster;
+  // An approved historical pass does not disqualify a human who lacks STAY.
+  welcomePassStore.recordWelcomePassApproval({ code: "YS-OLDROLE1", approverName: "Admin" });
+  welcomePassStore.linkWelcomePassCode({ code: "YS-OLDROLE1", guildId: env.guild.id, userId: human.id });
+  welcomePassStore.markWelcomePassAssigned("YS-OLDROLE1");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const list = async () => (await (await post(baseUrl, "/welcome-pass/members", {})).json()).members.map((m) => m.id);
+  assert.deepEqual(await list(), [human.id, admin.id, mod.id]);
+  human.roles.cache.add("stay-role"); stay.roles.cache.delete("stay-role"); roster.delete(mod.id);
+  assert.deepEqual(await list(), [admin.id, stay.id]);
+  assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
+});
+
+test("a fully filtered page retains the raw Discord cursor so eligible members on the next page remain reachable", async (t) => {
+  const env = makeEnvironment("picker-filtered-page");
+  const page = new Map(Array.from({ length: 100 }, (_, index) => {
+    const id = String(1005965496505602100n + BigInt(index));
+    return [id, { id, user: { username: "stay" + index, bot: false }, roles: { cache: new Set(["stay-role"]) } }];
+  }));
+  const nextId = "450767834574880778";
+  env.guild.members.list = async ({ after }) => after ? new Map([[nextId, { id: nextId, user: { username: "tracienew2714", bot: false }, roles: { cache: new Set() } }]]) : page;
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const first = await (await post(baseUrl, "/welcome-pass/members", {})).json();
+  assert.deepEqual(first.members, []); assert.equal(first.after, [...page.keys()].at(-1));
+  const next = await (await post(baseUrl, "/welcome-pass/members", { after: first.after })).json();
+  assert.equal(next.members[0].id, nextId); assert.equal(next.after, null);
+});
+
+test("missing/deleted Approved Role fails closed rather than returning an unfiltered roster", async (t) => {
+  const env = makeEnvironment("picker-missing-role"); let listed = false;
+  env.guild.roles.fetch = async () => null;
+  env.guild.members.list = async () => { listed = true; return env.guild.members.cache; };
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const result = await post(baseUrl, "/welcome-pass/members", {});
+  assert.equal(result.status, 500); assert.equal((await result.json()).error, "internal_error");
+  assert.equal(listed, false); assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
 });
 test("role failure does not return success and retry grants once; concurrent callbacks cannot duplicate role operations", async (t) => {
   const env = makeEnvironment("role-failure-retry");
