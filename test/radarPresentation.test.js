@@ -696,3 +696,33 @@ test("informational body timing never writes calendar truth or changes identity,
     assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /informational/);
   }
 });
+
+test("classification scans bounded cleaned source context beyond presentation-selected sentences", () => {
+  const neutral = "Details are being prepared. Further information will follow. " + "Please check this page for updates. ".repeat(35);
+  for (const [provider, evidence, expected] of [
+    ["sony-info", "HANの新曲が配信リリース決定！", "Release"],
+    ["jype-notice", "스트레이 키즈 팝업스토어가 오픈합니다.", "Pop-up"],
+    ["sony-info", "A listening party is announced.", "Event"],
+  ]) {
+    const value = item({ title: "Details", summary: neutral + evidence });
+    assert.ok(value.summary.indexOf(evidence) > 900);
+    assert.ok(!presentation.preview(value.summary, value.title, 900).includes(evidence));
+    assert.equal(classifyObservation({ provider }, value).category, expected);
+  }
+});
+test("late track/legal/application boilerplate cannot supply classification evidence", () => {
+  const neutral = "Details are being prepared. Further information will follow. Please check back for updates. ";
+  for (const tail of [
+    "Track List 01. Music Video 02. New album release.",
+    "Terms and conditions: Concert ticket applications open now.",
+    "Application instructions: Apply now for concert tickets.",
+    "注意事項 コンサートのチケット先行受付開始。",
+  ]) {
+    const value = item({ title: "Details", summary: neutral + tail });
+    assert.equal(classifyObservation({ provider: "sony-info" }, value).category, "Unknown");
+  }
+});
+test("classification context is bounded independently of Discord preview limits", () => {
+  const value = item({ title: "Details", summary: "Details forthcoming. ".repeat(1100) + "New album release announced." });
+  assert.equal(classifyObservation({ provider: "sony-info" }, value).category, "Unknown");
+});

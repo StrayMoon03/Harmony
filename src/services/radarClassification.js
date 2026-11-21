@@ -1,4 +1,7 @@
-const { preview } = require("./radarPresentation");
+const { cleanContent } = require("./radarPresentation");
+// Classification scans retained source context, independently of card sentence
+// selection/length. Bound raw input before cleanup to cap work on long articles.
+const CLASSIFICATION_CONTEXT_LIMIT = 12000;
 const { extractYouTubeId } = require("../modules/media/youtube");
 
 // Classification concerns the announcement's subject, not incidental body links.
@@ -32,13 +35,13 @@ function classifyObservation(source, item) {
   const title = String(item.title || "").normalize("NFC").replace(/\s+/gu, " ");
   let metadata = item.metadata || {};
   if (typeof metadata === "string") { try { metadata = JSON.parse(metadata); } catch { metadata = {}; } }
-  const body = preview(item.summary, title, 900);
+  const body = cleanContent(String(item.summary || "").slice(0, CLASSIFICATION_CONTEXT_LIMIT), title);
   const match = (text, primary = false) => {
     const ticketing = APPLICATION.test(text) || (TICKETS.test(text) && (primary || /open|sale|application|受付|販売|예매/i.test(text))) ||
       (RESERVATION.test(text) && LIVE_CONTEXT.test(text) && !PREORDER.test(text));
     return ticketing ? ["Ticketing", true] : CATEGORY_RULES.find(([, pattern]) => pattern.test(text));
   };
-  // Prefer a specific title. A generic heading can use retained lead context or
+  // Prefer a specific title. A generic heading can use retained source context or
   // an explicit source category; translated text never participates.
   const titleMatch = match(title, true);
   const contextMatch = match(body) || match(String(metadata?.sourceCategory || ""));
