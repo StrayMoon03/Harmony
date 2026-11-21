@@ -1,3 +1,4 @@
+const { preview } = require("./radarPresentation");
 const { extractYouTubeId } = require("../modules/media/youtube");
 
 // Classification concerns the announcement's subject, not incidental body links.
@@ -29,9 +30,19 @@ const MEMBERS = [
 ];
 function classifyObservation(source, item) {
   const title = String(item.title || "").normalize("NFC").replace(/\s+/gu, " ");
-  const ticketing = TICKETS.test(title) || APPLICATION.test(title) ||
-    (RESERVATION.test(title) && LIVE_CONTEXT.test(title) && !PREORDER.test(title));
-  const matched = ticketing ? ["Ticketing", true] : CATEGORY_RULES.find(([, pattern]) => pattern.test(title));
+  let metadata = item.metadata || {};
+  if (typeof metadata === "string") { try { metadata = JSON.parse(metadata); } catch { metadata = {}; } }
+  const body = preview(item.summary, title, 900);
+  const match = (text, primary = false) => {
+    const ticketing = APPLICATION.test(text) || (TICKETS.test(text) && (primary || /open|sale|application|受付|販売|예매/i.test(text))) ||
+      (RESERVATION.test(text) && LIVE_CONTEXT.test(text) && !PREORDER.test(text));
+    return ticketing ? ["Ticketing", true] : CATEGORY_RULES.find(([, pattern]) => pattern.test(text));
+  };
+  // Prefer a specific title. A generic heading can use retained lead context or
+  // an explicit source category; translated text never participates.
+  const titleMatch = match(title, true);
+  const contextMatch = match(body) || match(String(metadata?.sourceCategory || ""));
+  const matched = titleMatch && titleMatch[0] !== "Announcement" ? titleMatch : contextMatch || titleMatch;
   const category = source.provider === "youtube-uploads" ? "New Content" : matched?.[0] || "Unknown";
   // Links embedded in an article are supporting evidence, not the article's identity.
   // Only a canonical video URL proves primary video identity in Phase 1A.

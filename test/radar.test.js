@@ -276,7 +276,7 @@ test("delivery edits the same message, recovers a pending send and preserves dec
   store.setReviewState(s.guild_id, discovered.id, "Watching");
   await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.equal(f.sent[0].embeds[0].fields.find((field) => field.name === "Review").value, "Watching");
+  assert.equal(f.sent[0].embeds[0].fields.find((field) => field.name === "Review / Calendar").value.split(" · ")[0], "Watching");
 });
 
 test("delivery permission failures retain data; moving channels and off/on use configured destinations", async () => {
@@ -474,7 +474,7 @@ test("handoff handles candidate:null and retains the existing published event's 
   assert.equal(saved.event_timezone, "Asia/Tokyo");
   assert.equal(saved.review_state, "Resolved");
   assert.equal(calendar.listCalendarCandidates(target.guild.id).length, 0);
-  assert.match(discord.payload(saved, store.supportingSources(discovery.id)).embeds[0].toJSON().fields.find((field) => field.name === "Calendar").value, /existing calendar event/);
+  assert.match(discord.payload(saved, store.supportingSources(discovery.id)).embeds[0].toJSON().fields.find((field) => field.name === "Review / Calendar").value, /existing calendar event/);
 });
 test("handoff retains canonical existing candidate details instead of the submitted conflicting date", async () => {
   const { s, discovery, f, target } = handoffFixture();

@@ -15,7 +15,7 @@ const handoffs = new Map();
 const EXISTENCE_CHECK_MS = 60 * 60 * 1000;
 function payload(discovery, sources, options = {}) {
   const source = presentation.primarySource(discovery, sources);
-  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null));
+  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null), { translationConfigured: translation.googleProvider().available });
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:ignore:" + discovery.id).setLabel("Ignore").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:watch:" + discovery.id).setLabel("Watch for Details").setStyle(ButtonStyle.Secondary),
@@ -27,25 +27,17 @@ function payload(discovery, sources, options = {}) {
     .setDescription(view.summary + (view.language ? "\n\n*" + view.language + "*" : ""))
     .setColor(discovery.review_state === "Watching" ? 0xfee75c : 0x5865f2)
     .setFooter({ text: "SKZ Radar #" + discovery.id })
-    .addFields(
-      { name: "Review", value: discovery.review_state, inline: true },
-      { name: "Category", value: discovery.category, inline: true },
-      { name: "Confidence", value: discovery.confidence === "rule-based" ? "Rule-based" : "Uncertain", inline: true },
-      { name: "Timing", value: [
-        "Published: " + (presentation.formatDate(source?.published_at) || "Not provided"),
-        ...(discovery.event_at || discovery.event_date ? ["Calendar date: " + (presentation.formatDate(discovery.event_at || discovery.event_date) || "Unconfirmed")] : []),
-        "Discovered: " + (presentation.formatDate(discovery.created_at) || "Not provided"),
-      ].join("\n") },
-      { name: "Calendar", value: discovery.handoff_result && JSON.parse(discovery.handoff_result).kind === "event"
-        ? "Ready · Linked to existing calendar event #" + JSON.parse(discovery.handoff_result).record.id + "."
-        : discovery.calendar_candidate_id
-        ? "Ready · Sent for calendar review as candidate #" + discovery.calendar_candidate_id + "."
-        : discovery.calendar_eligibility + (discovery.calendar_eligibility === "Potential" ? " · Confirm a date with Add to Calendar." : "") },
-      ...(view.originalTitle ? [{ name: "Original title", value: view.originalTitle }] : []),
-      { name: "Supporting sources", value: sources.slice(0, 3)
-        .map((item) => "[" + ({ "jype-notice": "JYPE Notice", "sony-info": "Sony Japan Info", "youtube-uploads": "Official YouTube" }[item.provider] || "Source") + "](" + item.canonical_url.replace(/[()]/g, encodeURIComponent) + ")").join("\n") +
-        (sources.length > 3 ? "\n+" + (sources.length - 3) + " more sources saved" : "") || "Source unavailable" },
-    );
+    .setAuthor({ name: ({ "jype-notice": "JYPE Notice", "sony-info": "Sony Japan Info", "youtube-uploads": "Official YouTube" }[source?.provider] || "Official source") + " • " + discovery.category });
+  const timing = [
+    ...(view.timing.length ? ["Source timing (informational; confirm for calendar):", ...view.timing] : []),
+    ...(discovery.event_at || discovery.event_date ? ["Confirmed calendar date: " + (presentation.formatDate(discovery.event_at || discovery.event_date) || "Unconfirmed")] : []),
+  ];
+  if (timing.length) embed.addFields({ name: "Important timing", value: timing.join("\n") });
+  if (source) embed.addFields({ name: "Official Source", value: "[Read the complete announcement](" + source.canonical_url.replace(/[()]/g, encodeURIComponent) + ")" +
+    (sources.length > 1 ? " · " + sources.length + " supporting sources saved" : "") });
+  const calendar = discovery.handoff_result && JSON.parse(discovery.handoff_result).kind === "event"
+    ? "Linked to existing calendar event" : discovery.calendar_candidate_id ? "Sent for calendar review" : discovery.calendar_eligibility;
+  embed.addFields({ name: "Review / Calendar", value: discovery.review_state + " · " + calendar });
   if (source) embed.setURL(source.canonical_url);
   const images = source ? JSON.parse(source.metadata).images : [];
   if (images?.[0]) embed.setImage(images[0]);
@@ -88,7 +80,7 @@ async function syncRadarChannel(client, guildId, { now = new Date() } = {}) {
       const queue = store.listDiscoveries(guildId).map((saved) => {
         const sources = store.supportingSources(saved.id);
         const source = presentation.primarySource(saved, sources);
-        const discovery = source ? store.saveClassification(guildId, saved.id, classifyObservation(source, { title: source.title, url: source.canonical_url })) : saved;
+        const discovery = source ? store.saveClassification(guildId, saved.id, classifyObservation(source, { title: source.title, summary: source.summary, metadata: source.metadata, url: source.canonical_url })) : saved;
         // Queue enrichment without awaiting it; original-language cards and polling progress now.
         if (source) translation.enqueue(source, guildId, onTranslated);
         const body = payload(discovery, sources);
