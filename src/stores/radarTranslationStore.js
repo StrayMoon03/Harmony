@@ -5,15 +5,22 @@ function identity(source) {
   const input = translationInput(source);
   return { sourceHash: hash([normalize(source.title), normalize(source.summary)]), inputHash: hash([VERSION, input]), input };
 }
+function allowsEnglishSkip(input) {
+  return !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(input.title + input.summary);
+}
 function get(source, provider) {
-  const { sourceHash, inputHash } = identity(source);
+  const { sourceHash, inputHash, input } = identity(source);
   const row = getDb().prepare("SELECT * FROM radar_translations WHERE observation_id=? AND source_hash=? AND provider=?")
     .get(source.id, sourceHash, provider);
-  return row?.input_hash === inputHash ? row : null;
+  return row?.input_hash === inputHash && (row.status !== "skipped" || allowsEnglishSkip(input)) ? row : null;
 }
-function legacyCompleted(source) {
-  const row = get(source, "azure");
-  return row && ["ready", "skipped"].includes(row.status) ? row : null;
+function completed(source, preferred = "azure") {
+  // Existing successful results are presentation cache, not provider fallbacks.
+  for (const provider of new Set([preferred, "azure", "google"])) {
+    const row = get(source, provider);
+    if (row && ["ready", "skipped"].includes(row.status)) return row;
+  }
+  return null;
 }
 function claim(source, provider, now, leaseMs) {
   const existing = get(source, provider);
@@ -29,9 +36,9 @@ function claim(source, provider, now, leaseMs) {
   return result.changes > 0;
 }
 function reusable(source, provider) {
-  const { inputHash } = identity(source);
+  const { inputHash, input } = identity(source);
   return getDb().prepare(`SELECT * FROM radar_translations WHERE observation_id=? AND provider=? AND input_hash=?
-    AND status IN ('ready','skipped') ORDER BY updated_at DESC LIMIT 1`).get(source.id, provider, inputHash);
+    AND (status='ready' OR (status='skipped' AND ?=1)) ORDER BY updated_at DESC LIMIT 1`).get(source.id, provider, inputHash, allowsEnglishSkip(input) ? 1 : 0);
 }
 function save(source, provider, result, now = Date.now()) {
   const { sourceHash } = identity(source);
@@ -40,4 +47,4 @@ function save(source, provider, result, now = Date.now()) {
     .run(result.status, result.language || null, result.title || null, result.summary || null,
       result.error || null, result.retryAt ? new Date(result.retryAt).toISOString() : null, new Date(now).toISOString(), source.id, sourceHash, provider);
 }
-module.exports = { identity, get, legacyCompleted, claim, reusable, save };
+module.exports = { identity, get, completed, claim, reusable, save };

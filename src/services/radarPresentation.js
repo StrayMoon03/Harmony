@@ -90,27 +90,35 @@ function primarySource(discovery, sources) {
     sources.find((item) => item.active !== 0) || sources[0];
 }
 function translationInput(source) {
-  return { title: clip(cleanTitle(source.title), 500), summary: preview(source.summary, source.title, TRANSLATION_INPUT_LIMIT) };
+  const summary = preview(source.summary, source.title, TRANSLATION_INPUT_LIMIT);
+  const timing = candidateTiming(source.title + "\n" + source.summary).filter(value => !summary.includes(value.slice(value.indexOf(": ") + 2))).join("; ");
+  // Reserve bounded space for already identified evidence; never translate the
+  // full article to find a date, infer a year or write calendar fields.
+  const evidence = timing ? "\n" + timing : "";
+  return { title: clip(cleanTitle(source.title), 500), summary: clip(summary, TRANSLATION_INPUT_LIMIT - evidence.length) + evidence };
 }
 function cardView(discovery, source, translation, options = {}) {
   const originalTitle = source?.title || discovery.title;
   const originalSummary = source?.summary || discovery.summary;
   const foreign = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Han}]/u;
   const translated = translation?.status === "ready" && Boolean(translation.translated_title);
-  const needsTranslation = foreign.test(originalTitle + " " + preview(originalSummary, originalTitle));
+  const needsTranslation = foreign.test(originalTitle + " " + preview(originalSummary, originalTitle)) || options.translationUseful === true;
   let title = cleanTitle(translated ? translation.translated_title : originalTitle);
   let summary = translated ? preview(translation.translated_summary, title) : preview(originalSummary, title);
   let language = null;
   if (translated) language = "Machine translated to English · " + ({ google: "Google Cloud Translation", azure: "Azure Translator" }[translation.provider] || "Translation");
   else if (needsTranslation) {
-    const unconfigured = ["disabled", "google-missing-key"].includes(translation?.provider) || (!translation && options.translationConfigured === false);
-    language = unconfigured ? "Translation not configured" : !translation || translation.status === "pending" ? "Translation pending" : "Translation failed/unavailable";
+    const unconfigured = ["disabled", "azure-missing-key"].includes(translation?.provider) || (!translation && options.translationConfigured === false);
+    const pending = translation?.status === "pending" && Date.parse(translation.lease_until) > Date.now();
+    language = translation?.error === "translator_free_quota_exhausted" ? "Free translation allowance exhausted"
+      : unconfigured ? "Translation not configured" : pending ? "Translation pending"
+      : !translation ? "English translation available on request" : "Translation failed/unavailable";
     if (foreign.test(title)) title = "Official announcement · " + discovery.category;
     summary = "Open the official source for the original announcement and complete details.";
   }
   const timingText = translated ? translation.translated_title + "\n" + translation.translated_summary : originalTitle + "\n" + originalSummary;
   return { title: cardText(title, 256) || "Official announcement",
     summary: cardText(summary, SUMMARY_LIMIT) || "Open the original announcement for complete details.",
-    language, timing: candidateTiming(timingText) };
+    language, needsTranslation, translated, timing: candidateTiming(timingText) };
 }
 module.exports = { VERSION, SUMMARY_LIMIT, TRANSLATION_INPUT_LIMIT, normalize, clip, cleanContent, preview, candidateTiming, formatDate, cardText, primarySource, translationInput, cardView };
