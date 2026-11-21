@@ -1,3 +1,4 @@
+const { getMemberCountAccounting } = require("../stores/memberCountStore");
 const { listWelcomePassSettings, getWelcomePassSettings, checkWelcomePassMember } = require("../stores/welcomePassStore");
 
 async function welcomePassGuild(client) {
@@ -24,11 +25,15 @@ async function listMembers(client, after) {
   const guild = await welcomePassGuild(client);
   const roleId = getWelcomePassSettings(guild.id)?.role_id;
   // Fail closed if the authoritative Approved Role cannot be resolved. Never
-  // substitute pass status, role names, staff roles, or an unfiltered roster.
+  // substitute pass status, role names, or an unfiltered roster.
   if (!roleId || !await guild.roles.fetch(roleId)) throw new Error("welcome_pass_approved_role_unavailable");
+  const accounting = getMemberCountAccounting(guild.id);
+  const excludedRoleIds = [roleId, accounting.admin_role_id, accounting.moderator_role_id].filter(Boolean);
+  // Normal picker eligibility only. Exact-ID selection/recovery deliberately
+  // remains independent so a previous admission target can be reconciled.
   const page = await guild.members.list({ limit: 100, ...(after ? { after } : {}) });
   const all = [...page.values()];
-  return { members: all.filter((member) => !member.user.bot && !member.roles.cache.has(roleId)).map((member) => ({
+  return { members: all.filter((member) => !member.user.bot && !excludedRoleIds.some((id) => member.roles.cache.has(id))).map((member) => ({
     id: member.id, username: member.user.username, displayName: member.displayName || member.user.globalName || member.user.username,
   })), after: all.length === 100 ? all.at(-1).id : null };
 }

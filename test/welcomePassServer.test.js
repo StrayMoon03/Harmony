@@ -13,6 +13,7 @@ process.env.PORT = "0";
 
 const { closeDb, getDb } = require("../src/db/sqlite");
 const welcomePassStore = require("../src/stores/welcomePassStore");
+const { saveMemberCountStaffRole } = require("../src/stores/memberCountStore");
 const birthdayStore = require("../src/stores/birthdayStore");
 const { startWelcomePassServer } = require("../src/services/welcomePassServer");
 
@@ -356,33 +357,44 @@ test("member endpoints require bridge authentication; roster pagination excludes
   assert.equal(options.after, result.after); assert.equal(next.after, null);
 });
 
-test("picker eligibility follows actual configured STAY role, includes staff without STAY and updates after role changes", async (t) => {
+test("normal picker excludes each configured STAY/Admin/Moderator role and every combination, not names or pass status", async (t) => {
   const env = makeEnvironment("picker-actual-roles");
+  saveMemberCountStaffRole(env.guild.id, "admin", "topline");
+  saveMemberCountStaffRole(env.guild.id, "moderator", "skijigi");
   const make = (index, roles, bot = false) => {
     const id = String(1005965496505602100n + BigInt(index));
     return { id, user: { username: "member" + index, bot }, displayName: "Member " + index, roles: { cache: new Set(roles) } };
   };
-  const human = make(1, []), admin = make(2, ["topline"]), mod = make(3, ["skijigi"]);
-  const stay = make(4, ["stay-role"]), staffStay = make(5, ["topline", "stay-role"]), bot = make(6, [], true), stayBot = make(7, ["stay-role"], true);
-  let roster = new Map([human, admin, mod, stay, staffStay, bot, stayBot].map((m) => [m.id, m]));
+  const human = make(0, []);
+  const roleSets = [["stay-role"], ["topline"], ["skijigi"], ["stay-role", "topline"], ["stay-role", "skijigi"], ["topline", "skijigi"], ["stay-role", "topline", "skijigi"]];
+  const excluded = roleSets.map((roles, i) => make(i + 1, roles));
+  const bot = make(8, [], true), stayBot = make(9, ["stay-role"], true);
+  const unrelated = make(10, ["other-role"]);
+  const roster = new Map([human, ...excluded, bot, stayBot, unrelated].map((m) => [m.id, m]));
   env.guild.members.list = async () => roster;
-  // An approved historical pass does not disqualify a human who lacks STAY.
+  // Historical pass status must not replace actual Discord role eligibility.
   welcomePassStore.recordWelcomePassApproval({ code: "YS-OLDROLE1", approverName: "Admin" });
   welcomePassStore.linkWelcomePassCode({ code: "YS-OLDROLE1", guildId: env.guild.id, userId: human.id });
   welcomePassStore.markWelcomePassAssigned("YS-OLDROLE1");
   const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
   const list = async () => (await (await post(baseUrl, "/welcome-pass/members", {})).json()).members.map((m) => m.id);
-  assert.deepEqual(await list(), [human.id, admin.id, mod.id]);
-  human.roles.cache.add("stay-role"); stay.roles.cache.delete("stay-role"); roster.delete(mod.id);
-  assert.deepEqual(await list(), [admin.id, stay.id]);
+  assert.deepEqual(await list(), [human.id, unrelated.id]);
+  human.roles.cache.add("stay-role"); excluded[0].roles.cache.delete("stay-role");
+  assert.deepEqual(await list(), [excluded[0].id, unrelated.id]);
+  // Read persisted configuration for each request, rather than stale IDs/names.
+  saveMemberCountStaffRole(env.guild.id, "admin", "new-admin-role");
+  unrelated.roles.cache.add("new-admin-role");
+  assert.deepEqual(await list(), [excluded[0].id, excluded[1].id]);
   assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
 });
 
 test("a fully filtered page retains the raw Discord cursor so eligible members on the next page remain reachable", async (t) => {
   const env = makeEnvironment("picker-filtered-page");
+  saveMemberCountStaffRole(env.guild.id, "admin", "topline");
+  saveMemberCountStaffRole(env.guild.id, "moderator", "skijigi");
   const page = new Map(Array.from({ length: 100 }, (_, index) => {
     const id = String(1005965496505602100n + BigInt(index));
-    return [id, { id, user: { username: "stay" + index, bot: false }, roles: { cache: new Set(["stay-role"]) } }];
+    return [id, { id, user: { username: "stay" + index, bot: false }, roles: { cache: new Set([index % 3 === 0 ? "stay-role" : index % 3 === 1 ? "topline" : "skijigi"]) } }];
   }));
   const nextId = "450767834574880778";
   env.guild.members.list = async ({ after }) => after ? new Map([[nextId, { id: nextId, user: { username: "tracienew2714", bot: false }, roles: { cache: new Set() } }]]) : page;
@@ -474,18 +486,29 @@ test("archived pending and never-linked passes cannot be linked/granted on start
   assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
 });
 
-test("strict selected admission confirms current role and identity; retries do not replay admission", async (t) => {
+test("strict exact-ID staff admission/recovery remains available while normal roster excludes the target", async (t) => {
   const env = makeEnvironment("strict-selected-admission"); const userId = numericMember(env);
-  const roles = new Set(); env.member.roles.cache = roles;
+  saveMemberCountStaffRole(env.guild.id, "admin", "topline");
+  saveMemberCountStaffRole(env.guild.id, "moderator", "skijigi");
+  const roles = new Set(["topline", "skijigi"]); env.member.roles.cache = roles;
   const add = env.member.roles.add; env.member.roles.add = async (role) => { await add(role); roles.add(role.id); };
   const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
   const payload = { code: "YS-STRICT01", discordMemberId: userId, discordUsername: "wrong-original-name", requireAdmission: true };
+  assert.deepEqual((await (await post(baseUrl, "/welcome-pass/members", {})).json()).members, []);
+  assert.equal((await (await post(baseUrl, "/welcome-pass/member", { code: payload.code, userId })).json()).ok, true);
   const first = await post(baseUrl, "/welcome-pass/approved", payload);
   assert.equal(first.status, 200); const result = await first.json(); assert.equal(result.admitted, true);
   assert.deepEqual(result.discordMember, { id: userId, username: env.member.user.username, guildId: env.guild.id });
   assert.equal(welcomePassStore.getWelcomePassAssignment(payload.code).user_id, userId);
   const sent = env.sent.length;
-  assert.equal((await post(baseUrl, "/welcome-pass/approved", payload)).status, 200);
+  assert.ok(roles.has("stay-role"));
+  assert.deepEqual((await (await post(baseUrl, "/welcome-pass/members", {})).json()).members, []);
+  assert.equal((await (await post(baseUrl, "/welcome-pass/member", { code: payload.code, userId })).json()).ok, true);
+  const recovered = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal(recovered.status, 200);
+  const recoveredBody = await recovered.json();
+  assert.equal(recoveredBody.admitted, true);
+  assert.equal(recoveredBody.discordMember.id, userId);
   assert.equal(env.roleGrants, 1); assert.equal(env.sent.length, sent);
   roles.clear();
   const missing = await post(baseUrl, "/welcome-pass/approved", payload);
