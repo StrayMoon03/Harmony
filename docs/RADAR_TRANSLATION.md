@@ -1,61 +1,52 @@
-# Radar presentation and English translation
+# Radar owner-triggered English translation
 
-Radar keeps original normalized source titles, complete retrieved text, URLs, publication dates and metadata. Discord uses a deterministic extractive preview, capped at 420 characters, rather than the article body. Track lists/application-manual boilerplate and raw URL collections are removed from the preview only. The original announcement remains linked. Source date-only values display as dates; known instants use Discord timestamps.
+Radar ingestion and polling remain automatic. **External translation is never initiated by discovery, polling, startup/restart, rendering, source edits, Ignore/Watch, calendar controls, or refresh.** Card synchronization performs local language analysis and reads matching completed cache entries only. There is no automatic retry/restart replay of translation work.
 
-Classification uses explicit original-title rules. Machine translation never changes classification confidence, source identity, correlation, owner decisions or calendar handoff. Existing saved discoveries are reclassified/rendered in place through the normal channel sync. This does not create a new discovery or change the approved handoff/approval workflow.
+A non-English or uncertain untranslated review card offers **Translate to English** alongside Ignore, Watch for Details, Add to Calendar and Original announcement. Only the configured Harmony server's actual Discord owner may request translation, checked server-side on every interaction. Other administrators cannot spend this allowance. Unknown language detection is conservative; short/mixed titles may need an explicit request. The provider detects the source language.
 
-## Provider and owner configuration
+## Click, cache and delivery
 
-The provider is Google Cloud Translation **Basic (v2)** using standard Neural Machine Translation (NMT), through the existing provider interface. This fits bounded plain-text title/preview translation; it does not require Advanced v3, a custom model, a glossary or a document/LLM translation service. No new SDK/dependency is needed for Node's existing server-side HTTPS fetch path.
+The interaction acknowledges immediately, re-reads the primary observation, and checks completed cache entries before queueing work. Concurrent clicks share one in-process promise. SQLite pending leases also protect against concurrent processes and recover after expiration, but **expiration alone never triggers a request**: another owner click is required. Successful translations edit the existing saved Discord card via normal recovery/delivery. Changed observations cannot show stale translated results. Ignore/Watching/Resolved decisions, discovery IDs, support relationships and calendar handoffs remain unchanged.
 
-Basic v2 officially supports API keys as well as OAuth/service-account authentication. This implementation uses a server-side API key sent in the `x-goog-api-key` header, never in the URL. It POSTs JSON to the fixed official endpoint `https://translation.googleapis.com/language/translate/v2` with `target=en`, `format=text`, `model=nmt` and no source language so Google auto-detects it. Redirects are rejected; arbitrary endpoint overrides are not supported. Returned character references are decoded once while literal angle brackets are retained as text.
+Original normalized titles, full retrieved text, links, dates and metadata remain unchanged in observations. English becomes the primary title/concise preview/informational timing when a valid result exists. Machine translation remains labelled and the original source remains authoritative and accessible. Translation never affects classification, confidence, correlation or calendar eligibility/date fields. No translation output is written into calendar truth; the existing Add to Calendar confirmation remains required.
 
-The owner must configure the following later, before an approved deployment:
+Input is bounded to a title of at most 500 UTF-16 code units and a summary of at most 900. Already-identified, unambiguous source timing evidence can reserve space in that summary if it would otherwise be omitted; no full article is sent to search for dates, infer years or time zones. Preview cleanup still removes hashtags, URLs and marked promotional/track/legal/application boilerplate. These input bounds are not a promise to translate every detail. Source content and original announcement are retained.
 
-1. Choose/create the intended Google Cloud project. Do not assume an existing Firebase project is the correct billing/quota project.
-2. Verify/link billing for that project. Google requires enabled billing even when usage falls within the monthly allowance.
-3. Enable the Cloud Translation API for that project, if not already enabled.
-4. Create an API key in that project and restrict it to the Cloud Translation API. Keep it server-side. HTTP-referrer restrictions are intended for browser callers; IP restrictions require verified stable server egress, which this PR does not assume.
-5. Review usage quotas and billing alerts. Google's documented default daily character quota is unlimited. The monthly credit is not a hard spending cap, and alerts alone do not stop charges.
-6. Set these Railway variables only after owner approval:
+The existing additive `radar_translations` table requires **no migration**. Its identity includes observation ID, normalized source hash, provider and versioned input hash. Valid existing Azure **and Google** completed results remain reusable without another provider call, with their actual provider label. New Azure results take precedence. An old English-skip detection is not treated as a valid translation when bounded input contains Japanese/Korean/Chinese script. Changed input requires another explicit click; unrelated boilerplate edits can reuse identical bounded input. No history/cache rows are reset or deleted.
 
-| Railway variable | Value |
+## Azure only for new requests
+
+The only production request adapter is Azure Translator Text REST v3, standard plain-text translation, target `en` only. It POSTs title/summary in one batch to the fixed endpoint:
+
+`https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=en&textType=plain`
+
+Authentication is server-side `Ocp-Apim-Subscription-Key`, with `Ocp-Apim-Subscription-Region` when the resource requires it. Keys never enter URLs, Discord messages or raw persisted error bodies. Redirects are rejected and response size is bounded. No Google API adapter or alternate-provider fallback exists. Google keys/settings cannot initiate new requests. Reading a pre-existing Google cache entry is not a provider fallback.
+
+Future owner configuration, **not configured by this PR**:
+
+| Variable | Purpose |
 | --- | --- |
-| `HARMONY_RADAR_TRANSLATION_PROVIDER` | `google` to explicitly enable new external translations |
-| `GOOGLE_CLOUD_TRANSLATION_API_KEY` | Secret API key from the intended owner-configured project |
+| `HARMONY_RADAR_TRANSLATION_PROVIDER` | Exactly `azure`; otherwise new requests are disabled |
+| `AZURE_TRANSLATOR_KEY` | Secret key from the intended Translator resource |
+| `AZURE_TRANSLATOR_REGION` | Required for regional resources; optional for single-service global resources |
 
-No project ID, region, endpoint override, service-account JSON file or Azure credentials are required by this Basic/API-key implementation. The key associates requests with its project for billing/quota. Azure settings are no longer read and cannot activate Azure API requests. Old Azure variables may be removed later by the owner; this PR does not modify them.
+No new SDK is necessary. Missing configuration produces a compact unavailable result and does not block Radar.
 
-Without explicit Google configuration, new uncached announcements continue in their original language. Existing successful Azure cache entries remain usable for unchanged source/input hashes, retaining their actual Azure provider label; they are not relabeled Google or deleted. New/materially changed content uses Google. Successful Google results take precedence. Failed/pending Azure cache entries cannot block Google work. No schema migration or data reset is required for this provider change.
+## Strict $0 setup boundary
 
-### Pricing verified for this provider change
+The owner must separately create/choose an Azure subscription and a **single-service Translator resource with actual SKU F0**, and verify that SKU before enabling the feature. A global resource is the simplest supported setup. Do not choose S1/pay-as-you-go or treat trial credits as a hard $0 cap. No resource, billing, keys or Railway configuration is created/changed by this PR.
 
-Google lists the first **500,000 NMT characters per month** as free via a **$10 monthly credit**, shared collectively between Basic and Advanced, with no rollover. Standard Basic NMT usage above the allowance is listed at **$20 per million characters** under standard USD on-demand pricing through one billion characters/month. This is not unlimited free Google Translate. Detection within a translation request adds no separate detection charge. Other usage and account-specific terms can affect remaining credit/cost.
+Microsoft documents F0 as 2 million characters per subscription month and states that free translation stops at the allowance. This is a resource-level limit: an API key or request parameter does **not** prove or select F0. Harmony deliberately does not claim a resource is free based on a key/environment label. If an owner later configures a paid resource instead, the request adapter cannot turn it into F0.
 
-No project, API activation, billing account, existing key, remaining allowance or quota state was assumed or configured by this PR. The owner must verify those before enabling translation. No resource was created, paid service activated, credentials changed or live billable verification request made. Provider calls are mocked in tests; live verification awaits separately approved setup/deployment.
+Documented Azure error `403001` is recorded as the safe `translator_free_quota_exhausted` category and shown as **Free translation allowance exhausted**. No automatic retry, provider switch or paid fallback occurs. Other failures/timeouts are sanitized, keep discoveries safe and leave retry/cooldown timestamps. Cooldown expiration merely permits a future explicit owner click; it never schedules provider work. Quota/auth/rate/server failures also share an in-process cooldown to prevent bursts across cards.
 
-Official references:
-- https://docs.cloud.google.com/translate/docs/api-overview
-- https://docs.cloud.google.com/translate/docs/authentication
-- https://docs.cloud.google.com/docs/authentication/api-keys-use
-- https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate
-- https://docs.cloud.google.com/translate/docs/setup
-- https://cloud.google.com/products/translate/pricing
+Work retains limits of two concurrent jobs, a 100-item queue, 20 external requests per minute per process, and a three-second timeout. These are additional usage safeguards, not proof of a pricing tier. A crash after Azure accepts a request but before SQLite commits can require a repeat request after a later owner click; there is no atomic transaction/idempotency guarantee shared with Azure. F0's real resource quota remains the spending boundary.
 
-## Isolation, cache and usage
+Official references checked for this phase:
+- https://azure.microsoft.com/en-us/pricing/details/translator/
+- https://www.microsoft.com/en-us/translator/business/faq/
+- https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/quickstart/rest-api
+- https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/authentication
+- https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/status-response-codes
 
-Translation is queued independently of polling and delivery. An original-language card can be delivered immediately; a completed translation edits that saved message through the existing recovery/delivery path. Owner decisions are read afresh during that render.
-
-Local script analysis and `franc-min` identify likely non-English input; English is skipped. Google auto-detects the actual source language. Language detection on very short/mixed-language text can be imperfect. No phrase dictionary is used for translation.
-
-Only the source title (up to 500 characters) and a selected original-language preview (up to 900 characters) are sent to Google, never the complete long article. These bounds limit translation cost; previews may omit detail, so the source link remains authoritative. Machine translations are labeled and may contain translation errors.
-
-The additive `radar_translations` cache is keyed by observation ID, normalized original-text hash and provider, with a presentation-input version/hash. It stores the selected bounded input, detected language, translated title/preview, status, retry/lease timestamps and sanitized error category. Original source data stays in the observation. The existing 6,000-character discovery/calendar-note bound is retained; only observations store the complete retrieved body. Completed translations and English skips persist across restarts. Identical selected input can reuse a previous successful translation even if only excluded boilerplate changed. Material input changes are translated again without changing the discovery ID.
-
-Work is bounded to two concurrent background jobs, a 100-item queue, 20 external requests per minute per process, and a three-second timeout covering detection/request/response. Queue overflow leaves cards readable and eligible for enrichment on a later sync. Exhausted budgets/provider failures retry on later Radar syncs after backoff. A provider cooldown is shared across jobs for authentication, rate-limit and server errors. Valid representable Retry-After values are respected. Pending leases allow recovery after a restart. A crash after provider acceptance but before persistence can incur a repeated billed request; the provider does not supply a transaction shared with SQLite.
-
-The cache is additive/idempotent and does not delete discoveries or source history. Neither translation nor reclassification rewrites existing Ignore, Watching, Resolved, supporting-source or calendar relationships. Deleted-card recovery and paginated Discord history checkpoints remain in use.
-
-## Existing truncated observations
-
-The previous adapters/store limited text to 6,000 characters. This PR removes those cutoffs for newly fetched observations, within the existing bounded upstream-response size. Previously discarded tails cannot be reconstructed from SQLite alone; they become available if the source is fetched again. No manual production backfill, historical reset or expanded source traversal is included.
+Tests use injected fake providers/HTTP responses. No live translation request or production setup is part of implementation validation.
