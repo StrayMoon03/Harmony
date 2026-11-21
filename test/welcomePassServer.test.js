@@ -474,6 +474,37 @@ test("archived pending and never-linked passes cannot be linked/granted on start
   assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
 });
 
+test("strict selected admission confirms current role and identity; retries do not replay admission", async (t) => {
+  const env = makeEnvironment("strict-selected-admission"); const userId = numericMember(env);
+  const roles = new Set(); env.member.roles.cache = roles;
+  const add = env.member.roles.add; env.member.roles.add = async (role) => { await add(role); roles.add(role.id); };
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const payload = { code: "YS-STRICT01", discordMemberId: userId, discordUsername: "wrong-original-name", requireAdmission: true };
+  const first = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal(first.status, 200); const result = await first.json(); assert.equal(result.admitted, true);
+  assert.deepEqual(result.discordMember, { id: userId, username: env.member.user.username, guildId: env.guild.id });
+  assert.equal(welcomePassStore.getWelcomePassAssignment(payload.code).user_id, userId);
+  const sent = env.sent.length;
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", payload)).status, 200);
+  assert.equal(env.roleGrants, 1); assert.equal(env.sent.length, sent);
+  roles.clear();
+  const missing = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal(missing.status, 409); assert.notEqual((await missing.json()).admitted, true);
+  assert.equal(env.roleGrants, 1); assert.equal(env.sent.length, sent);
+});
+
+test("strict manual-mode or invalid selected admission never acknowledges or records a new approval", async (t) => {
+  const env = makeEnvironment("strict-manual-mode"); const userId = numericMember(env);
+  welcomePassStore.setWelcomePassGrantMode(env.guild.id, "manual");
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const code = "YS-MANUAL01";
+  const manual = await post(baseUrl, "/welcome-pass/approved", { code, discordMemberId: userId, requireAdmission: true });
+  assert.equal(manual.status, 409); assert.equal((await manual.json()).error, "manual_role_required");
+  assert.equal(welcomePassStore.getWelcomePassAssignment(code), null);
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", { code, requireAdmission: true })).status, 400);
+  assert.equal(env.roleGrants, 0); assert.equal(env.sent.length, 0);
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
