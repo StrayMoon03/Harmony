@@ -532,3 +532,121 @@ test.after(() => {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
+
+test("submission preserves and acknowledges uniquely normalized immutable identity without admitting", async (t) => {
+  for (const entered of ["mamascoobz", "MamaScoobz", "Mama Scoobz", "Mama Scoobz 💜", "@Mama Scoobz 💜"]) {
+    const env = makeEnvironment("normalized-identity"); const id = numericMember(env);
+    env.member.user.username = "mamascoobz";
+    env.member.user.globalName = "Mama Scoobz 💜";
+    env.member.displayName = "Mama Scoobz 💜";
+    const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+    const response = await post(baseUrl, "/welcome-pass/submitted", submittedPayload("YS-IDENT001", entered));
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).discordMember, { id, username: "mamascoobz", guildId: env.guild.id });
+    assert.equal(welcomePassStore.getWelcomePassLink("YS-IDENT001").user_id, id);
+    assert.equal(welcomePassStore.getWelcomePassAssignment("YS-IDENT001"), null);
+    assert.equal(env.roleGrants, 0);
+    assert.match(env.sent[0].content, new RegExp(`<@${id}>`));
+  }
+});
+
+test("persisted identity survives restart/name changes and drives existing automatic approval without rematching", async (t) => {
+  const env = makeEnvironment("stable-identity"); const id = numericMember(env);
+  env.member.user.username = "mamascoobz";
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const payload = submittedPayload("YS-STABLE01", "MamaScoobz");
+  await post(baseUrl, "/welcome-pass/submitted", payload);
+  closeDb();
+  env.member.user.username = "renamed.member";
+  const fetch = env.guild.members.fetch;
+  env.guild.members.fetch = async value => { assert.ok(value, "known ID must not trigger a full name lookup"); return fetch(value); };
+  const retry = await post(baseUrl, "/welcome-pass/submitted", { ...payload, discordUsername: "Obsolete name" });
+  assert.deepEqual((await retry.json()).discordMember, { id, username: "renamed.member", guildId: env.guild.id });
+  assert.equal(env.sent.length, 1);
+  const approved = await post(baseUrl, "/welcome-pass/approved", { code: payload.reference, discordUsername: "Obsolete name", approverName: "Kris" });
+  assert.equal(approved.status, 200);
+  assert.equal((await approved.json()).matchStatus, "already_linked");
+  assert.equal(welcomePassStore.getWelcomePassAssignment(payload.reference).user_id, id);
+  assert.equal(env.roleGrants, 1);
+});
+
+test("normalized alias ambiguity, punctuation differences and bots never auto-associate", async (t) => {
+  for (const scenario of ["ambiguous", "punctuation", "bot"]) {
+    const env = makeEnvironment("identity-" + scenario); numericMember(env);
+    env.member.user.username = scenario === "punctuation" ? "mama.scoobz" : "mamascoobz";
+    env.member.displayName = scenario === "punctuation" ? "Other Account" : "Mama Scoobz 💜";
+    env.member.user.globalName = "Other Account";
+    env.member.user.bot = scenario === "bot";
+    if (scenario === "ambiguous") env.guild.members.cache.set("100000000000000002", {
+      id: "100000000000000002", user: { username: "another.member", bot: false }, displayName: "Mama Scoobz 🖤",
+    });
+    const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+    const response = await post(baseUrl, "/welcome-pass/submitted", submittedPayload("YS-UNSAFE01", "MamaScoobz"));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).discordMember, undefined);
+    assert.equal(welcomePassStore.getWelcomePassLink("YS-UNSAFE01"), null);
+    assert.deepEqual(env.sent[0].allowedMentions, { parse: [] });
+    assert.equal(env.roleGrants, 0);
+  }
+});
+
+test("automatic submission association cannot steal another active pass or replace an existing code identity", async (t) => {
+  for (const assigned of [false, true]) {
+    const env = makeEnvironment("identity-conflict"); const id = numericMember(env);
+    welcomePassStore.linkWelcomePassCode({ code: "YS-EXIST001", guildId: env.guild.id, userId: id });
+    if (assigned) { welcomePassStore.recordWelcomePassApproval({ code: "YS-EXIST001", approverName: "Kris" }); welcomePassStore.markWelcomePassAssigned("YS-EXIST001"); }
+    const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+    const response = await post(baseUrl, "/welcome-pass/submitted", submittedPayload("YS-CONFL001", env.member.user.username));
+    assert.equal(response.status, 200); assert.equal((await response.json()).discordMember, undefined);
+    assert.equal(welcomePassStore.getWelcomePassLink("YS-EXIST001").user_id, id);
+    assert.equal(welcomePassStore.getWelcomePassLink("YS-CONFL001"), null);
+    assert.equal(env.roleGrants, 0);
+    const attempted = welcomePassStore.preserveWelcomePassIdentity({ code: "YS-EXIST001", guildId: env.guild.id, userId: "100000000000000003" });
+    assert.equal(attempted.ok, false);
+    assert.equal(welcomePassStore.getWelcomePassLink("YS-EXIST001").user_id, id);
+  }
+});
+
+test("selected-ID Approve & Admit retains its acknowledged admission contract after automatic submission linking", async (t) => {
+  const env = makeEnvironment("identity-admission"); const id = numericMember(env);
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const roles = new Set(); const grant = env.member.roles.add;
+  env.member.roles.cache = roles;
+  env.member.roles.add = async role => { await grant(role); roles.add(role.id || role); };
+  const submission = await post(baseUrl, "/welcome-pass/submitted", submittedPayload("YS-ADMIT001", env.member.user.username));
+  const identity = (await submission.json()).discordMember;
+  const payload = { code: "YS-ADMIT001", discordMemberId: identity.id, requireAdmission: true, approverName: "Kris" };
+  const approved = await post(baseUrl, "/welcome-pass/approved", payload);
+  assert.equal(approved.status, 200);
+  const result = await approved.json(); assert.equal(result.admitted, true); assert.equal(result.discordMember.id, id);
+  const sent = env.sent.length;
+  assert.equal((await post(baseUrl, "/welcome-pass/approved", payload)).status, 200);
+  assert.equal(env.sent.length, sent); assert.equal(env.roleGrants, 1);
+});
+
+test("name-only approval uses the same conservative normalization and never admits an ambiguous member", async (t) => {
+  for (const ambiguous of [false, true]) {
+    const env = makeEnvironment("approval-normalization"); const id = numericMember(env);
+    env.member.user.username = "mamascoobz"; env.member.displayName = "Mama Scoobz 💜";
+    if (ambiguous) env.guild.members.cache.set("100000000000000002", { id: "100000000000000002", user: { username: "another.member", bot: false }, displayName: "Mama Scoobz 🖤" });
+    const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+    const approved = await post(baseUrl, "/welcome-pass/approved", { code: "YS-NORMAL01", discordUsername: "Mama Scoobz 💜", approverName: "Kris" });
+    assert.equal(approved.status, ambiguous ? 202 : 200);
+    assert.equal((await approved.json()).matchStatus, ambiguous ? "ambiguous" : "linked");
+    assert.equal(env.roleGrants, ambiguous ? 0 : 1);
+    assert.equal(welcomePassStore.getWelcomePassAssignment("YS-NORMAL01").user_id, ambiguous ? null : id);
+  }
+});
+
+test("notification failure retains identity and retry returns it without replaying an uncertain send", async (t) => {
+  const env = makeEnvironment("identity-notification-failure"); const id = numericMember(env);
+  let sends = 0;
+  env.guild.channels.cache.get('review-room').send = async () => { sends++; throw new Error('uncertain Discord send'); };
+  const { server, baseUrl } = await startServer(env.client); t.after(() => server.close());
+  const payload = submittedPayload("YS-FAILID01", env.member.user.username);
+  assert.equal((await post(baseUrl, "/welcome-pass/submitted", payload)).status, 502);
+  assert.equal(welcomePassStore.getWelcomePassLink(payload.reference).user_id, id);
+  const retry = await post(baseUrl, "/welcome-pass/submitted", payload);
+  assert.equal(retry.status, 200); assert.equal((await retry.json()).discordMember.id, id);
+  assert.equal(sends, 1); assert.equal(env.roleGrants, 0);
+});

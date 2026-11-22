@@ -187,7 +187,24 @@ function linkWelcomePassCode({ code, guildId, userId }) {
   return { ok: true, code: normalizedCode };
 }
 
-// Admin-selected identity is only linked during explicit approval, never on edit.
+function getWelcomePassLink(code) {
+  return getDb().prepare("SELECT * FROM welcome_pass_links WHERE code=?").get(normalizeWelcomePassCode(code)) || null;
+}
+// A submission may reserve an identity without recording approval. Unlike the
+// self-service/admin correction paths, automatic resolution never replaces a link.
+function preserveWelcomePassIdentity(input) {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = getWelcomePassLink(input.code);
+    const checked = existing && (existing.guild_id !== input.guildId || existing.user_id !== input.userId)
+      ? { ok: false, reason: "claimed" } : checkWelcomePassMember(input);
+    const result = checked.ok ? linkWelcomePassCode(input) : checked;
+    db.exec("COMMIT");
+    return result;
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+// Admin-selected corrections are still linked only during explicit approval.
 function checkWelcomePassMember({ code, guildId, userId }) {
   if (getWelcomePassDeparture(code)) return { ok: false, reason: "departed" };
   const db = getDb();
@@ -340,6 +357,8 @@ module.exports = {
   setWelcomePassBiasRole,
   removeWelcomePassBiasRole,
   linkWelcomePassCode,
+  getWelcomePassLink,
+  preserveWelcomePassIdentity,
   recordWelcomePassApproval,
   archiveWelcomePassDeparture,
   getWelcomePassDeparture,
