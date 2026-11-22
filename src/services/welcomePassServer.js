@@ -142,7 +142,7 @@ function startWelcomePassServer(client) {
           submittedAt,
         });
         if (result.status === "notified" || result.status === "already_notified" || result.status === "already_attempted") {
-          sendJson(response, 200, { ok: true, status: result.status });
+          sendJson(response, 200, { ok: true, status: result.status, ...(result.discordMember ? { discordMember: result.discordMember } : {}) });
           return;
         }
         if (result.status === "delivery_failed") {

@@ -2,7 +2,7 @@ const {
   getWelcomePassAssignment,
   getWelcomePassSettings,
   listWelcomePassSettings,
-  linkWelcomePassCode,
+  preserveWelcomePassIdentity,
   listPendingWelcomePassApprovals,
   markWelcomePassAssigned,
   getPendingWelcomePassAssignmentForMember,
@@ -25,12 +25,7 @@ async function fetchTextChannel(guild, channelId) {
 }
 
 
-function normalizeDiscordUsername(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^@/, "")
-    .toLocaleLowerCase();
-}
+const { normalizeDiscordUsername, matchingMembers } = require("./welcomePassIdentity");
 
 function mentionAliases(member) {
   return [member.displayName, member.user?.globalName, member.user?.username]
@@ -221,17 +216,7 @@ async function autoLinkWelcomePassByDiscordUsername(
   const members = await guild.members.fetch().catch(() => null);
   if (!members) return { status: "member_list_unavailable" };
 
-  const matches = [...members.values()].filter((member) => {
-    if (member.user.bot) return false;
-    const aliases = [
-      member.user.username,
-      member.user.globalName,
-      member.displayName,
-    ]
-      .map(normalizeDiscordUsername)
-      .filter(Boolean);
-    return aliases.includes(normalizedUsername);
-  });
+  const matches = matchingMembers(members, discordUsername);
 
   if (matches.length !== 1) {
     await notifyDiscordUsernameIssue(
@@ -246,7 +231,7 @@ async function autoLinkWelcomePassByDiscordUsername(
   }
 
   const member = matches[0];
-  const linked = linkWelcomePassCode({
+  const linked = preserveWelcomePassIdentity({
     code,
     guildId: guild.id,
     userId: member.id,
