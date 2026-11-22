@@ -15,13 +15,17 @@ const handoffs = new Map();
 const EXISTENCE_CHECK_MS = 60 * 60 * 1000;
 function payload(discovery, sources, options = {}) {
   const source = presentation.primarySource(discovery, sources);
-  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null), { translationConfigured: translation.googleProvider().available });
+  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null), { translationConfigured: translation.azureProvider().available, translationUseful: options.translationUseful });
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:ignore:" + discovery.id).setLabel("Ignore").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:watch:" + discovery.id).setLabel("Watch for Details").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:calendar:" + discovery.id).setLabel("Add to Calendar").setStyle(ButtonStyle.Primary)
       .setDisabled(Boolean(discovery.handoff_result)),
   );
+  if (source && view.needsTranslation && !view.translated) controls.addComponents(
+    new ButtonBuilder().setCustomId("harmony-radar:translate:" + discovery.id).setLabel(
+      view.language === "Translation pending" ? "Translating…" : "Translate to English")
+      .setStyle(ButtonStyle.Secondary).setDisabled(view.language === "Translation pending"));
   if (source) controls.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Original announcement").setURL(source.canonical_url));
   const embed = new EmbedBuilder().setTitle(view.title)
     .setDescription(view.summary + (view.language ? "\n\n*" + view.language + "*" : ""))
@@ -64,7 +68,7 @@ async function recoverMessage(channel, client, discovery, reference) {
   store.saveRecoveryProgress(discovery.id, channel.id, before);
   throw Object.assign(new Error("Radar message recovery is continuing through saved channel history."), { code: "RADAR_RECOVERY_PENDING" });
 }
-async function syncRadarChannel(client, guildId, { now = new Date() } = {}) {
+async function syncRadarChannel(client, guildId, { now = new Date(), priorityDiscoveryId = null } = {}) {
   if (deliveries.has(guildId)) return deliveries.get(guildId);
   const job = (async () => {
     const settings = store.getSettings(guildId);
@@ -73,26 +77,20 @@ async function syncRadarChannel(client, guildId, { now = new Date() } = {}) {
       const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
       const channel = guild.channels.cache.get(settings.channel_id) || await guild.channels.fetch(settings.channel_id);
       if (!channel?.isTextBased() || !channel.messages?.fetch) throw new Error("Radar destination is unavailable.");
-      const onTranslated = () => {
-        const active = deliveries.get(guildId);
-        return Promise.resolve(active).then(() => syncRadarChannel(client, guildId));
-      };
-      const queue = store.listDiscoveries(guildId).map((saved) => {
+      const queue = (await Promise.all(store.listDiscoveries(guildId).map(async (saved) => {
         const sources = store.supportingSources(saved.id);
         const source = presentation.primarySource(saved, sources);
         const discovery = source ? store.saveClassification(guildId, saved.id, classifyObservation(source, { title: source.title, summary: source.summary, metadata: source.metadata, url: source.canonical_url })) : saved;
-        // Queue enrichment without awaiting it; original-language cards and polling progress now.
-        if (source) translation.enqueue(source, guildId, onTranslated);
-        const body = payload(discovery, sources);
+        const body = payload(discovery, sources, { translationUseful: source ? await translation.useful(source) : false });
         const fingerprint = store.hash(body);
         const reference = store.delivery(discovery.id, channel.id);
         const changed = reference.delivered_hash !== fingerprint || !reference.message_id;
         return { discovery, body, fingerprint, reference, changed };
-      }).filter(({ reference, changed }) => changed || !reference.checked_at ||
+      }))).filter(({ reference, changed }) => changed || !reference.checked_at ||
         now.getTime() - Date.parse(reference.checked_at) >= EXISTENCE_CHECK_MS)
         // New/edited cards first, then oldest existence checks: a busy room must
         // not permanently starve later cards behind the same first twenty.
-        .sort((a, b) => Number(b.changed) - Number(a.changed) ||
+        .sort((a, b) => Number(b.discovery.id === priorityDiscoveryId) - Number(a.discovery.id === priorityDiscoveryId) || Number(b.changed) - Number(a.changed) ||
           Date.parse(a.reference.checked_at || a.reference.started_at) - Date.parse(b.reference.checked_at || b.reference.started_at) || a.discovery.id - b.discovery.id);
       let failure = null;
       for (const { discovery, body, fingerprint, reference } of queue.slice(0, 20)) {
@@ -193,13 +191,13 @@ async function handoff(client, guildId, discoveryId, actorId, details) {
   try { return await job; } finally { if (handoffs.get(key) === job) handoffs.delete(key); }
 }
 async function handleRadarInteraction(interaction) {
-  const match = /^harmony-radar:(ignore|watch|calendar|handoff):(\d+)$/.exec(interaction.customId || "");
+  const match = /^harmony-radar:(ignore|watch|calendar|handoff|translate):(\d+)$/.exec(interaction.customId || "");
   if (!match) return false;
   const [, action, rawId] = match;
   const isModal = interaction.isModalSubmit?.();
   if ((action === "handoff") !== Boolean(isModal)) return false;
   if (action !== "calendar") {
-    if (isModal) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (isModal || action === "translate") await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     else await interaction.deferUpdate();
   }
   const capabilities = await resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
@@ -209,9 +207,34 @@ async function handleRadarInteraction(interaction) {
       interaction.channelId !== settings.channel_id) {
     const content = "Use Radar from its configured Harmony server channel with admin access.";
     if (interaction.deferred) {
-      if (isModal) await interaction.editReply(content);
+      if (isModal || action === "translate") await interaction.editReply(content);
       else await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
     } else await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (action === "translate") {
+    if (!capabilities.isGuildOwner) {
+      await interaction.editReply("Only the Harmony server owner can request translation.");
+      return true;
+    }
+    const source = presentation.primarySource(discovery, store.supportingSources(discovery.id));
+    if (!source) { await interaction.editReply("The original source is unavailable. Discovery remains saved."); return true; }
+    await interaction.editReply("Translating to English…");
+    const work = translation.request(source);
+    await syncRadarChannel(interaction.client, interaction.guildId, { priorityDiscoveryId: discovery.id });
+    const result = await work;
+    const latest = presentation.primarySource(store.getDiscovery(interaction.guildId, discovery.id), store.supportingSources(discovery.id));
+    const unchanged = latest && latest.id === source.id && store.hash([latest.title, latest.summary]) === store.hash([source.title, source.summary]);
+    await syncRadarChannel(interaction.client, interaction.guildId, { priorityDiscoveryId: discovery.id });
+    await interaction.editReply(!unchanged ? "Source changed during translation. No stale result was applied; request translation of the current source."
+      : result.status === "ready" ? (store.getSettings(interaction.guildId)?.delivery_error
+        ? "English translation saved; Discord card update unavailable. Cached result and discovery remain saved."
+        : "English translation ready. Radar card refreshed.")
+      : result.status === "skipped" ? "This source already appears to be English."
+      : result.error === "translator_free_quota_exhausted" ? "Free translation allowance exhausted. No automatic retry or provider fallback."
+      : result.status === "pending" ? "Translation is already in progress. No additional request was sent."
+      : result.status === "unavailable" ? "Translation not configured. Discovery remains saved."
+      : "Translation unavailable" + (result.error ? " (" + result.error + ")" : "") + ". Discovery remains saved; no automatic retry.");
     return true;
   }
   if (action === "calendar") {
