@@ -39,7 +39,7 @@ function preview(body, title = "", limit = SUMMARY_LIMIT) {
   return clip([unique[0], dated || unique[1]].filter(Boolean).join(" "), limit);
 }
 // Explicitly labelled source evidence only: no inferred year, time zone or calendar fields.
-function candidateTiming(text) {
+function translationTimingEvidence(text) {
   const dates = /(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:\d{4}年)?\d{1,2}月\d{1,2}日|\d{1,2}월\s*\d{1,2}일)(?:\s*\d{1,2}:\d{2}\s*(?:AM|PM|JST|KST|UTC)?)?|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}:\d{2}\s*(?:AM|PM|JST|KST|UTC)?)?/gi;
   const labels = [
     ["Application closes", /applications? (?:close|end)|応募締切|申込締切|受付終了|신청 마감/i],
@@ -60,6 +60,50 @@ function candidateTiming(text) {
       const value = label[0] + ": " + found.join(" → ");
       if (!result.includes(value)) result.push(value);
     }
+    if (result.length === 3) break;
+  }
+  return result;
+}
+// Display-only semantics. Keep the legacy translation evidence above byte-stable:
+// changing that request input would invalidate already-completed translations.
+function candidateTiming(text) {
+  const dates = /(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?:\d{4}年)?\d{1,2}月\d{1,2}日|\d{1,2}월\s*\d{1,2}일)(?:\s*\d{1,2}:\d{2}\s*(?:AM|PM|JST|KST|UTC)?)?|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}:\d{2}\s*(?:AM|PM|JST|KST|UTC)?)?/gi;
+  const result = [];
+  for (const sentence of String(text || "").slice(0, 20000).replace(/https?:\/\/[^\s<>]+/giu, "").split(/[。！？!?;；\n]|\.(?=\s|$)/u)) {
+    if (sentence.length > 350 || /published|posted|publication|掲載日|投稿日|公開日/i.test(sentence)) continue;
+    const found = sentence.match(dates);
+    if (found?.length !== 1) continue;
+    const deadline = /\b(?:deadlines?|due|closes?|ends?|until|by|before)\b|締切|期限|受付終了|まで|마감|까지/i.test(sentence);
+    const application = /\b(?:applications?|apply|applicants?)\b|応募|申込|申し込み|受付|신청|응모/i.test(sentence);
+    const registration = /\bregistrations?\b|登録/i.test(sentence);
+    const preorder = /\bpre[- ]?orders?\b|予約販売|예약판매/i.test(sentence);
+    const order = /\borders?\b|注文|주문/i.test(sentence);
+    const tickets = /\btickets?\b|ticketing|チケット|티켓/i.test(sentence);
+    const subjects = [application && "Application", registration && "Registration", (preorder || order) && (preorder ? "Preorder" : "Order")].filter(Boolean);
+    if (!subjects.length && tickets) subjects.push("Ticket sales");
+    let label;
+    if (deadline && subjects.length === 1) label = subjects[0] + " deadline";
+    else if (subjects.length > 1) continue;
+    else if (subjects.length) {
+      if (/\b(?:opens?|starts?|begins?)\b|on sale|受付開始|신청 시작/i.test(sentence)) label = subjects[0] + (subjects[0] === "Ticket sales" ? " open" : " opens");
+      else continue; // Mentioning an application for an event proves no event date.
+    } else if (deadline) {
+      if (/\b(?:deadlines?|due)\b|締切|期限|마감/i.test(sentence)) label = "Deadline";
+      else continue;
+    }
+    else {
+      const content = /\b(?:video|content|episode|music video)\b.{0,20}\bpremieres?\b/i.test(sentence);
+      const release = content || /\brelease(?: date|s|d)?\b|発売|リリース|발매/i.test(sentence);
+      // An incidental 'event' noun is insufficient: require explicit date/held/on
+      // wording. Do not resolve two competing meanings or multiple dates.
+      const event = /\b(?:event|concert|listening party)\b(?:\s*:|\s+date\b|.{0,30}\b(?:on|held|takes place|scheduled)\b)|開催|公演|공연/i.test(sentence);
+      if (release && /\b(?:event|concert|listening party)\b|開催|公演|공연/i.test(sentence)) continue;
+      if (release && !event) label = content ? "Content release" : "Release";
+      else if (event && !release) label = "Event";
+    }
+    if (!label) continue;
+    const value = label + ": " + found[0];
+    if (!result.includes(value)) result.push(value);
     if (result.length === 3) break;
   }
   return result;
@@ -91,7 +135,7 @@ function primarySource(discovery, sources) {
 }
 function translationInput(source) {
   const summary = preview(source.summary, source.title, TRANSLATION_INPUT_LIMIT);
-  const timing = candidateTiming(source.title + "\n" + source.summary).filter(value => !summary.includes(value.slice(value.indexOf(": ") + 2))).join("; ");
+  const timing = translationTimingEvidence(source.title + "\n" + source.summary).filter(value => !summary.includes(value.slice(value.indexOf(": ") + 2))).join("; ");
   // Reserve bounded space for already identified evidence; never translate the
   // full article to find a date, infer a year or write calendar fields.
   const evidence = timing ? "\n" + timing : "";
@@ -117,8 +161,17 @@ function cardView(discovery, source, translation, options = {}) {
     summary = "Open the official source for the original announcement and complete details.";
   }
   const timingText = translated ? translation.translated_title + "\n" + translation.translated_summary : originalTitle + "\n" + originalSummary;
+  let timing = candidateTiming(timingText);
+  // Older translation inputs may contain an appended, synthesized Event label.
+  // It is not independent evidence: require the stricter original-source check
+  // to corroborate that label before displaying translated Event timing.
+  if (translated && translation.input_summary?.includes("\n")) {
+    const suppliedEvents = translation.input_summary.split("\n").slice(1).join("; ").split("; ").filter(line => line.startsWith("Event: "));
+    const originalTiming = candidateTiming(originalTitle + "\n" + originalSummary);
+    if (suppliedEvents.some(line => !originalTiming.includes(line))) timing = timing.filter(line => !line.startsWith("Event: "));
+  }
   return { title: cardText(title, 256) || "Official announcement",
     summary: cardText(summary, SUMMARY_LIMIT) || "Open the original announcement for complete details.",
-    language, needsTranslation, translated, timing: candidateTiming(timingText) };
+    language, needsTranslation, translated, timing };
 }
 module.exports = { VERSION, SUMMARY_LIMIT, TRANSLATION_INPUT_LIMIT, normalize, clip, cleanContent, preview, candidateTiming, formatDate, cardText, primarySource, translationInput, cardView };
