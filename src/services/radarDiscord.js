@@ -119,7 +119,7 @@ function calendarModal(discovery) {
   const modal = new ModalBuilder().setCustomId("harmony-radar:handoff:" + discovery.id).setTitle("Send to calendar review");
   for (const [id, label, value, required] of [
     ["date", "Calendar date YYYY-MM-DD", discovery.event_date || "", true],
-    ["time", "Local time HH:MM (blank means all-day)", "", false],
+    ["time", "Local time HH:MM (blank = date only)", "", false],
     ["timezone", "Time zone, such as America/New_York", discovery.event_timezone || "", false],
   ]) {
     const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(80);
@@ -162,6 +162,7 @@ async function performHandoff(client, guildId, discoveryId, actorId, details) {
     proposedEventAt: at?.toISOString() || null, proposedEventTimezone: timezone || null,
     sourceUrl: source.canonical_url, sourceProvider: "skz-radar", discoveryKey: "radar:" + guildId + ":" + discovery.id,
     sourceType: "radar_handoff", skipEnrichment: true, submitterId: actorId, submittedNote: discovery.summary,
+    sourceMetadata: JSON.stringify({ allDay: !time }),
     sourceProvenance: sources.map((item) => ({
       provider: item.provider, sourceName: item.provider, sourceId: item.item_id,
       sourceUrl: item.canonical_url, originalTitle: item.title, retrievedAt: item.discovered_at,

@@ -1000,3 +1000,68 @@ test("an exact former primary identity returning after an edit restores its own 
   assert.equal(store.getDiscovery(s.guild_id, second.discovery.id).correlation_key, null);
   assert.equal(store.listDiscoveries(s.guild_id).length, 2);
 });
+
+test("Radar date-only handoff carries explicit existing all-day metadata with no invented time or timezone", async () => {
+  const { s, discovery, f, target } = handoffFixture();
+  const scheduler = require("../src/services/eventSchedulerService");
+  const before = store.getDiscovery(s.guild_id, discovery.id);
+  const modal = discord.calendarModal(before).toJSON();
+  const timeField = modal.components.flatMap(row => row.components).find(input => input.custom_id === "time");
+  assert.equal(timeField.required, false); assert.match(timeField.label, /date only/); assert.ok(!timeField.value);
+  const { record: candidate } = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2026-11-25", time: "", timezone: "" });
+  assert.equal(candidate.proposed_event_date, "2026-11-25");
+  assert.equal(candidate.proposed_event_at, null); assert.equal(candidate.proposed_event_timezone, null);
+  assert.equal(JSON.parse(candidate.source_metadata).allDay, true);
+  assert.match(scheduler.candidateReviewPayload(candidate, []).content, /All-day: Yes/);
+  assert.doesNotMatch(scheduler.candidateReviewPayload(candidate, []).content, /Still missing:.*event time/);
+  assert.equal(candidate.status, "open");
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM scheduled_events WHERE guild_id=?").get(target.guild.id).n, 0);
+  const saved = store.getDiscovery(s.guild_id, discovery.id);
+  assert.equal(saved.event_at, null); assert.equal(saved.event_date, "2026-11-25");
+  assert.equal(target.sent.length, 0);
+  // Only the later, explicit existing calendar approval creates an event.
+  const replies = [];
+  await scheduler.handleEventSchedulerInteraction({
+    customId: `harmony-manager:candidate:addmodal:${candidate.id}:tz:none`, guildId: target.guild.id, guild: target.guild,
+    client: f.client, user: { id: "owner" }, memberPermissions: { has: () => true },
+    isButton: () => false, isStringSelectMenu: () => false, isModalSubmit: () => true,
+    fields: { getTextInputValue: key => ({ title: "Date-only album release", "event-date": "2026-11-25", "event-time": "", description: "Source date only" })[key] || "" },
+    reply: async payload => { replies.push(payload); },
+  });
+  assert.match(replies.at(-1).content, /Added/);
+  const event = getDb().prepare("SELECT * FROM scheduled_events WHERE guild_id=?").get(target.guild.id);
+  assert.equal(event.event_date, "2026-11-25"); assert.equal(event.event_at, null); assert.equal(event.event_timezone, null); assert.equal(event.all_day, 1);
+  assert.equal(event.discord_event_id, null); assert.equal(event.pending_count ?? 0, 0);
+});
+test("Radar timed handoff preserves explicitly entered time/timezone and never infers missing timing", async () => {
+  for (const time of ["23:59", "00:00", "12:00"]) {
+    const { s, discovery, f, target } = handoffFixture();
+    const outcome = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2027-01-30", time, timezone: "Asia/Tokyo" });
+    const candidate = outcome.record;
+    assert.equal(JSON.parse(candidate.source_metadata).allDay, false);
+    assert.equal(candidate.proposed_event_date, "2027-01-30"); assert.equal(candidate.proposed_event_timezone, "Asia/Tokyo");
+    const converted = new Date(candidate.proposed_event_at);
+    assert.equal(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(converted), time);
+    assert.equal(candidate.status, "open");
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM scheduled_events WHERE guild_id=?").get(target.guild.id).n, 0);
+  }
+  for (const details of [{ date: "2027-01-30", time: "23:59", timezone: "" }, { date: "2027-01-30", time: "24:00", timezone: "Asia/Tokyo" }, { date: "", time: "", timezone: "" }]) {
+    const { s, discovery, f, target } = handoffFixture();
+    await assert.rejects(discord.handoff(f.client, s.guild_id, discovery.id, "owner", details));
+    assert.equal(calendar.listCalendarCandidates(target.guild.id).length, 0);
+    assert.equal(store.getDiscovery(s.guild_id, discovery.id).event_at, null);
+    assert.equal(store.getDiscovery(s.guild_id, discovery.id).event_date, null);
+  }
+});
+
+test("date-only Radar handoff cannot relabel an existing canonical timed candidate as all-day", async () => {
+  const { s, discovery, f, target } = handoffFixture();
+  const url = store.supportingSources(discovery.id)[0].canonical_url;
+  const existing = calendar.createOrGetCalendarCandidate({ guildId: target.guild.id, title: "Canonical timed event", sourceUrl: url,
+    proposedEventDate: "2026-12-20", proposedEventAt: "2026-12-20T11:00:00.000Z", proposedEventTimezone: "Asia/Seoul" }).candidate;
+  const { record } = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2026-11-25", time: "", timezone: "" });
+  assert.equal(record.id, existing.id); assert.equal(record.proposed_event_date, existing.proposed_event_date);
+  assert.equal(record.proposed_event_at, existing.proposed_event_at); assert.equal(record.proposed_event_timezone, existing.proposed_event_timezone);
+  assert.notEqual(JSON.parse(record.source_metadata || "{}").allDay, true);
+  assert.equal(store.getDiscovery(s.guild_id, discovery.id).event_at, existing.proposed_event_at);
+});

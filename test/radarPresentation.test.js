@@ -653,7 +653,7 @@ test("candidate timing preserves event/release/application/deadline meaning with
   for (const [text, expected] of [
     ["Event date: November 25, 2026 at 19:00 JST.", "Event: November 25, 2026 at 19:00 JST"],
     ["Release date: 2026-11-25.", "Release: 2026-11-25"],
-    ["Applications open November 20. Applications close November 24.", "Application opens: November 20|Application closes: November 24"],
+    ["Applications open November 20. Applications close November 24.", "Application opens: November 20|Application deadline: November 24"],
     ["Deadline: November 24 at 18:00 KST.", "Deadline: November 24 at 18:00 KST"],
     ["11月24日発売決定。", "Release: 11月24日"],
     ["11월 24일 발매.", "Release: 11월 24일"],
@@ -922,4 +922,91 @@ test("short Latin-language input remains uncertain and offers owner-triggered tr
   const body = discord.payload(discovery, [original], { translationUseful: await translation.useful(original) });
   assert.ok(body.components[0].toJSON().components.some(button => button.label === "Translate to English"));
   assert.equal(translation.current(original), null);
+});
+
+test("informational timing distinguishes an event's application deadline from release/event dates", () => {
+  const text = "Album release: November 25, 2026. Applications for this event must be submitted by November 15 at 23:59. Event date: December 20, 2026. Event date: January 30, 2027.";
+  assert.deepEqual(presentation.candidateTiming(text), [
+    "Release: November 25, 2026", "Application deadline: November 15 at 23:59", "Event: December 20, 2026",
+  ]);
+  assert.deepEqual(presentation.candidateTiming("Registration for the event is accepted until November 15 at 23:59."), ["Registration deadline: November 15 at 23:59"]);
+  assert.deepEqual(presentation.candidateTiming("Orders for the concert must be placed by November 15 at 23:59."), ["Order deadline: November 15 at 23:59"]);
+});
+test("ambiguous event mentions and competing timing meanings are omitted", () => {
+  for (const text of ["The eventual announcement on November 15.", "This event has information for November 15.", "Applications close November 15 for the event on December 20.", "Album release and event: November 25.", "Please apply for the event on November 15."]) {
+    assert.deepEqual(presentation.candidateTiming(text), [], text);
+  }
+});
+
+test("clear deadline wording retains its subject in English, Japanese and Korean", () => {
+  for (const [text, expected] of [
+    ["Application deadline: November 15 at 23:59.", "Application deadline: November 15 at 23:59"],
+    ["Registration closes November 15 at 23:59.", "Registration deadline: November 15 at 23:59"],
+    ["Order deadline: November 15 at 23:59.", "Order deadline: November 15 at 23:59"],
+    ["公演の応募期限は11月15日23:59です。", "Application deadline: 11月15日23:59"],
+    ["공연 신청 마감: 11월 15일 23:59.", "Application deadline: 11월 15일 23:59"],
+    ["Event: December 20, 2026.", "Event: December 20, 2026"],
+    ["Event date: January 30, 2027.", "Event: January 30, 2027"],
+  ]) assert.deepEqual(presentation.candidateTiming(text), [expected]);
+  for (const text of ["This event closes November 15.", "Release by November 25.", "Published November 15 for the event."]) assert.deepEqual(presentation.candidateTiming(text), []);
+});
+test("timing correction leaves existing translation request/cache identity byte-stable", () => {
+  const value = { title: "Details", summary: "Details ".repeat(200) + ". Applications for this event must be submitted by November 15 at 23:59." };
+  // Golden input digest captured from deployed PR #315 before this correction.
+  const { createHash } = require("node:crypto");
+  assert.equal(createHash("sha256").update(JSON.stringify(presentation.translationInput(value))).digest("hex"), "08ec0e95d2361594726505d5b07878102859d570d64dfd0e057583f39f00f23b");
+  const input = presentation.translationInput(value);
+  assert.match(input.summary, /\nEvent: November 15 at 23:59$/);
+  // Legacy synthesized evidence is not proof that this is the event's date.
+  const view = presentation.cardView({ category: "Event" }, value, { status: "ready", provider: "azure", input_summary: input.summary,
+    translated_title: "Details", translated_summary: "Details will follow.\nEvent: November 15 at 23:59." });
+  assert.deepEqual(view.timing, []);
+  assert.equal(view.title, "Details"); assert.match(view.summary, /will follow/);
+});
+test("cached translated card fixes labels without modifying originals, decisions, cache, delivery or calendar truth", async (t) => {
+  const s = source(); const value = item({ title: "アルバムとイベントのお知らせ", summary: "元の発表内容は保持されます。" });
+  const { discovery } = ingest(s, value); store.setReviewState(s.guild_id, discovery.id, "Watching");
+  const original = cachedSource(discovery);
+  translationStore.claim(original, "azure", Date.now(), 1000);
+  translationStore.save(original, "azure", { status: "ready", language: "ja", title: "Album and event details", summary: "Album release: November 25, 2026. Applications for the event must be submitted by November 15 at 23:59. Event date: December 20, 2026." });
+  const before = store.getDiscovery(s.guild_id, discovery.id);
+  const cached = translationStore.get(original, "azure");
+  const worker = translation.createTranslationService({ provider: () => ({ id: "azure", available: true, translate: () => assert.fail("No translation request during re-render") }) });
+  useWorker(t, worker); const f = fixture(s.guild_id);
+  await discord.syncRadarChannel(f.client, s.guild_id);
+  const messageId = store.delivery(discovery.id, "radar-channel").message_id;
+  await discord.syncRadarChannel(f.client, s.guild_id);
+  const embed = f.sent[0].embeds[0];
+  const timing = embed.fields.find(field => field.name === "Important timing").value;
+  assert.match(timing, /Application deadline: November 15 at 23:59/);
+  assert.match(timing, /Release: November 25, 2026/);
+  assert.match(timing, /Event: December 20, 2026/);
+  assert.doesNotMatch(timing, /Event: November 15/);
+  assert.equal(embed.title, cached.translated_title);
+  assert.equal(embed.description, presentation.cardText(presentation.preview(cached.translated_summary, cached.translated_title), presentation.SUMMARY_LIMIT) + "\n\n*Machine translated to English · Azure Translator*");
+  assert.deepEqual(translationStore.get(original, "azure"), cached);
+  assert.deepEqual(cachedSource(discovery), original);
+  assert.deepEqual(store.getDiscovery(s.guild_id, discovery.id), before);
+  assert.equal(store.delivery(discovery.id, "radar-channel").message_id, messageId);
+  assert.equal(f.sent.length, 1);
+});
+
+test("legacy appended Event evidence remains displayable when original source corroborates its meaning", () => {
+  const source = { title: "Details", summary: "Details ".repeat(200) + ". Event date: December 20, 2026." };
+  const input = presentation.translationInput(source);
+  assert.match(input.summary, /\nEvent: December 20, 2026$/);
+  const view = presentation.cardView({ category: "Event" }, source, { status: "ready", provider: "azure", input_summary: input.summary,
+    translated_title: "Details", translated_summary: "Details will follow.\nEvent: December 20, 2026." });
+  assert.deepEqual(view.timing, ["Event: December 20, 2026"]);
+});
+
+test("owner timing addendum retains release/content date precision and opening/deadline semantics", () => {
+  for (const [text, expected] of [
+    ["Album release: November 25, 2026.", "Release: November 25, 2026"],
+    ["Video premieres November 25, 2026.", "Content release: November 25, 2026"],
+    ["Preorders open November 15 at 23:59.", "Preorder opens: November 15 at 23:59"],
+    ["Ticket sales start November 15 at 23:59.", "Ticket sales open: November 15 at 23:59"],
+    ["Applications open November 15.", "Application opens: November 15"],
+  ]) assert.deepEqual(presentation.candidateTiming(text), [expected]);
+  assert.doesNotMatch(presentation.candidateTiming("Album release: November 25, 2026.").join(""), /00:00|12:00|UTC|JST/);
 });

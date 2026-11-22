@@ -388,7 +388,13 @@ function createOrGetCalendarCandidate({ guildId, title = null, proposedEventAt =
     try { existingExplicitAllDay = JSON.parse(existing.source_metadata || '{}')?.allDay === true; } catch { /* Unknown metadata must not block safe field enrichment. */ }
     const fillMissingTime = !updateSchedule && !existingExplicitAllDay && !existing.proposed_event_at && Boolean(proposedEventAt);
     const fillMissingTimezone = !updateSchedule && !existingExplicitAllDay && !existing.proposed_event_timezone && Boolean(proposedEventTimezone);
-    const mergedMetadata = mergeDiscoveryMetadata(existing.source_metadata, sourceMetadata, updateSchedule);
+    let mergedMetadata = mergeDiscoveryMetadata(existing.source_metadata, sourceMetadata, updateSchedule);
+    // A Radar date-only submission may match an already-timed candidate. Keep
+    // the canonical time authoritative instead of marking that record all-day.
+    if (sourceProvider === 'skz-radar' && existing.proposed_event_at && !updateSchedule) {
+      const metadata = JSON.parse(mergedMetadata || '{}');
+      if (metadata.allDay === true) mergedMetadata = JSON.stringify({ ...metadata, allDay: false });
+    }
     db.prepare(`UPDATE calendar_candidates SET
       source_provenance = ?,
       title = CASE WHEN ? THEN ? ELSE COALESCE(title, ?) END,
