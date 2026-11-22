@@ -126,7 +126,7 @@ test("candidate Link Existing is match-aware and atomic", async () => {
   const candidate = store.createOrGetCalendarCandidate({ guildId, title: "SKZ Fan Event", proposedEventDate: "2026-12-01", sourceUrl: "https://official.example/submitted" }).candidate;
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(review);
-  assert.match(review.replyPayload.content, /Likely calendar matches/);
+  assert.match(review.replyPayload.content, /existing calendar match/);
   const link = managerInteraction(guildId, client, `harmony-manager:candidate:link:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(link);
   assert.match(link.updatePayload.content, /Linked this candidate/);
@@ -328,10 +328,10 @@ test("candidate storage and private review preserve extracted date range and tim
   }).candidate;
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(review);
-  assert.match(review.replyPayload.content, /Harmony extracted start date: 2026-10-22/);
-  assert.match(review.replyPayload.content, /Harmony extracted end date: 2026-11-08/);
-  assert.match(review.replyPayload.content, /Harmony extracted timezone: Asia\/Seoul/);
-  assert.match(review.replyPayload.content, /Event time: Not provided/);
+  assert.match(review.replyPayload.content, /Date: October 22, 2026/);
+  assert.match(review.replyPayload.content, /November 8, 2026/);
+  assert.match(review.replyPayload.content, /Time: Not confirmed/);
+  assert.equal(store.getCalendarCandidate(guildId, candidate.id).proposed_event_timezone, "Asia/Seoul");
 });
 
 test("social parser supports Korean-style single dates and cross-year ranges", () => {
@@ -431,13 +431,13 @@ test("discovered all-day candidate is compact, reviewed in-place, and preserves 
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(review);
   assert.equal(review.replyPayload, undefined);
-  assert.match(review.updatePayload.content, /All-day: Yes/);
-  assert.doesNotMatch(review.updatePayload.content, /Still missing: event time/);
+  assert.match(review.updatePayload.content, /Time: All Day/);
+  assert.doesNotMatch(review.updatePayload.content, /Time: Not confirmed/);
   assert.doesNotMatch(review.updatePayload.content, /Event time: 00:00/);
-  assert.match(review.updatePayload.content, /Still missing: nothing obvious/);
+  assert.match(review.updatePayload.content, /Awaiting approval/);
   assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Add to Calendar")));
   assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Dismiss")));
-  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "View Source")));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data?.label === "Original Source")));
   assert.equal(store.listEvents(guildId).length, 0);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
   const dismiss = managerInteraction(guildId, client, `harmony-manager:candidate:dismiss:${candidate.id}`, { kind: "button" });
@@ -460,7 +460,7 @@ test("normal timed candidate still uses ephemeral review and reports missing tim
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(review);
   assert.equal(review.replyPayload.flags, 64);
-  assert.match(review.replyPayload.content, /Still missing: event time/);
+  assert.match(review.replyPayload.content, /Time: Not confirmed/);
   assert.equal(review.updatePayload, undefined);
 });
 
@@ -626,12 +626,12 @@ test("discovered review hides raw metadata while retaining details, matches, sou
   const review = managerInteraction(guildId, client, `harmony-manager:candidate:review:${candidate.id}`, { kind: "button" });
   await handleEventSchedulerInteraction(review);
   const content = review.updatePayload.content;
-  for (const detail of [candidate.title, candidate.proposed_event_date, "Asia/Tokyo", "All-day: Yes", "jype-straykids-schedule", "Still missing: nothing obvious", "Official note", `#${eventId}`]) {
+  for (const detail of [candidate.title, "December 10, 2026", "Time: All Day", "Source: JYP Official", "Official note"]) {
     assert.ok(content.includes(detail), detail);
   }
   assert.doesNotMatch(content, /explicitOffset|source_metadata|\+09:00/);
   assert.ok(!content.includes(candidate.source_metadata));
-  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data.label === "View Source" && button.data.url === candidate.source_url)));
+  assert.ok(review.updatePayload.components.some(row => row.components.some(button => button.data.label === "Original Source" && button.data.url === candidate.source_url)));
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).source_metadata, candidate.source_metadata);
   assert.equal(store.getCalendarCandidate(guildId, candidate.id).status, "open");
   assert.deepEqual(store.getEvent(guildId, eventId), existingEvent);
