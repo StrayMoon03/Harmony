@@ -5,7 +5,9 @@ const {
 } = require("discord.js");
 const store = require("../stores/radarStore");
 const { resolveAdminCapabilities } = require("./operationsStatusService");
-const { submitCalendarCandidate, localToUtc, validTimezone } = require("./eventSchedulerService");
+const { submitCalendarCandidate, localToUtc, validTimezone, refreshConfiguredScheduleManagers } = require("./eventSchedulerService");
+const calendarStore = require("../stores/eventSchedulerStore");
+const { calendarPrefill } = require("./radarCalendarPrefill");
 
 const presentation = require("./radarPresentation");
 const translation = require("./radarTranslationService");
@@ -116,11 +118,13 @@ function deliveryError(error) {
   return "Radar delivery could not complete. Discoveries remain saved for review.";
 }
 function calendarModal(discovery) {
+  const source = presentation.primarySource(discovery, store.supportingSources(discovery.id));
+  const prefill = calendarPrefill(discovery, source);
   const modal = new ModalBuilder().setCustomId("harmony-radar:handoff:" + discovery.id).setTitle("Send to calendar review");
   for (const [id, label, value, required] of [
-    ["date", "Calendar date YYYY-MM-DD", discovery.event_date || "", true],
-    ["time", "Local time HH:MM (blank = date only)", "", false],
-    ["timezone", "Time zone, such as America/New_York", discovery.event_timezone || "", false],
+    ["date", "Calendar date YYYY-MM-DD", prefill.date, true],
+    ["time", "Local time HH:MM (blank = date only)", prefill.time, false],
+    ["timezone", "Time zone, such as America/New_York", prefill.timezone, false],
   ]) {
     const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(80);
     if (value) input.setValue(value);
@@ -189,7 +193,23 @@ async function handoff(client, guildId, discoveryId, actorId, details) {
   const previous = handoffs.get(key) || Promise.resolve();
   const job = previous.catch(() => {}).then(() => performHandoff(client, guildId, discoveryId, actorId, details));
   handoffs.set(key, job);
-  try { return await job; } finally { if (handoffs.get(key) === job) handoffs.delete(key); }
+  try {
+    const outcome = await job;
+    // Refresh existing review controls only: never install channels/panels or publish.
+    const target = client.guilds.cache.get(outcome.guildId);
+    if (target) await refreshConfiguredScheduleManagers(target).catch(() => {});
+    return outcome;
+  } finally { if (handoffs.get(key) === job) handoffs.delete(key); }
+}
+function handoffFeedback(outcome) {
+  if (outcome.kind === "event") return "Linked to existing calendar event #" + outcome.record.id + ". No new event was published.";
+  if (outcome.record.status !== "open") return "Linked to existing calendar candidate #" + outcome.record.id +
+    " (" + outcome.record.status + "). Its existing decision was preserved; no new event was published.";
+  const panel = calendarStore.getManagerPanel(outcome.guildId, "stray_kids");
+  const location = panel?.channel_id && panel?.message_id
+    ? `[Stray Kids Schedule Manager](https://discord.com/channels/${outcome.guildId}/${panel.channel_id}/${panel.message_id}) → **Review Discovered Events**`
+    : "**Stray Kids Schedule Manager → Review Discovered Events**, or /harmony-calendar review in the configured calendar server";
+  return `Saved calendar candidate #${outcome.record.id} for review (${outcome.record.proposed_event_date || "date pending"}).\nOpen ${location}.\n${panel ? "If the manager message is unavailable, use /harmony-calendar review in the configured calendar server.\n" : ""}It is awaiting explicit approval and will not appear on the published month calendar yet.`;
 }
 async function handleRadarInteraction(interaction) {
   const match = /^harmony-radar:(ignore|watch|calendar|handoff|translate):(\d+)$/.exec(interaction.customId || "");
@@ -252,9 +272,7 @@ async function handleRadarInteraction(interaction) {
         date: interaction.fields.getTextInputValue("date"), time: interaction.fields.getTextInputValue("time"),
         timezone: interaction.fields.getTextInputValue("timezone"),
       });
-      await interaction.editReply(outcome.kind === "event"
-        ? "Linked to existing calendar event #" + outcome.record.id + ". No new event was published."
-        : "Sent as calendar candidate #" + outcome.record.id + ". Review it with /harmony-calendar review in the configured calendar server.");
+      await interaction.editReply(handoffFeedback(outcome));
     } catch (error) {
       await interaction.editReply(error.message);
     }
@@ -262,4 +280,4 @@ async function handleRadarInteraction(interaction) {
   await syncRadarChannel(interaction.client, interaction.guildId);
   return true;
 }
-module.exports = { payload, recoverMessage, syncRadarChannel, calendarModal, handoff, handleRadarInteraction };
+module.exports = { payload, recoverMessage, syncRadarChannel, calendarModal, handoff, handoffFeedback, handleRadarInteraction };

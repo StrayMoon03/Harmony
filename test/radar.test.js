@@ -1065,3 +1065,94 @@ test("date-only Radar handoff cannot relabel an existing canonical timed candida
   assert.notEqual(JSON.parse(record.source_metadata || "{}").allDay, true);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).event_at, existing.proposed_event_at);
 });
+
+test("calendar modal prefills only explicit unambiguous original timing and keeps date-only precision", () => {
+  const { calendarPrefill } = require("../src/services/radarCalendarPrefill");
+  const fields = modal => Object.fromEntries(modal.toJSON().components.map(row => [row.components[0].custom_id, row.components[0].value || ""]));
+  const s = source();
+  const discovery = ingest(s, item("prefill", { title: "Album release", summary: "Release: November 25, 2026.", publishedAt: "2026-11-13" })).discovery;
+  assert.deepEqual(fields(discord.calendarModal(discovery)), { date: "2026-11-25", time: "", timezone: "" });
+  assert.equal(store.getDiscovery(s.guild_id, discovery.id).event_date, null);
+  const timed = { ...discovery, event_date: "2026-11-25", event_at: "2026-11-25T11:30:00.000Z", event_timezone: "Asia/Seoul" };
+  assert.deepEqual(fields(discord.calendarModal(timed)), { date: "2026-11-25", time: "20:30", timezone: "Asia/Seoul" });
+  assert.deepEqual(calendarPrefill({}, { title: "Concert", summary: "Event date: December 20, 2026 at 18:30 JST." }), { date: "2026-12-20", time: "18:30", timezone: "Asia/Tokyo" });
+  assert.deepEqual(calendarPrefill({}, { title: "ライブ", summary: "開催：2026年12月20日 18:30 JST" }), { date: "2026-12-20", time: "18:30", timezone: "Asia/Tokyo" });
+  assert.deepEqual(calendarPrefill({ event_at: "2026-12-20T16:00:00Z", event_timezone: "Asia/Tokyo" }), { date: "2026-12-21", time: "01:00", timezone: "Asia/Tokyo" });
+});
+
+test("unknown, multiple, incomplete and publication-only dates never invent modal timing", () => {
+  const { calendarPrefill } = require("../src/services/radarCalendarPrefill");
+  for (const summary of ["Details soon", "Release: November 25.", "Release: November 25, 2026. Event date: December 20, 2026.", "Published November 13, 2026.", "Event: 2026-02-30", "Application for an event November 15, 2026."]) {
+    assert.deepEqual(calendarPrefill({}, { title: "Announcement", summary, published_at: "2026-11-13T12:00:00Z" }), { date: "", time: "", timezone: "" }, summary);
+  }
+  assert.deepEqual(calendarPrefill({}, { title: "Release", summary: "Release: November 25, 2026 at 19:00." }), { date: "2026-11-25", time: "19:00", timezone: "" });
+});
+
+test("owner-corrected handoff reaches existing target Schedule Manager inbox without publication", async () => {
+  const scheduler = require("../src/services/eventSchedulerService");
+  const { s, discovery, f, target } = handoffFixture();
+  // The persisted source suggests a different date; the owner's submission wins.
+  ingest(s, item("abc", { title: "Release", summary: "Release: November 25, 2026." }));
+  const panelEdits = [];
+  const managerChannel = target.channel("manager-room");
+  managerChannel.messages.fetch = async id => { assert.equal(id, "existing-panel"); return { edit: async body => panelEdits.push(body) }; };
+  calendar.saveManagerPanel(target.guild.id, "stray_kids", "manager-room", "existing-panel");
+  const outcome = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2026-11-13", time: "", timezone: "" });
+  const candidate = outcome.record;
+  assert.equal(candidate.proposed_event_date, "2026-11-13");
+  assert.equal(candidate.proposed_event_at, null);
+  assert.equal(candidate.proposed_event_timezone, null);
+  assert.equal(candidate.status, "open");
+  assert.equal(JSON.parse(candidate.source_metadata).allDay, true);
+  assert.match(candidate.source_provenance, /straykids\.jype\.com/);
+  assert.equal(target.sent.length, 0); // No parallel queue or new panel.
+  assert.match(panelEdits[0].components[1].toJSON().components[2].label, /Review Discovered Events \(1\)/);
+  const replies = [];
+  await scheduler.handleEventSchedulerInteraction({ customId: "harmony-manager:stray_kids:candidate-inbox", guildId: target.guild.id,
+    memberPermissions: { has: () => true }, isButton: () => true, reply: async body => replies.push(body) });
+  assert.match(replies[0].content, new RegExp("Event #" + candidate.id));
+  assert.match(replies[0].content, /2026-11-13/);
+  const reviewId = replies[0].components[0].toJSON().components[1].custom_id;
+  const reviews = [];
+  await scheduler.handleEventSchedulerInteraction({ customId: reviewId, guildId: target.guild.id,
+    memberPermissions: { has: () => true }, isButton: () => true, update: async body => reviews.push(body) });
+  assert.match(reviews[0].content, /All-day: Yes/);
+  assert.ok(reviews[0].components.flatMap(row => row.toJSON().components).some(button => /Add to Calendar/.test(button.label)));
+  assert.match(discord.handoffFeedback(outcome), new RegExp(`discord.com/channels/${target.guild.id}/manager-room/existing-panel`));
+  assert.match(discord.handoffFeedback(outcome), /awaiting explicit approval/);
+  assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM scheduled_events WHERE guild_id=?").get(target.guild.id).n, 0);
+  assert.equal(calendar.listCalendarCandidates(s.guild_id).length, 0);
+  closeDb(); // Existing record survives restart; repeated/stale submit does not create another.
+  const replay = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2027-01-01", time: "12:00", timezone: "UTC" });
+  assert.equal(replay.record.id, candidate.id);
+  assert.equal(replay.record.proposed_event_date, "2026-11-13");
+  assert.equal(calendar.listCalendarCandidates(target.guild.id).length, 1);
+});
+
+test("already-persisted Radar candidate is visible without a new submission or notice", async () => {
+  const scheduler = require("../src/services/eventSchedulerService");
+  const target = "existing-target";
+  const candidate = calendar.createOrGetCalendarCandidate({ guildId: target, title: "Existing November video", proposedEventDate: "2026-11-13",
+    sourceUrl: "https://www.youtube.com/watch?v=ABCDEFGHIJK", sourceType: "radar_handoff", sourceProvider: "skz-radar", discoveryKey: "radar:existing:21", sourceMetadata: '{"allDay":true}' }).candidate;
+  const before = calendar.getCalendarCandidate(target, candidate.id);
+  const replies = [];
+  await scheduler.handleEventSchedulerInteraction({ customId: "harmony-manager:stray_kids:candidate-inbox", guildId: target,
+    memberPermissions: { has: () => true }, isButton: () => true, reply: async body => replies.push(body) });
+  assert.match(replies[0].content, /Existing November video/);
+  assert.deepEqual(calendar.getCalendarCandidate(target, candidate.id), before);
+  assert.equal(calendar.listCalendarCandidates(target).length, 1);
+});
+
+test("timed Radar candidate is visible in existing review with canonical time and timezone preserved", async () => {
+  const scheduler = require("../src/services/eventSchedulerService");
+  const { s, discovery, f, target } = handoffFixture();
+  const { record } = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2026-12-20", time: "18:30", timezone: "Asia/Tokyo" });
+  const review = scheduler.candidateReviewPayload(record, []);
+  assert.match(review.content, /Asia\/Tokyo/);
+  assert.match(review.content, /Event time: 18:30/);
+  assert.equal(record.proposed_event_at, "2026-12-20T09:30:00.000Z");
+  assert.equal(JSON.parse(record.source_metadata).allDay, false);
+  const existing = calendar.decideCalendarCandidate(target.guild.id, record.id, "dismissed", "owner", "Keep decision");
+  assert.ok(existing);
+  assert.match(discord.handoffFeedback({ kind: "candidate", guildId: target.guild.id, record: calendar.getCalendarCandidate(target.guild.id, record.id) }), /dismissed/);
+});

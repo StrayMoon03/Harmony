@@ -114,7 +114,7 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel("📋 Review Discovered Events").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel(`📋 Review Discovered Events (${store.listCalendarCandidates(guildId, "open").filter(isDiscoveryCandidate).length})`).setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }

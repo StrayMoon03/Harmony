@@ -56,8 +56,8 @@ const open = f => interact(f, 'harmony-manager:stray_kids:candidate-inbox');
 
 test('Review Discovered Events is restricted to the Stray Kids manager', () => {
   const skz = managerPanelComponents('stray_kids').flatMap(row => row.components);
-  assert.ok(skz.some(b => b.data.label === '📋 Review Discovered Events'));
-  assert.ok(!managerPanelComponents('community').flatMap(row => row.components).some(b => b.data.label === '📋 Review Discovered Events'));
+  assert.ok(skz.some(b => /^📋 Review Discovered Events \(\d+\)$/.test(b.data.label)));
+  assert.ok(!managerPanelComponents('community').flatMap(row => row.components).some(b => b.data.custom_id.endsWith(':candidate-inbox')));
   assert.ok(skz.every(b => b.data.custom_id.length <= 100));
 });
 
