@@ -950,21 +950,9 @@ async function processMediaMessage(message, lifecycle) {
           });
           return;
         }
-        shareStore.insert({
-          platform,
-          mediaId,
-          creator: downloadResult.creator || "Unknown creator",
-          sharedBy:
-            message.member?.displayName ??
-            message.author.username,
-          sharedById: message.author.id,
-          messageId: message.id,
-          channelId: message.channel.id,
-          guildId: message.guild?.id ?? null,
-          url: originalUrl,
-        });
-        console.log("X text-only post preserved because exact post text was unavailable.");
-        return;
+        throw new Error(
+          "Harmony could not confirm this X post as text-only, and the exact post text was unavailable."
+        );
       }
 
       const classification = classify(
