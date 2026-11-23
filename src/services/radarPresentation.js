@@ -174,4 +174,4 @@ function cardView(discovery, source, translation, options = {}) {
     summary: cardText(summary, SUMMARY_LIMIT) || "Open the original announcement for complete details.",
     language, needsTranslation, translated, timing };
 }
-module.exports = { VERSION, SUMMARY_LIMIT, TRANSLATION_INPUT_LIMIT, normalize, clip, cleanContent, preview, candidateTiming, formatDate, cardText, primarySource, translationInput, cardView };
+module.exports = { VERSION, SUMMARY_LIMIT, TRANSLATION_INPUT_LIMIT, normalize, clip, cleanTitle, cleanContent, preview, candidateTiming, formatDate, cardText, primarySource, translationInput, cardView };

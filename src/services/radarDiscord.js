@@ -10,6 +10,7 @@ const calendarStore = require("../stores/eventSchedulerStore");
 const { calendarPrefill } = require("./radarCalendarPrefill");
 
 const presentation = require("./radarPresentation");
+const { channelView, sourceUrl } = require("./radarChannelPresentation");
 const translation = require("./radarTranslationService");
 const { classifyObservation } = require("./radarClassification");
 const deliveries = new Map();
@@ -17,36 +18,29 @@ const handoffs = new Map();
 const EXISTENCE_CHECK_MS = 60 * 60 * 1000;
 function payload(discovery, sources, options = {}) {
   const source = presentation.primarySource(discovery, sources);
-  const view = presentation.cardView(discovery, source, options.translation || (source ? translation.current(source) : null), { translationConfigured: translation.azureProvider().available, translationUseful: options.translationUseful });
+  const currentTranslation = options.translation || (source ? translation.current(source) : null);
+  const view = presentation.cardView(discovery, source, currentTranslation, { translationConfigured: translation.azureProvider().available, translationUseful: options.translationUseful });
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:ignore:" + discovery.id).setLabel("Ignore").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:watch:" + discovery.id).setLabel("Watch for Details").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:calendar:" + discovery.id).setLabel("Add to Calendar").setStyle(ButtonStyle.Primary)
-      .setDisabled(Boolean(discovery.handoff_result)),
+      .setDisabled(Boolean(discovery.handoff_result) || !sourceUrl(source)),
   );
   if (source && view.needsTranslation && !view.translated) controls.addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:translate:" + discovery.id).setLabel(
       view.language === "Translation pending" ? "Translating…" : "Translate to English")
       .setStyle(ButtonStyle.Secondary).setDisabled(view.language === "Translation pending"));
-  if (source) controls.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Original announcement").setURL(source.canonical_url));
-  const embed = new EmbedBuilder().setTitle(view.title)
-    .setDescription(view.summary + (view.language ? "\n\n*" + view.language + "*" : ""))
+  const card = channelView(discovery, source, view, currentTranslation);
+  if (card.url) controls.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Original Source").setURL(card.url));
+  const embed = new EmbedBuilder().setTitle(card.title)
+    .setDescription(card.description)
     .setColor(discovery.review_state === "Watching" ? 0xfee75c : 0x5865f2)
-    .setFooter({ text: "SKZ Radar #" + discovery.id })
-    .setAuthor({ name: ({ "jype-notice": "JYPE Notice", "sony-info": "Sony Japan Info", "youtube-uploads": "Official YouTube" }[source?.provider] || "Official source") + " • " + discovery.category });
-  const timing = [
-    ...(view.timing.length ? ["Source timing (informational; confirm for calendar):", ...view.timing] : []),
-    ...(discovery.event_at || discovery.event_date ? ["Confirmed calendar date: " + (presentation.formatDate(discovery.event_at || discovery.event_date) || "Unconfirmed")] : []),
-  ];
-  if (timing.length) embed.addFields({ name: "Important timing", value: timing.join("\n") });
-  if (source) embed.addFields({ name: "Official Source", value: "[Read the complete announcement](" + source.canonical_url.replace(/[()]/g, encodeURIComponent) + ")" +
-    (sources.length > 1 ? " · " + sources.length + " supporting sources saved" : "") });
-  const calendar = discovery.handoff_result && JSON.parse(discovery.handoff_result).kind === "event"
-    ? "Linked to existing calendar event" : discovery.calendar_candidate_id ? "Sent for calendar review" : discovery.calendar_eligibility;
-  embed.addFields({ name: "Review / Calendar", value: discovery.review_state + " · " + calendar });
-  if (source) embed.setURL(source.canonical_url);
-  const images = source ? JSON.parse(source.metadata).images : [];
-  if (images?.[0]) embed.setImage(images[0]);
+    .setAuthor({ name: "🔎 RADAR" })
+    .addFields({ name: "Source", value: card.source });
+  if (card.timing) embed.addFields({ name: "Important timing", value: card.timing });
+  if (card.published) embed.addFields({ name: "Published", value: card.published });
+  if (card.state) embed.setFooter({ text: card.state });
+  if (card.url) embed.setURL(card.url);
   return { embeds: [embed], components: [controls], allowedMentions: { parse: [] } };
 }
 async function recoverMessage(channel, client, discovery, reference) {
@@ -61,7 +55,12 @@ async function recoverMessage(channel, client, discovery, reference) {
   for (let page = 0; page < 2; page++) {
     const history = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     for (const message of history.values()) {
-      if (message.author?.id === client.user.id && message.embeds?.[0]?.footer?.text === "SKZ Radar #" + discovery.id) return message;
+      // New cards retain immutable identity in their existing controls, without
+      // displaying an internal ID. Keep legacy-footer recovery for old cards.
+      const controlMatch = message.components?.some(row => row.components?.some(button =>
+        ["ignore", "watch", "calendar", "translate"].some(action =>
+          (button.customId || button.data?.custom_id || button.custom_id) === `harmony-radar:${action}:${discovery.id}`)));
+      if (message.author?.id === client.user.id && (controlMatch || message.embeds?.[0]?.footer?.text === "SKZ Radar #" + discovery.id)) return message;
     }
     const oldest = [...history.values()].at(-1);
     if (!oldest || history.size < 100 || oldest.createdTimestamp < Date.parse(reference.started_at) - 60000) return null;
