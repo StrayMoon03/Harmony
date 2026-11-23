@@ -56,7 +56,7 @@ const open = f => interact(f, 'harmony-manager:stray_kids:candidate-inbox');
 
 test('Review Discovered Events is restricted to the Stray Kids manager', () => {
   const skz = managerPanelComponents('stray_kids').flatMap(row => row.components);
-  assert.ok(skz.some(b => /^📋 Review Discovered Events \(\d+\)$/.test(b.data.label)));
+  assert.ok(skz.some(b => /^📋 Review Discovered Events(?: \(\d+\))?$/.test(b.data.label)));
   assert.ok(!managerPanelComponents('community').flatMap(row => row.components).some(b => b.data.custom_id.endsWith(':candidate-inbox')));
   assert.ok(skz.every(b => b.data.custom_id.length <= 100));
 });
@@ -82,8 +82,8 @@ test('one private browser reopens persisted candidates with deleted notices and 
   assert.match(previous.update[0].content, /1 of 2 — First event/);
   const review = await interact(f, id(previous.update[0], 'Review'));
   assert.equal(review.reply.length, 0); assert.equal(review.update.length, 1);
-  assert.match(review.update[0].content, /Potential Stray Kids event/);
-  assert.match(review.update[0].content, /All-day: Yes/);
+  assert.match(review.update[0].content, /CALENDAR PREVIEW/);
+  assert.match(review.update[0].content, /Time: All Day/);
   assert.ok(buttons(review.update[0]).every(button => button.label !== 'Temporary Match Diagnostic'));
   assert.equal(store.getCandidateMatchDiagnostics, undefined);
   assert.doesNotMatch(review.update[0].content, /"allDay"/);
@@ -107,9 +107,9 @@ test('review inbox and review card display all corroborating source names and ev
   const inbox = (await open(f)).reply[0];
   assert.match(inbox.content, /Sources: JYP Official \+ SKZ Comeback Guide/);
   const review = (await interact(f, `harmony-manager:candidate:review:${c.id}:inbox:0`)).update[0];
-  assert.match(review.content, /Sources: JYP Official \+ SKZ Comeback Guide/);
-  assert.match(review.content, /2026 뮤직뱅크 글로벌 페스티벌/);
-  assert.match(review.content, /MUSIC BANK GLOBAL FESTIVAL/);
+  assert.match(review.content, /Source: JYP Official \+ SKZ Comeback Guide/);
+  assert.match(store.getCalendarCandidate(f.guildId, c.id).source_provenance, /2026 뮤직뱅크 글로벌 페스티벌/);
+  assert.match(store.getCalendarCandidate(f.guildId, c.id).source_provenance, /MUSIC BANK GLOBAL FESTIVAL/);
 });
 
 test('empty inbox and stale selection recover without reposting or reopening candidates', async () => {

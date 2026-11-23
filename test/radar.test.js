@@ -1012,7 +1012,7 @@ test("Radar date-only handoff carries explicit existing all-day metadata with no
   assert.equal(candidate.proposed_event_date, "2026-11-25");
   assert.equal(candidate.proposed_event_at, null); assert.equal(candidate.proposed_event_timezone, null);
   assert.equal(JSON.parse(candidate.source_metadata).allDay, true);
-  assert.match(scheduler.candidateReviewPayload(candidate, []).content, /All-day: Yes/);
+  assert.match(scheduler.candidateReviewPayload(candidate, []).content, /Time: All Day/);
   assert.doesNotMatch(scheduler.candidateReviewPayload(candidate, []).content, /Still missing:.*event time/);
   assert.equal(candidate.status, "open");
   assert.equal(getDb().prepare("SELECT COUNT(*) AS n FROM scheduled_events WHERE guild_id=?").get(target.guild.id).n, 0);
@@ -1116,7 +1116,7 @@ test("owner-corrected handoff reaches existing target Schedule Manager inbox wit
   const reviews = [];
   await scheduler.handleEventSchedulerInteraction({ customId: reviewId, guildId: target.guild.id,
     memberPermissions: { has: () => true }, isButton: () => true, update: async body => reviews.push(body) });
-  assert.match(reviews[0].content, /All-day: Yes/);
+  assert.match(reviews[0].content, /Time: All Day/);
   assert.ok(reviews[0].components.flatMap(row => row.toJSON().components).some(button => /Add to Calendar/.test(button.label)));
   assert.match(discord.handoffFeedback(outcome), new RegExp(`discord.com/channels/${target.guild.id}/manager-room/existing-panel`));
   assert.match(discord.handoffFeedback(outcome), /awaiting explicit approval/);
@@ -1149,7 +1149,7 @@ test("timed Radar candidate is visible in existing review with canonical time an
   const { record } = await discord.handoff(f.client, s.guild_id, discovery.id, "owner", { date: "2026-12-20", time: "18:30", timezone: "Asia/Tokyo" });
   const review = scheduler.candidateReviewPayload(record, []);
   assert.match(review.content, /Asia\/Tokyo/);
-  assert.match(review.content, /Event time: 18:30/);
+  assert.match(review.content, /Time: 18:30/);
   assert.equal(record.proposed_event_at, "2026-12-20T09:30:00.000Z");
   assert.equal(JSON.parse(record.source_metadata).allDay, false);
   const existing = calendar.decideCalendarCandidate(target.guild.id, record.id, "dismissed", "owner", "Keep decision");

@@ -1,3 +1,4 @@
+const calendarReview = require("./calendarReviewPresentation");
 const {
   PermissionFlagsBits,
   ActionRowBuilder,
@@ -96,6 +97,15 @@ function managerPanelContent(calendarType) {
   return `${icon} **${label} SCHEDULE MANAGER**\nUse the admin controls below to manage this calendar. Calendar events do not require an announcement.\nDiscord Scheduled Event reconciliation also requires Harmony to have **View Channel** permission for each associated voice or stage channel.`;
 }
 
+function pendingDiscoveryLabel(guildId) {
+  const count = store.listCalendarCandidates(guildId, "open").filter(isDiscoveryCandidate).length;
+  return "📋 Review Discovered Events" + (count ? ` (${count})` : "");
+}
+async function refreshCandidateManagers(client, guildId) {
+  const guild = client?.guilds?.cache?.get(guildId) || await client?.guilds?.fetch?.(guildId).catch(() => null);
+  if (guild) await refreshConfiguredScheduleManagers(guild);
+}
+
 function managerPanelComponents(calendarType, guildId = null) {
   const prefix = `harmony-manager:${calendarType}`;
   const row = new ActionRowBuilder().addComponents(
@@ -114,7 +124,7 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:discovery-check`).setLabel("🔍 Check Now").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel(`📋 Review Discovered Events (${store.listCalendarCandidates(guildId, "open").filter(isDiscoveryCandidate).length})`).setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel(pendingDiscoveryLabel(guildId)).setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
     )];
   }
@@ -1833,7 +1843,7 @@ function withInboxBack(payload, index) {
   for (const row of payload.components || []) {
     for (const component of row.components) {
       const id = component.data?.custom_id;
-      if (id?.startsWith("harmony-manager:candidate:")) component.setCustomId(`${id}:inbox:${index}`);
+      if (id?.startsWith("harmony-manager:candidate:") && !id.includes(":inbox:")) component.setCustomId(`${id}:inbox:${index}`);
     }
   }
   payload.components = [...(payload.components || []), new ActionRowBuilder().addComponents(
@@ -1859,33 +1869,20 @@ function candidateReviewComponents(candidate, matches) {
     new ButtonBuilder().setCustomId(`harmony-manager:candidate:add:${candidate.id}`).setLabel("Add to Calendar").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`harmony-manager:candidate:dismiss:${candidate.id}`).setLabel("Dismiss").setStyle(ButtonStyle.Secondary),
   ));
-  if (isDiscoveryCandidate(candidate) && /^https:\/\/[^\s]+$/i.test(candidate.source_url || "")) {
-    components.push(new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setLabel("View Source").setStyle(ButtonStyle.Link).setURL(candidate.source_url),
-    ));
+  const sourceUrl = calendarReview.sourceUrl(candidate);
+  if (sourceUrl || calendarReview.translationUseful(candidate)) {
+    const row = new ActionRowBuilder();
+    if (calendarReview.translationUseful(candidate)) row.addComponents(new ButtonBuilder()
+      .setCustomId(`harmony-manager:candidate:translate:${candidate.id}`).setLabel("Translate to English").setStyle(ButtonStyle.Secondary));
+    if (sourceUrl) row.addComponents(new ButtonBuilder().setLabel("Original Source").setStyle(ButtonStyle.Link).setURL(sourceUrl));
+    components.push(row);
   }
   return components;
 }
 
 function candidateReviewPayload(candidate, matches) {
-  const allDay = isExplicitDiscoveryAllDay(candidate);
-  const details = [
-    `**Potential Stray Kids event #${candidate.id}**`,
-    `Source: ${isDiscoveryCandidate(candidate) ? (candidate.source_provider || "Calendar discovery") + " (use View Source button)" : (candidate.source_url || "Not provided")}`,
-    ...(isDiscoveryCandidate(candidate) ? [`Sources: ${discoverySourceSummary(candidate)}`, ...discoverySourceEvidence(candidate)] : []),
-    `Submitted by: ${candidate.submitter_id ? `<@${candidate.submitter_id}>` : "Unknown"}`,
-    `Harmony extracted title: ${candidate.title || "Not available"}`,
-    `Harmony extracted start date: ${candidate.proposed_event_date || "Not provided"}`,
-    `Harmony extracted end date: ${candidate.proposed_event_end_date || "Not provided"}`,
-    `Harmony extracted timezone: ${candidate.proposed_event_timezone || "Not provided"}`,
-    ...(allDay ? ["All-day: Yes"] : [`Event time: ${candidate.proposed_event_at ? candidateLocalTime(candidate) : "Not provided"}`]),
-    `Source/provider: ${candidate.source_provider || "Not identified"}${!isDiscoveryCandidate(candidate) && candidate.source_metadata ? ` (${candidate.source_metadata})` : ""}`,
-    `Still missing: ${[!candidate.title && "event title", !candidate.proposed_event_date && "event date", !candidate.proposed_event_at && !allDay && "event time"].filter(Boolean).join(", ") || "nothing obvious"}`,
-    `Note: ${candidate.submitted_note || "None"}`,
-    matches.length ? `Likely calendar matches: ${matches.map((item) => `#${item.id} ${item.title}`).join(", ")}` : "Likely calendar matches: none",
-    "Choose an action; no calendar event has been created yet.",
-  ].join("\n");
-  return { content: details, components: candidateReviewComponents(candidate, matches), flags: isDiscoveryCandidate(candidate) ? undefined : 64, allowedMentions: { parse: [] } };
+  const view = calendarReview.view(candidate);
+  return { content: view.content + (matches.length ? "\nAn existing calendar match is available. Use Link Existing to avoid a duplicate." : ""), components: candidateReviewComponents(candidate, matches), flags: isDiscoveryCandidate(candidate) ? undefined : 64, allowedMentions: { parse: [] } };
 }
 
 function candidateNoticePayload(candidate) {
@@ -2872,6 +2869,21 @@ async function handleManagerInteraction(interaction) {
       return;
     }
     const matches = store.findCandidateCalendarMatches(interaction.guildId, candidate);
+    if (action === "translate" && interaction.isButton()) {
+      await interaction.deferUpdate();
+      await interaction.editReply(inboxPayload({ ...candidateReviewPayload(candidate, matches), content: candidateReviewPayload(candidate, matches).content + "\nTranslating to English…" }));
+      const result = await calendarReview.requestTranslation(candidate);
+      const latest = store.getCalendarCandidate(interaction.guildId, candidateId);
+      if (!latest || latest.status !== "open") {
+        await interaction.editReply(inboxPayload(candidateFinalPayload(candidate, "Already handled")));
+        return;
+      }
+      const changed = latest.title !== candidate.title || latest.submitted_note !== candidate.submitted_note || latest.source_url !== candidate.source_url;
+      const payload = candidateReviewPayload(latest, store.findCandidateCalendarMatches(interaction.guildId, latest));
+      payload.content += "\n" + (changed ? "Candidate changed during translation. Review its current details." : result.message);
+      await interaction.editReply(inboxPayload(payload));
+      return;
+    }
     if (action === "review" && interaction.isButton()) {
       if (isDiscoveryCandidate(candidate)) {
         const payload = inboxPayload(candidateReviewPayload(candidate, matches));
@@ -2890,6 +2902,7 @@ async function handleManagerInteraction(interaction) {
       store.decideCalendarCandidate(interaction.guildId, candidateId, "dismissed", interaction.user.id, "Dismissed by admin");
       await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
       await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Dismissed") : { content: "Dismissed this candidate. No calendar event was created.", components: [] }));
+      await refreshCandidateManagers(interaction.client, interaction.guildId).catch(() => {});
       return;
     }
     if (action === "link" && interaction.isButton()) {
@@ -2902,6 +2915,7 @@ async function handleManagerInteraction(interaction) {
         store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", matches[0].id);
         await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
         await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${matches[0].title}**. No new calendar event was created.`, components: [] }));
+        await refreshCandidateManagers(interaction.client, interaction.guildId).catch(() => {});
         return;
       }
       await interaction.update(inboxPayload({
@@ -2920,6 +2934,7 @@ async function handleManagerInteraction(interaction) {
       store.decideCalendarCandidate(interaction.guildId, candidateId, "linked", interaction.user.id, "Linked to existing calendar event", event.id);
       await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
       await interaction.update(inboxPayload(isDiscoveryCandidate(candidate) ? candidateFinalPayload(candidate, "Linked") : { content: `Linked this candidate to **${event.title}**. No new calendar event was created.`, components: [] }));
+      await refreshCandidateManagers(interaction.client, interaction.guildId).catch(() => {});
       return;
     }
     if (action === "add" && interaction.isButton()) {
@@ -2943,6 +2958,9 @@ async function handleManagerInteraction(interaction) {
       const optionalTimezone = isExplicitDiscoveryAllDay(candidate) && !candidate.proposed_event_timezone;
       const options = SKZ_TIMEZONE_OPTIONS.filter((option) => optionalTimezone || option.value !== "none")
         .map((option) => ({ label: option.label, value: option.value, default: option.value === candidate.proposed_event_timezone }));
+      if (candidate.proposed_event_timezone && validTimezone(candidate.proposed_event_timezone) && !options.some(option => option.value === candidate.proposed_event_timezone)) {
+        options.push({ label: candidate.proposed_event_timezone, value: candidate.proposed_event_timezone, default: true });
+      }
       const timezoneMenu = new StringSelectMenuBuilder()
         .setCustomId(`harmony-manager:candidate:addtimezone:${candidateId}${inboxIndex !== null ? `:inbox:${inboxIndex}` : ""}`)
         .setPlaceholder(optionalTimezone ? "Choose a time zone, or leave blank for all-day" : "Choose the event time zone")
@@ -2999,6 +3017,7 @@ async function handleManagerInteraction(interaction) {
         await refreshPublishedCalendar(interaction.client, interaction.guildId, "stray_kids", eventDate).catch(() => {});
         if (inboxIndex !== null) await interaction.update(inboxPayload(candidateFinalPayload(candidate, "Added")));
         else await interaction.reply({ content: `Added **${title}** to the Stray Kids calendar. No announcements were created; configure them through the existing calendar workflow if needed.`, flags: 64 });
+        await refreshCandidateManagers(interaction.client, interaction.guildId).catch(() => {});
       } catch (error) {
         store.releaseCalendarCandidate(interaction.guildId, candidateId, `Add failed: ${error.message}`);
         await interaction.reply({ content: error.message || "Harmony could not add that candidate.", flags: 64 });

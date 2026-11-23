@@ -41,7 +41,7 @@ test("slash candidate review opens the same existing review actions", async () =
   assert.equal(picker.toJSON().options[0].value, String(candidate.id));
   const review = componentInteraction({ customId: "harmony-calendar:review-select", guildId, values: [String(candidate.id)] });
   await handleEventSchedulerInteraction(review);
-  assert.match(review.responses[0].content, /Potential Stray Kids event/);
+  assert.match(review.responses[0].content, /CALENDAR PREVIEW/);
   assert.ok(review.responses[0].components.some((row) => row.components.some((button) => button.data.custom_id === `harmony-manager:candidate:add:${candidate.id}`)));
 });
 
