@@ -792,8 +792,10 @@ async function processMediaMessage(message, lifecycle) {
       let info = null;
 
       try {
+        // Metadata is optional; cap it so a slow probe cannot consume the
+        // 20s retrieval budget before the download even starts.
         info =
-          await getMediaInfo(normalizedUrl);
+          await getMediaInfo(normalizedUrl, { timeoutMs: 6000 });
       } catch {
         console.warn(
           "TikTok metadata unavailable. Continuing with download only."

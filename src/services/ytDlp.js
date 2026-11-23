@@ -27,7 +27,7 @@ async function getMediaInfo(url, options = {}) {
       ],
       {
         windowsHide: true,
-        timeout: 18000,
+        timeout: Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 18000,
         killSignal: "SIGKILL",
         maxBuffer: 10 * 1024 * 1024,
         ...(options.signal ? { signal: options.signal } : {}),
