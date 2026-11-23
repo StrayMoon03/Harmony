@@ -53,6 +53,7 @@ function fixture(guildId) {
       send: async (body) => {
         const message = {
           id: String(++next), channelId: id, author: { id: "harmony" }, body, createdTimestamp: Date.now(),
+          get components() { return this.body.components; },
           get embeds() { return message.body.embeds.map((embed) => embed.toJSON()); },
           edit: async (payload) => { message.body = payload; return message; },
         };
@@ -276,7 +277,7 @@ test("delivery edits the same message, recovers a pending send and preserves dec
   store.setReviewState(s.guild_id, discovered.id, "Watching");
   await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.equal(f.sent[0].embeds[0].fields.find((field) => field.name === "Review / Calendar").value.split(" · ")[0], "Watching");
+  assert.equal(f.sent[0].embeds[0].footer.text, "Watching for details");
 });
 
 test("delivery permission failures retain data; moving channels and off/on use configured destinations", async () => {
@@ -474,7 +475,7 @@ test("handoff handles candidate:null and retains the existing published event's 
   assert.equal(saved.event_timezone, "Asia/Tokyo");
   assert.equal(saved.review_state, "Resolved");
   assert.equal(calendar.listCalendarCandidates(target.guild.id).length, 0);
-  assert.match(discord.payload(saved, store.supportingSources(discovery.id)).embeds[0].toJSON().fields.find((field) => field.name === "Review / Calendar").value, /existing calendar event/);
+  assert.match(discord.payload(saved, store.supportingSources(discovery.id)).embeds[0].toJSON().footer.text, /existing calendar event/);
 });
 test("handoff retains canonical existing candidate details instead of the submitted conflicting date", async () => {
   const { s, discovery, f, target } = handoffFixture();
@@ -1155,4 +1156,33 @@ test("timed Radar candidate is visible in existing review with canonical time an
   const existing = calendar.decideCalendarCandidate(target.guild.id, record.id, "dismissed", "owner", "Keep decision");
   assert.ok(existing);
   assert.match(discord.handoffFeedback({ kind: "candidate", guildId: target.guild.id, record: calendar.getCalendarCandidate(target.guild.id, record.id) }), /dismissed/);
+});
+
+test('footer-free Radar controls recover delivery after a send/save crash without exposing internal IDs', async t => {
+  const s = source(), d = ingest(s).discovery, f = fixture(s.guild_id);
+  const save = t.mock.method(store, 'saveDelivery', () => { throw new Error('crash after accepted send'); });
+  await discord.syncRadarChannel(f.client, s.guild_id);
+  save.mock.restore();
+  assert.equal(f.sent[0].embeds[0].footer, undefined);
+  const id = f.sent[0].id;
+  closeDb();
+  await discord.syncRadarChannel(f.client, s.guild_id);
+  assert.equal(f.sent.length, 1);
+  assert.equal(store.delivery(d.id, 'destination').message_id, id);
+});
+
+test('legacy ID footers remain recoverable and normal reconciliation edits the existing card in place', async () => {
+  const s = source(), d = ingest(s).discovery, f = fixture(s.guild_id);
+  const { EmbedBuilder } = require('discord.js');
+  const legacy = { embeds: [new EmbedBuilder().setTitle('Old Radar card').setFooter({ text: 'SKZ Radar #' + d.id })], components: [] };
+  const reference = store.delivery(d.id, 'destination');
+  const message = await f.destination.send(legacy);
+  const recovered = await discord.recoverMessage(f.destination, f.client, d, reference);
+  assert.equal(recovered.id, message.id);
+  store.saveDelivery(d.id, 'destination', message.id, store.hash(legacy));
+  await discord.syncRadarChannel(f.client, s.guild_id);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].id, message.id);
+  assert.equal(f.sent[0].embeds[0].author.name, '🔎 RADAR');
+  assert.equal(f.sent[0].embeds[0].footer, undefined);
 });

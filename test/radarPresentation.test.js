@@ -43,6 +43,7 @@ function fixture(guildId) {
     return new Map(sent.filter((m) => !m.deleted).slice().reverse().slice(0, query.limit).map((m) => [m.id, m]));
   } }, send: async (body) => {
     const message = { id: String(sent.length + 100), body, author: { id: "harmony" }, createdTimestamp: Date.now(),
+      get components() { return this.body.components; },
       get embeds() { return this.body.embeds.map((embed) => embed.toJSON()); }, edit: async (newBody) => { message.body = newBody; return message; } };
     sent.push(message);
     return message;
@@ -105,7 +106,7 @@ test("confirmed timing is distinct from compacted publication/discovery metadata
   const body = discord.payload(input, store.supportingSources(discovery.id));
   const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "Important timing").value;
   assert.doesNotMatch(timing, /Published|Discovered|Nov 18/);
-  assert.match(timing, /Confirmed calendar date: <t:\d+:f>/);
+  assert.match(timing, /Calendar date: Nov 20, 2026/);
   assert.equal(store.supportingSources(discovery.id)[0].published_at, "2026-11-18");
   assert.doesNotMatch(JSON.stringify(body), /2026-11-19T04:37:56\.872Z|2026-11-20T11:00:00/);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).created_at, "2026-11-19T04:37:56.872Z");
@@ -505,7 +506,7 @@ test("a late translation of old content cannot become the current presentation a
   assert.equal(cachedSource(changed.discovery).title, "HAN 新曲の配信日変更");
 });
 
-test("image-only announcements translate their title without inventing a body or discarding the image", async () => {
+test("image-only announcements retain the stored image while the channel stays compact", async () => {
   const s = source();
   const value = item({ title: "新曲のお知らせ", summary: "", metadata: { images: ["https://example.com/poster.jpg"] } });
   const { discovery } = ingest(s, value);
@@ -514,8 +515,9 @@ test("image-only announcements translate their title without inventing a body or
   const body = discord.payload(discovery, store.supportingSources(discovery.id), { translation: worker.current(cachedSource(discovery)) });
   const embed = body.embeds[0].toJSON();
   assert.equal(embed.title, "New song announcement");
-  assert.equal(embed.image.url, "https://example.com/poster.jpg");
-  assert.match(embed.description, /Open the original announcement/);
+  assert.equal(embed.image, undefined);
+  assert.deepEqual(JSON.parse(cachedSource(discovery).metadata).images, ["https://example.com/poster.jpg"]);
+  assert.match(embed.description, /Open Original Source/);
   assert.equal(cachedSource(discovery).summary, "");
 });
 
@@ -542,7 +544,7 @@ test("valid legacy Azure translations survive the switch without relabeling, req
   const current = worker.current(cachedSource(discovery));
   assert.equal(current.provider, "azure");
   assert.equal(current.status, "ready");
-  assert.match(discord.payload(discovery, [original], { translation: current }).embeds[0].toJSON().description, /Azure Translator/);
+  assert.match(discord.payload(discovery, [original], { translation: current }).embeds[0].toJSON().description, /Machine translated to English/);
   assert.deepEqual(getDb().prepare("SELECT * FROM radar_translations WHERE observation_id=?").all(original.id), before);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Watching");
 });
@@ -564,7 +566,7 @@ test("changed source cannot use stale Azure cache and receives a separate Azure 
   assert.equal(changed.discovery.id, discovery.id);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Ignored");
   assert.deepEqual(translationStore.get(original, "azure"), oldRow);
-  assert.match(discord.payload(changed.discovery, [cachedSource(changed.discovery)], { translation: worker.current(cachedSource(changed.discovery)) }).embeds[0].toJSON().description, /Azure Translator/);
+  assert.match(discord.payload(changed.discovery, [cachedSource(changed.discovery)], { translation: worker.current(cachedSource(changed.discovery)) }).embeds[0].toJSON().description, /Machine translated to English/);
 });
 test("failed legacy Google entries do not block Azure and completed Azure cache takes precedence", async () => {
   const s = source(); const { discovery } = ingest(s, item({ title: "HAN 新曲リリース" })); const original = cachedSource(discovery);
@@ -623,17 +625,17 @@ test("body content does not override a specific primary subject or use discarded
     assert.equal(classifyObservation({ provider: "sony-info" }, item({ title: "Details", summary })).category, "Unknown");
   }
 });
-test("source/category and English announcement lead while review metadata stays compact", () => {
+test("Radar label and English announcement lead without technical review metadata", () => {
   const s = source();
   const { discovery } = ingest(s, item({ title: "HAN 新曲リリース", summary: "新曲を11月20日に発売します。" }));
   const embed = discord.payload(discovery, store.supportingSources(discovery.id), { translation: { status: "ready", provider: "azure", translated_title: "HAN announces a new song", translated_summary: "Release date: November 20. Track List 01. Song" } }).embeds[0].toJSON();
-  assert.equal(embed.author.name, "Sony Japan Info • Release");
+  assert.equal(embed.author.name, "🔎 RADAR");
   assert.equal(embed.title, "HAN announces a new song");
   assert.doesNotMatch(embed.description, /新曲|Track List|https?:/);
   assert.match(embed.fields.find(f => f.name === "Important timing").value, /Release: November 20/);
-  assert.match(embed.fields.find(f => f.name === "Official Source").value, /https:\/\/www.sonymusic/);
-  assert.deepEqual(embed.fields.map(f => f.name), ["Important timing", "Official Source", "Review / Calendar"]);
-  assert.equal(embed.footer.text, "SKZ Radar #" + discovery.id);
+  assert.equal(embed.fields.find(f => f.name === "Source").value, "Sony Music Japan");
+  assert.deepEqual(embed.fields.map(f => f.name), ["Source", "Important timing"]);
+  assert.equal(embed.footer, undefined);
 });
 test("foreign fallback is compact and distinguishes not configured, pending and failure", () => {
   for (const [cache, configured, expected] of [
@@ -683,7 +685,7 @@ test("informational body timing never writes calendar truth or changes identity,
     assert.deepEqual(cachedSource(after), full);
     assert.equal(f.sent.length, 1);
     assert.equal(store.delivery(discovery.id, "radar-channel").message_id, reference.message_id);
-    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /informational/);
+    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /Event Date: Nov 25, 2026/);
   }
 });
 
@@ -983,7 +985,7 @@ test("cached translated card fixes labels without modifying originals, decisions
   assert.match(timing, /Event: December 20, 2026/);
   assert.doesNotMatch(timing, /Event: November 15/);
   assert.equal(embed.title, cached.translated_title);
-  assert.equal(embed.description, presentation.cardText(presentation.preview(cached.translated_summary, cached.translated_title), presentation.SUMMARY_LIMIT) + "\n\n*Machine translated to English · Azure Translator*");
+  assert.equal(embed.description, "**What this is:**\n" + presentation.cardText(presentation.preview(cached.translated_summary, cached.translated_title, 240), 240) + "\n\n*Machine translated to English*");
   assert.deepEqual(translationStore.get(original, "azure"), cached);
   assert.deepEqual(cachedSource(discovery), original);
   assert.deepEqual(store.getDiscovery(s.guild_id, discovery.id), before);
