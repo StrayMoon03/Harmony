@@ -18,7 +18,7 @@ async function refresh(client,g,c,{publish=false,force=false}={}){
  const row=store.get(g,c);if(!row)throw Error("Configure this room first");
  if(!row.message_id&&!publish)throw Error("Initial publication requires approval");
  const m=model(row);const hash=createHash("sha256").update(JSON.stringify(m)).update(row.photo||Buffer.alloc(0)).digest("hex");
- if(!force&&row.fingerprint===hash)return;
+ 
  const channel=await client.channels.fetch(c);if(channel?.guildId!==g||!channel.isTextBased()||!channel.messages)throw Error("Invalid concert room");
  const marker="Youtiful STAY • World Tour Countdown ["+c+"]";
  let message;
@@ -28,7 +28,8 @@ async function refresh(client,g,c,{publish=false,force=false}={}){
  message=recent.find(x=>x.author.id===client.user.id&&x.content.endsWith(marker));
  }
  if(message&&message.author.id!==client.user.id)throw Error("Managed message ownership mismatch");
- const payload={...await preview(row),content:text(m)+"\n"+marker};
+ if(!force&&row.fingerprint===hash&&message?.pinned)return;
+ const payload={content:text(m)+"\n"+marker,files:[{attachment:await render(m,row.photo?{type:row.photo_type,bytes:row.photo}:null),name:"countdown.png"}],allowedMentions:{parse:[]}};
  if(message)await message.edit({...payload,attachments:[]});
  else message=await channel.send({...payload,nonce:c,enforceNonce:true});
  store.update(g,c,{message_id:message.id});
