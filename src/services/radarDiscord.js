@@ -7,7 +7,7 @@ const store = require("../stores/radarStore");
 const { resolveAdminCapabilities } = require("./operationsStatusService");
 const { submitCalendarCandidate, localToUtc, validTimezone, refreshConfiguredScheduleManagers } = require("./eventSchedulerService");
 const calendarStore = require("../stores/eventSchedulerStore");
-const { calendarPrefill } = require("./radarCalendarPrefill");
+const { calendarPrefill, validDate } = require("./radarCalendarPrefill");
 
 const presentation = require("./radarPresentation");
 const { channelView, sourceUrl } = require("./radarChannelPresentation");
@@ -30,15 +30,15 @@ function payload(discovery, sources, options = {}) {
     new ButtonBuilder().setCustomId("harmony-radar:translate:" + discovery.id).setLabel(
       view.language === "Translation pending" ? "Translating…" : "Translate to English")
       .setStyle(ButtonStyle.Secondary).setDisabled(view.language === "Translation pending"));
-  const card = channelView(discovery, source, view, currentTranslation);
+  const card = channelView(discovery, source, view, currentTranslation, options.now);
   if (card.url) controls.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Original Source").setURL(card.url));
   const embed = new EmbedBuilder().setTitle(card.title)
     .setDescription(card.description)
     .setColor(discovery.review_state === "Watching" ? 0xfee75c : 0x5865f2)
-    .setAuthor({ name: "🔎 RADAR" })
-    .addFields({ name: "Source", value: card.source });
-  if (card.timing) embed.addFields({ name: "Important timing", value: card.timing });
-  if (card.published) embed.addFields({ name: "Published", value: card.published });
+    .setAuthor({ name: "🔎 RADAR" });
+  if (card.timing) embed.addFields({ name: "📅 Calendar details", value: card.timing });
+  embed.addFields({ name: "Source", value: card.source });
+  if (card.published) embed.addFields({ name: "Published (source/content)", value: card.published });
   if (card.state) embed.setFooter({ text: card.state });
   if (card.url) embed.setURL(card.url);
   return { embeds: [embed], components: [controls], allowedMentions: { parse: [] } };
@@ -82,7 +82,7 @@ async function syncRadarChannel(client, guildId, { now = new Date(), priorityDis
         const sources = store.supportingSources(saved.id);
         const source = presentation.primarySource(saved, sources);
         const discovery = source ? store.saveClassification(guildId, saved.id, classifyObservation(source, { title: source.title, summary: source.summary, metadata: source.metadata, url: source.canonical_url })) : saved;
-        const body = payload(discovery, sources, { translationUseful: source ? await translation.useful(source) : false });
+        const body = payload(discovery, sources, { translationUseful: source ? await translation.useful(source) : false, now });
         const fingerprint = store.hash(body);
         const reference = store.delivery(discovery.id, channel.id);
         const changed = reference.delivered_hash !== fingerprint || !reference.message_id;
@@ -121,11 +121,11 @@ function calendarModal(discovery) {
   const prefill = calendarPrefill(discovery, source);
   const modal = new ModalBuilder().setCustomId("harmony-radar:handoff:" + discovery.id).setTitle("Send to calendar review");
   for (const [id, label, value, required] of [
-    ["date", "Calendar date YYYY-MM-DD", prefill.date, true],
+    ["date", "Calendar date YYYY-MM-DD", validDate(prefill.date) ? prefill.date : "", true],
     ["time", "Local time HH:MM (blank = date only)", prefill.time, false],
     ["timezone", "Time zone, such as America/New_York", prefill.timezone, false],
   ]) {
-    const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(80);
+    const input = new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(id === "date" ? 10 : id === "time" ? 5 : 80);
     if (value) input.setValue(value);
     modal.addComponents(new ActionRowBuilder().addComponents(input));
   }
