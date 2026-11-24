@@ -7,7 +7,11 @@ process.env.HARMONY_DB_PATH = path.join(
   fs.mkdtempSync(path.join(os.tmpdir(), "countdown-service-")),
   "test.sqlite",
 );
-const { Collection, ChannelType } = require("discord.js");
+const {
+  Collection,
+  ChannelType,
+  PermissionFlagsBits: P,
+} = require("discord.js");
 const store = require("../src/stores/concertCountdownStore"),
   calendar = require("../src/stores/eventSchedulerStore"),
   db = require("../src/db/sqlite");
@@ -78,7 +82,11 @@ function fixture() {
   const channel = {
     guildId: g,
     type: ChannelType.GuildText,
-    permissionsFor: () => ({ has: () => f.allow }),
+    name: "chicago",
+    overwritesFor: () => ({ roles: [] }),
+    permissionsFor: () => ({
+      has: (flag) => f.allow && !f.missingFlags?.includes(flag),
+    }),
     messages: {
       fetch: async (options) => {
         calls.fetch++;
@@ -117,7 +125,18 @@ function fixture() {
       return m;
     },
   };
-  f.client = { user: { id: "bot" }, channels: { fetch: async () => channel } };
+  const guild = { id: g };
+  const roles = new Collection([[g, { id: g, name: "@everyone" }]]);
+  const member = { id: "bot", guild, roles: { cache: roles } };
+  guild.roles = { cache: roles, fetch: async () => roles };
+  guild.members = { fetchMe: async () => member };
+  guild.channels = { fetch: async () => channel };
+  f.guild = guild;
+  f.client = {
+    user: { id: "bot" },
+    guilds: { cache: new Map([[g, guild]]), fetch: async () => guild },
+    channels: { fetch: async () => channel },
+  };
   f.channel = channel;
   f.row = () => store.get(g, c);
   f.refresh = (opts) =>
@@ -369,7 +388,13 @@ test("incomplete or unavailable recovery history never authorizes a second send"
   f.channel.messages.fetch = async () => {
     throw Object.assign(Error("History unavailable"), { code: 50013 });
   };
-  await assert.rejects(f.refresh({ publish: true }), /History unavailable/);
+  await assert.rejects(
+    f.refresh({ publish: true }),
+    (e) =>
+      e.code === 50013 &&
+      /recover a previous countdown delivery/.test(e.message) &&
+      e.cause?.message === "History unavailable",
+  );
   assert.equal(f.calls.send, 0);
   assert.ok(f.row().delivery);
 });
@@ -397,4 +422,152 @@ test("scheduler catches up immediately on startup and exposes a stop function", 
   } finally {
     stop();
   }
+});
+test("manual permission retry reloads access immediately and preserves saved dates and photograph", async () => {
+  const f = fixture();
+  store.photo(f.g, f.c, Buffer.from("saved venue photo"), "jpeg");
+  const before = f.row();
+  f.missingFlags = [P.PinMessages];
+  await assert.rejects(
+    f.refresh({ publish: true, force: true }),
+    /Missing effective room permission: Pin Messages/,
+  );
+  assert.equal(f.row().revision, before.revision);
+  assert.equal(f.row().config, before.config);
+  assert.deepEqual(f.row().photo, before.photo);
+  assert.equal(f.row().retry_kind, "permission");
+  assert.equal(f.calls.send, 0);
+  f.missingFlags = [];
+  await f.refresh({ publish: true, force: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().revision, before.revision);
+  assert.equal(f.row().retry_kind, null);
+});
+test("scheduled jobs honor permission backoff even after roles have been corrected", async () => {
+  const f = fixture();
+  store.update(f.g, f.c, { enabled: 1 });
+  f.missingFlags = [P.PinMessages];
+  await assert.rejects(
+    f.refresh({ publish: true, force: true }),
+    /Pin Messages/,
+  );
+  f.missingFlags = [];
+  // Publication was never completed, so automatic jobs cannot bypass initial approval either.
+  const result = await f.refresh({ publish: true, scheduled: true });
+  assert.equal(result.deferred, true);
+  assert.equal(f.calls.send, 0);
+});
+test("manual retries never bypass a persisted Discord rate limit, even after a photo/configuration change", async () => {
+  const f = fixture();
+  const send = f.channel.send;
+  f.channel.send = async () => {
+    throw Object.assign(Error("Rate limited"), {
+      status: 429,
+      retry_after: 90,
+    });
+  };
+  await assert.rejects(
+    f.refresh({ publish: true, force: true }),
+    /Rate limited/,
+  );
+  const retryAt = f.row().retry_at;
+  store.photo(f.g, f.c, Buffer.from("new photo"), "jpeg");
+  assert.equal(f.row().retry_at, retryAt);
+  store.save(f.g, f.c, JSON.parse(f.row().config));
+  assert.equal(f.row().retry_at, retryAt);
+  f.channel.send = send;
+  assert.equal(
+    (await f.refresh({ publish: true, force: true })).deferred,
+    true,
+  );
+  assert.equal(f.calls.send, 0);
+  await f.refresh({
+    publish: true,
+    force: true,
+    now: new Date("2027-01-01T12:01:31Z"),
+  });
+  assert.equal(f.calls.send, 1);
+});
+test("fresh permission requests that are rate limited retain the cooldown through manual retries", async () => {
+  const f = fixture();
+  const fetch = f.guild.roles.fetch;
+  f.guild.roles.fetch = async () => {
+    throw Object.assign(Error("Rate limited"), {
+      status: 429,
+      retry_after: 90,
+    });
+  };
+  await assert.rejects(
+    f.refresh({ publish: true, force: true }),
+    /could not be verified/,
+  );
+  assert.equal(f.row().retry_kind, "rate_limit");
+  f.guild.roles.fetch = fetch;
+  assert.equal(
+    (await f.refresh({ publish: true, force: true })).deferred,
+    true,
+  );
+  assert.equal(f.calls.send, 0);
+});
+test("retry after a live pin refusal reuses the saved message and keeps the same configuration revision", async () => {
+  const f = fixture();
+  const message = f.message;
+  f.message = message;
+  const send = f.channel.send;
+  f.channel.send = async (p) => {
+    const m = await send(p);
+    m.pin = async () => {
+      throw Object.assign(Error("Missing Permissions"), {
+        code: 50013,
+        status: 403,
+      });
+    };
+    return m;
+  };
+  const revision = f.row().revision;
+  await assert.rejects(
+    f.refresh({ publish: true, force: true }),
+    /pin the countdown \(50013\)/,
+  );
+  const id = f.row().message_id;
+  assert.ok(id);
+  assert.equal(f.row().retry_kind, "permission");
+  f.messages.get(id).pin = async () => {
+    f.messages.get(id).pinned = true;
+  };
+  await f.refresh({ publish: true, force: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.row().revision, revision);
+});
+test("legacy generic permission failures can be retried without editing the configuration", async () => {
+  const f = fixture();
+  store.update(f.g, f.c, {
+    last_error: require("../src/services/concertCountdownPermissions")
+      .LEGACY_PERMISSION_ERROR,
+    retry_at: "2027-01-01T12:05:00Z",
+  });
+  await f.refresh({ publish: true, force: true });
+  assert.equal(f.calls.send, 1);
+});
+test("publication rejects an actual configuration revision change before any Discord request", async () => {
+  const f = fixture(),
+    revision = f.row().revision;
+  store.save(f.g, f.c, JSON.parse(f.row().config));
+  await assert.rejects(
+    f.refresh({ publish: true, force: true, expectedRevision: revision }),
+    (e) => e.code === "COUNTDOWN_CONFIGURATION_CHANGED",
+  );
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.calls.fetch, 0);
+});
+test("lost send response can be retried immediately without losing the durable delivery record or duplicating", async () => {
+  const f = fixture();
+  f.sendError = "after";
+  await assert.rejects(f.refresh({ publish: true, force: true }), /after send/);
+  assert.ok(f.row().delivery);
+  f.sendError = null;
+  await f.refresh({ publish: true, force: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().delivery, null);
 });

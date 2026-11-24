@@ -28,7 +28,7 @@ function save(g, c, config, expected) {
   getDb()
     .prepare(
       `INSERT INTO concert_countdowns(guild_id,channel_id,config) VALUES(?,?,?)
-    ON CONFLICT(guild_id,channel_id) DO UPDATE SET config=excluded.config,fingerprint=NULL,revision=revision+1,retry_at=NULL`,
+    ON CONFLICT(guild_id,channel_id) DO UPDATE SET config=excluded.config,fingerprint=NULL,revision=revision+1,retry_at=CASE WHEN retry_kind='rate_limit' THEN retry_at ELSE NULL END`,
     )
     .run(g, c, JSON.stringify({ ...config, guildId: g }));
   return get(g, c);
@@ -46,7 +46,7 @@ function photo(g, c, bytes, type) {
     .run(g, id, JSON.parse(row.config).venue, bytes, type);
   getDb()
     .prepare(
-      "UPDATE concert_countdowns SET photo=?,photo_type=?,fingerprint=NULL,revision=revision+1,retry_at=NULL WHERE guild_id=? AND channel_id=?",
+      "UPDATE concert_countdowns SET photo=?,photo_type=?,fingerprint=NULL,revision=revision+1,retry_at=CASE WHEN retry_kind='rate_limit' THEN retry_at ELSE NULL END WHERE guild_id=? AND channel_id=?",
     )
     .run(bytes, type, g, c);
 }
@@ -74,6 +74,7 @@ function update(g, c, fields) {
     "delivery",
     "published_at",
     "retry_at",
+    "retry_kind",
     "checked_at",
     "legacy_recovery",
   ];

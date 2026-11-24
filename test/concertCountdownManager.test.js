@@ -554,3 +554,184 @@ test("advanced configure command shares the same confirmed-tour eligibility as t
   assert.match(i.response, /Saved/);
   assert.deepEqual(JSON.parse(store.get(f.g, f.c).config).eventIds, [event]);
 });
+function publicationFixture() {
+  const f = fixture(),
+    event = f.event();
+  f.s.room = f.c;
+  store.save(f.g, f.c, {
+    guildId: f.g,
+    city: "Chicago",
+    country: "USA",
+    venue: "Soldier Field",
+    timezone: "America/Chicago",
+    eventIds: [event],
+  });
+  return f;
+}
+test("failed publication retains approval and offers a safe retry with unchanged dates and photograph", async () => {
+  const f = publicationFixture();
+  store.photo(f.g, f.c, Buffer.from("saved photo"), "jpeg");
+  const before = store.get(f.g, f.c),
+    original = service.refresh;
+  let attempts = 0;
+  service.refresh = async () => {
+    if (++attempts === 1)
+      throw Error("Missing effective room permission: Pin Messages");
+    return { updated: true };
+  };
+  try {
+    await manager.handle(f.i("publish"));
+    let i = f.i("confirm-publish");
+    await manager.handle(i);
+    assert.equal(f.s.publishRevision, before.revision);
+    assert.match(serialize(i.response), /Retry publication/);
+    assert.doesNotMatch(serialize(i.response), /Configuration changed/);
+    assert.deepEqual(store.get(f.g, f.c), before);
+    i = f.i("confirm-publish");
+    await manager.handle(i);
+    assert.equal(attempts, 2);
+    assert.equal(f.s.publishRevision, undefined);
+    assert.match(serialize(i.response), /updated and pinned/);
+    assert.deepEqual(store.get(f.g, f.c), before);
+  } finally {
+    service.refresh = original;
+  }
+});
+test("deferred rate-limit publication retains approval and retry controls", async () => {
+  const f = publicationFixture(),
+    original = service.refresh;
+  let attempts = 0;
+  service.refresh = async () =>
+    ++attempts === 1
+      ? { deferred: true, retryAt: "2027-01-01T12:05:00Z" }
+      : { updated: true };
+  try {
+    await manager.handle(f.i("publish"));
+    let i = f.i("confirm-publish");
+    await manager.handle(i);
+    assert.equal(f.s.publishRevision, 0);
+    assert.match(serialize(i.response), /Retry publication/);
+    i = f.i("confirm-publish");
+    await manager.handle(i);
+    assert.equal(attempts, 2);
+    assert.equal(f.s.publishRevision, undefined);
+  } finally {
+    service.refresh = original;
+  }
+});
+test("a real photograph change invalidates retained approval after a failed attempt", async () => {
+  const f = publicationFixture(),
+    original = service.refresh;
+  let attempts = 0;
+  service.refresh = async () => {
+    attempts++;
+    throw Error("Temporary publication failure");
+  };
+  try {
+    await manager.handle(f.i("publish"));
+    await manager.handle(f.i("confirm-publish"));
+    store.photo(f.g, f.c, Buffer.from("changed photo"), "jpeg");
+    const i = f.i("confirm-publish");
+    await manager.handle(i);
+    assert.match(i.response.content, /Configuration changed/);
+    assert.equal(attempts, 1);
+  } finally {
+    service.refresh = original;
+  }
+});
+test("approval is scoped to its concert room even when another room has the same revision", async () => {
+  const f = publicationFixture();
+  await manager.handle(f.i("publish"));
+  const row = store.get(f.g, f.c);
+  store.save(f.g, "different-room", JSON.parse(row.config));
+  f.s.room = "different-room";
+  const i = f.i("confirm-publish");
+  await manager.handle(i);
+  assert.match(i.response.content, /Configuration changed/);
+});
+test("canceling publication removes approval so a stale retry cannot publish", async () => {
+  const f = publicationFixture();
+  await manager.handle(f.i("publish"));
+  await manager.handle(f.i("back"));
+  assert.equal(f.s.publishRevision, undefined);
+  const i = f.i("confirm-publish");
+  await manager.handle(i);
+  assert.match(i.response.content, /approve publication again/);
+});
+test("overlapping publication clicks cannot overwrite an in-flight result or start a second attempt", async () => {
+  const f = publicationFixture(),
+    original = service.refresh;
+  let release, entered;
+  const started = new Promise((r) => (entered = r)),
+    finish = new Promise((r) => (release = r));
+  let calls = 0;
+  service.refresh = async () => {
+    calls++;
+    entered();
+    await finish;
+    return { updated: true };
+  };
+  try {
+    await manager.handle(f.i("publish"));
+    const first = manager.handle(f.i("confirm-publish"));
+    await started;
+    const second = f.i("confirm-publish");
+    await manager.handle(second);
+    assert.match(second.response.content, /already running/);
+    assert.equal(second.deferred, undefined);
+    release();
+    await first;
+    assert.equal(calls, 1);
+    assert.equal(f.s.publishRevision, undefined);
+    assert.equal(f.s.publicationInFlight, undefined);
+  } finally {
+    release?.();
+    service.refresh = original;
+  }
+});
+test("configuration changed during interaction acknowledgement is rejected before permission checks or publication", async () => {
+  const f = publicationFixture();
+  await manager.handle(f.i("publish"));
+  const i = f.i("confirm-publish");
+  i.deferUpdate = async () => {
+    i.deferred = true;
+    store.save(f.g, f.c, {
+      ...JSON.parse(store.get(f.g, f.c).config),
+      venue: "Updated venue",
+    });
+  };
+  await manager.handle(i);
+  assert.match(i.response.content, /Configuration changed/);
+  assert.equal(store.get(f.g, f.c).message_id, null);
+  assert.equal(f.s.publishRevision, undefined);
+});
+test("Check room access is private, read-only and does not consume pending publication approval", async () => {
+  const f = publicationFixture(),
+    access = require("../src/services/concertCountdownPermissions"),
+    original = access.inspect;
+  access.inspect = async () => ({
+    diagnostics: {
+      channelName: "chicago",
+      missing: [],
+      permissions: access.REQUIRED.map((p) => ({
+        name: p.name,
+        allowed: true,
+      })),
+    },
+  });
+  try {
+    await manager.handle(f.i("publish"));
+    const before = store.get(f.g, f.c);
+    const i = f.i("permissions");
+    await manager.handle(i);
+    assert.equal(i.deferred, true);
+    assert.match(
+      i.response.content,
+      /All five required permissions are effective/,
+    );
+    assert.deepEqual(store.get(f.g, f.c), before);
+    assert.equal(f.s.publishRevision, before.revision);
+  } finally {
+    access.inspect = original;
+  }
+});

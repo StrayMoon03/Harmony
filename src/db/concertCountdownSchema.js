@@ -24,6 +24,7 @@ function migrateCountdowns(db) {
     delivery: "TEXT",
     published_at: "TEXT",
     retry_at: "TEXT",
+    retry_kind: "TEXT",
     lease_token: "TEXT",
     lease_until: "INTEGER",
     checked_at: "TEXT",
