@@ -31,6 +31,10 @@ function item(patch = {}) {
 function ingest(s, value = item(), classification) {
   return store.ingest(s, value, classification || classifyObservation(s, value), "2026-11-19T04:37:56.872Z");
 }
+function timingData(discovery, sources) {
+  const source = presentation.primarySource(discovery, sources), current = translation.current(source);
+  return require('../src/services/radarChannelPresentation').channelView(discovery, source, presentation.cardView(discovery, source, current), current).timing;
+}
 function cachedSource(d) { return presentation.primarySource(d, store.supportingSources(d.id)); }
 function fixture(guildId) {
   const sent = [];
@@ -77,7 +81,7 @@ test("long Sony article is fully persisted but its Discord card is concise and l
   assert.doesNotMatch(embed.description, /Track List|Application instructions|https?:\/\//);
   assert.equal(embed.url, value.url);
   assert.equal(body.components[0].toJSON().components.find((control) => control.style === 5).url, value.url);
-  assert.deepEqual(body.components[0].toJSON().components.filter((control) => control.custom_id).map((control) => control.label), ["Ignore", "Watch for Details", "Add to Calendar", "Translate to English"]);
+  assert.deepEqual(body.components[0].toJSON().components.filter((control) => control.custom_id).map((control) => control.label), ["Ignore", "Watch for Details", "Review / Add to Calendar", "Translate to English"]);
 });
 test("JYPE and YouTube observations retain complete normalized text beyond the former 6000-character cutoff", () => {
   const long = "Original source detail ".repeat(400) + "TAIL";
@@ -104,7 +108,7 @@ test("confirmed timing is distinct from compacted publication/discovery metadata
   const { discovery } = ingest(s);
   const input = { ...discovery, event_at: "2026-11-20T11:00:00.000Z", event_date: "2026-11-20" };
   const body = discord.payload(input, store.supportingSources(discovery.id));
-  const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "📅 Calendar details").value;
+  const timing = timingData(input, store.supportingSources(discovery.id));
   assert.doesNotMatch(timing, /Published|Discovered|Nov 18/);
   assert.match(timing, /Date: November 20, 2026/);
   assert.equal(store.supportingSources(discovery.id)[0].published_at, "2026-11-18");
@@ -632,9 +636,9 @@ test("Radar label and English announcement lead without technical review metadat
   assert.equal(embed.author.name, "🔎 RADAR");
   assert.equal(embed.title, "HAN announces a new song");
   assert.doesNotMatch(embed.description, /新曲|Track List|https?:/);
-  assert.match(embed.fields.find(f => f.name === "📅 Calendar details").value, /Date means: Release/);
+  assert.match(embed.fields.find(f => f.name === "Calendar timing").value, /Needs review/);
   assert.equal(embed.fields.find(f => f.name === "Source").value, "Sony Music Japan");
-  assert.deepEqual(embed.fields.map(f => f.name), ["📅 Calendar details", "Source", "Published (source/content)"]);
+  assert.deepEqual(embed.fields.map(f => f.name), ["Calendar timing", "Source", "Published (source/content)"]);
   assert.equal(embed.footer, undefined);
 });
 test("foreign fallback is compact and distinguishes not configured, pending and failure", () => {
@@ -685,7 +689,7 @@ test("informational body timing never writes calendar truth or changes identity,
     assert.deepEqual(cachedSource(after), full);
     assert.equal(f.sent.length, 1);
     assert.equal(store.delivery(discovery.id, "radar-channel").message_id, reference.message_id);
-    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "📅 Calendar details").value, /Date: November 25, 2026/);
+    assert.match(timingData(after, store.supportingSources(discovery.id)), /Date: November 25, 2026/);
   }
 });
 
@@ -759,7 +763,7 @@ test("owner click translates once, edits the same message and preserves original
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Watching");
   const calendarClick = ownerInteraction(f, discovery, "calendar");
   await discord.handleRadarInteraction(calendarClick);
-  assert.match(calendarClick.replies.at(-1).content, /calendar-target/);
+  assert.match(calendarClick.replies.at(-1), /calendar-target/);
   assert.equal(worker.calls(), 1);
 });
 test("non-owner administrators and unauthorized users cannot request translation; wrong channel rejected", async (t) => {
@@ -874,7 +878,7 @@ test("bounded translation includes late timing evidence and translated timing ne
   const before = store.getDiscovery(s.guild_id, discovery.id);
   await discord.handleRadarInteraction(ownerInteraction(f, discovery));
   assert.ok(input.summary.length <= 900); assert.match(input.summary, /Release: 11月24日/);
-  assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "📅 Calendar details").value, /Date means: Release/);
+  assert.match(timingData(discovery, store.supportingSources(discovery.id)), /Date means: Release/);
   const after = store.getDiscovery(s.guild_id, discovery.id);
   for (const key of ["event_at", "event_date", "calendar_candidate_id", "handoff_result"]) assert.equal(after[key], before[key]);
 });
@@ -979,7 +983,7 @@ test("cached translated card fixes labels without modifying originals, decisions
   const messageId = store.delivery(discovery.id, "radar-channel").message_id;
   await discord.syncRadarChannel(f.client, s.guild_id);
   const embed = f.sent[0].embeds[0];
-  const timing = embed.fields.find(field => field.name === "📅 Calendar details").value;
+  const timing = timingData(discovery, store.supportingSources(discovery.id));
   assert.match(timing, /Date means: Application deadline/);
   assert.match(timing, /Time: 11:59 PM/);
   assert.match(timing, /Date: November 25, 2026/);

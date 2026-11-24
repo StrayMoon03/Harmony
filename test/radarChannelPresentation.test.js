@@ -53,7 +53,7 @@ for (const [provider, label, patch, translated] of [
   assert.equal(e.author.name, '🔎 RADAR'); assert.match(e.description, /What this is/);
   assert.equal(e.fields.find(field => field.name === 'Source').value, label);
   assert.equal(controls(body).find(button => button.label === 'Original Source').url, f.item.url);
-  assert.ok(controls(body).some(button => button.label === 'Add to Calendar' && !button.disabled));
+  assert.ok(controls(body).some(button => button.label === 'Review / Add to Calendar' && !button.disabled));
   const visible = JSON.stringify(e);
   assert.doesNotMatch(visible, /confidence|correlation_key|Needs Review|Review \/ Calendar|SKZ Radar #|supporting sources|source_provider/);
   assert.ok(!visible.includes(provider));
@@ -83,7 +83,7 @@ test('official event timing is readable, retains meaning and does not invent tim
     const f = fixture('jype-notice', { title: 'Fan event', summary });
     const before = store.getDiscovery(f.source.guild_id, f.discovery.id);
     const e = validate(discord.payload(f.discovery, f.sources()));
-    const timing = e.fields.find(field => field.name === '📅 Calendar details').value;
+    const timing = calendarArea(f);
     assert.match(timing, date); assert.match(timing, time);
     assert.equal(e.fields.find(field => field.name === 'Published (source/content)').value, 'November 18, 2026');
     assert.deepEqual(store.getDiscovery(f.source.guild_id, f.discovery.id), before);
@@ -94,7 +94,7 @@ test('publication stays publication, including a future publication timestamp', 
   const f = fixture('jype-notice', { title: 'Official update', summary: 'Further details will follow in the original announcement.', publishedAt: '2030-11-28T20:00:00.000Z' });
   const e = validate(discord.payload(f.discovery, f.sources()));
   assert.equal(e.fields.find(field => field.name === 'Published (source/content)').value, 'November 28, 2030');
-  assert.match(e.fields.find(field => field.name === '📅 Calendar details').value, /Date: Not identified/);
+  assert.match(calendarArea(f), /Date: Not identified/);
   const modal = discord.calendarModal(f.discovery).toJSON();
   assert.ok(modal.components.every(row => !row.components[0].value));
   assert.equal(store.getDiscovery(f.source.guild_id, f.discovery.id).event_date, null);
@@ -131,7 +131,12 @@ test('invalid or oversized source URLs cannot make the Discord payload invalid',
 });
 
 const decisionNow = new Date('2026-11-24T12:00:00Z');
-const calendarArea = embed => embed.fields.find(field => field.name === '📅 Calendar details').value;
+// Detailed timing remains tested as a read-only suggestion helper; the inbox
+// now intentionally displays only Calendar timing: Needs review / detected.
+function calendarArea(f, discovery = f.discovery, now = decisionNow) {
+  const source = presentation.primarySource(discovery, f.sources());
+  return require('../src/services/radarChannelPresentation').channelView(discovery, source, presentation.cardView(discovery, source, null), null, now).timing;
+}
 const modalValues = modal => Object.fromEntries(modal.toJSON().components.map(row => [row.components[0].custom_id, row.components[0].value || '']));
 
 for (const [title, summary] of [
@@ -153,46 +158,46 @@ for (const [title, summary] of [
 test('known album release date and missing time are explicit, publication is secondary and date-only', () => {
   const f = fixture('sony-info', { title: 'Album release notice', summary: 'Album release: January 15, 2027.', publishedAt: '2026-11-17T04:00:00.000Z' });
   const body = discord.payload(f.discovery, f.sources(), { now: decisionNow });
-  const e = validate(body), details = calendarArea(e);
+  const e = validate(body), details = calendarArea(f);
   assert.match(details, /Date: January 15, 2027/); assert.match(details, /Time: Not announced/);
   assert.match(details, /Date means: Album release/); assert.match(details, /Status: Upcoming/);
-  assert.deepEqual(e.fields.map(field => field.name), ['📅 Calendar details', 'Source', 'Published (source/content)']);
+  assert.deepEqual(e.fields.map(field => field.name), ['Calendar timing', 'Source', 'Published (source/content)']);
   assert.equal(e.fields[2].value, 'November 17, 2026');
   assert.deepEqual(modalValues(discord.calendarModal(f.discovery)), { date: '2027-01-15', time: '', timezone: '' });
-  assert.ok(controls(body).some(button => button.label === 'Add to Calendar' && !button.disabled));
+  assert.ok(controls(body).some(button => button.label === 'Review / Add to Calendar' && !button.disabled));
 });
 
 test('already-published YouTube content never promotes publication into a calendar date', () => {
   const f = fixture('youtube-uploads', { title: 'I.N NO RETURN', summary: 'Watch this new video on the official channel.', publishedAt: '2026-11-17T04:00:00.000Z' });
   const body = discord.payload(f.discovery, f.sources(), { now: decisionNow });
-  const e = validate(body), details = calendarArea(e);
+  const e = validate(body), details = calendarArea(f);
   assert.match(details, /Date: Not identified/); assert.match(details, /Time: Not announced/);
   assert.match(details, /Date means: Not determined/); assert.match(details, /Status: Already published/);
   assert.match(details, /Content is already published/);
   assert.equal(e.fields.find(field => field.name === 'Published (source/content)').value, 'November 17, 2026');
   assert.deepEqual(modalValues(discord.calendarModal(f.discovery)), { date: '', time: '', timezone: '' });
-  assert.ok(controls(body).some(button => button.label === 'Add to Calendar' && !button.disabled));
+  assert.ok(controls(body).some(button => button.label === 'Review / Add to Calendar' && !button.disabled));
 });
 
 test('canonical date does not acquire a guessed meaning from category alone', () => {
   const f = fixture('jype-notice', { title: 'Announcement', summary: 'Further details will follow.' });
   const d = { ...f.discovery, event_date: '2027-01-15', category: 'Event' };
   const e = validate(discord.payload(d, f.sources(), { now: decisionNow }));
-  assert.match(calendarArea(e), /Date: January 15, 2027/);
-  assert.match(calendarArea(e), /Date means: Not determined/);
-  assert.match(calendarArea(e), /Status: Upcoming/);
+  assert.match(calendarArea(f, d), /Date: January 15, 2027/);
+  assert.match(calendarArea(f, d), /Date means: Not determined/);
+  assert.match(calendarArea(f, d), /Status: Upcoming/);
 });
 
 test('date meaning uses its own source sentence and competing meanings stay unresolved', () => {
   const f = fixture('jype-notice', { title: 'Album and concert details', summary: 'Concert event date: December 20, 2026. Album release: January 15, 2027. Application deadline: November 20, 2026 at 23:59 KST.' });
-  const details = calendarArea(validate(discord.payload(f.discovery, f.sources(), { now: decisionNow })));
+  const details = calendarArea(f);
   assert.match(details, /Date means: Concert/); assert.match(details, /Date means: Album release/);
   assert.match(details, /Date means: Application deadline/); assert.match(details, /Status: Deadline has passed/);
   // Multiple date choices remain the owner's decision, not a first-date prefill.
   assert.deepEqual(modalValues(discord.calendarModal(f.discovery)), { date: '', time: '', timezone: '' });
   const sameDay = fixture('sony-info', { title: 'Details', summary: 'Release: January 15, 2027. Event date: January 15, 2027.' });
   const d = { ...sameDay.discovery, event_date: '2027-01-15' };
-  assert.match(calendarArea(validate(discord.payload(d, sameDay.sources(), { now: decisionNow }))), /Date means: Not determined/);
+  assert.match(calendarArea(sameDay, d), /Date means: Not determined/);
 });
 
 test('explicit translation changes only title/preview; its proposed dates cannot replace source timing', () => {
@@ -201,7 +206,7 @@ test('explicit translation changes only title/preview; its proposed dates cannot
   const translated = { status: 'ready', provider: 'azure', translated_title: 'New release announced', translated_summary: 'The album is announced. Release: February 2, 2027.' };
   const e = validate(discord.payload(f.discovery, f.sources(), { now: decisionNow, translation: translated }));
   assert.equal(e.title, 'New release announced'); assert.match(e.description, /The album is announced/);
-  assert.match(calendarArea(e), /Date: January 15, 2027/); assert.doesNotMatch(calendarArea(e), /February 2/);
+  assert.match(calendarArea(f), /Date: January 15, 2027/); assert.doesNotMatch(calendarArea(f), /February 2/);
   assert.deepEqual(f.sources(), original); assert.deepEqual(store.getDiscovery(f.source.guild_id, f.discovery.id), record);
 });
 
@@ -213,7 +218,7 @@ test('bare year, year-month and incomplete event_at cannot invent modal dates or
     assert.equal(values.date, '', String(partial)); assert.equal(values.time, '', String(partial));
     assert.equal(modal.toJSON().components[0].components[0].max_length, 10);
     const e = validate(discord.payload(d, f.sources(), { now: decisionNow }));
-    assert.match(calendarArea(e), /Date: Not identified/);
+    assert.match(calendarArea(f, d), /Date: Not identified/);
   }
 });
 
@@ -222,7 +227,7 @@ test('complete canonical dates and exact instants still prefill, unknown time an
   assert.deepEqual(modalValues(discord.calendarModal({ ...f.discovery, event_date: '2027-01-15' })), { date: '2027-01-15', time: '', timezone: '' });
   const d = { ...f.discovery, event_date: '2027-01-15', event_at: '2027-01-15T11:00:00Z', event_timezone: 'Asia/Seoul' };
   assert.deepEqual(modalValues(discord.calendarModal(d)), { date: '2027-01-15', time: '20:00', timezone: 'Asia/Seoul' });
-  assert.match(calendarArea(validate(discord.payload(d, f.sources(), { now: decisionNow }))), /Time: 8:00 PM KST/);
+  assert.match(calendarArea(f, d), /Time: 8:00 PM KST/);
   assert.deepEqual(modalValues(discord.calendarModal({ ...d, event_at: '20:00', event_timezone: '' })), { date: '2027-01-15', time: '', timezone: '' });
 });
 
@@ -230,7 +235,7 @@ test('source partial dates and publication dates leave unknown calendar timing e
   for (const summary of ['Release: 2026.', 'Release: 2026-11.', 'Release: November 2026.', 'Published November 17, 2026.', 'Details to follow.']) {
     const f = fixture('jype-notice', { title: 'Details', summary, publishedAt: '2026-11-17' });
     const e = validate(discord.payload(f.discovery, f.sources(), { now: decisionNow }));
-    assert.match(calendarArea(e), /Date: Not identified/);
+    assert.match(calendarArea(f), /Date: Not identified/);
     assert.deepEqual(modalValues(discord.calendarModal(f.discovery)), { date: '', time: '', timezone: '' });
   }
 });
@@ -242,13 +247,13 @@ test('past release and future concert statuses rely on source dates, not publica
     ['Application deadline: November 17, 2026 at 23:59 KST.', 'Deadline has passed'],
   ]) {
     const f = fixture('jype-notice', { title: 'Official details', summary, publishedAt: '2026-11-01' });
-    assert.ok(calendarArea(validate(discord.payload(f.discovery, f.sources(), { now: decisionNow }))).includes('Status: ' + status));
+    assert.ok(calendarArea(f).includes('Status: ' + status));
   }
 });
 
 test('date-only boundary-day timing is not declared upcoming or past using a guessed timezone', () => {
   const f = fixture('sony-info', { title: 'Release notice', summary: 'Album release: November 24, 2026.' });
-  const details = calendarArea(validate(discord.payload(f.discovery, f.sources(), { now: new Date('2026-11-24T01:00:00Z') })));
+  const details = calendarArea(f, f.discovery, new Date('2026-11-24T01:00:00Z'));
   assert.match(details, /Time: Not announced/);
   assert.doesNotMatch(details, /Status: Upcoming|Status: Already released/);
 });

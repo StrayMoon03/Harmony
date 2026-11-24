@@ -844,13 +844,13 @@ test("periodic existence checks force a Discord request instead of trusting a ca
   assert.equal(forced, true);
   assert.equal(f.sent.length, 1);
 });
-test("opening calendar modal does not resolve or create a candidate", async () => {
+test("opening private calendar review does not resolve or create a candidate", async () => {
   const { s, discovery, f, target } = handoffFixture();
   let shown = false;
   await discord.handleRadarInteraction({
     customId: "harmony-radar:calendar:" + discovery.id, guildId: s.guild_id, guild: f.guild,
     member: { permissions: { has: () => true } }, user: { id: "owner" }, channelId: "destination", client: f.client,
-    showModal: async () => { shown = true; },
+    deferReply: async () => {}, editReply: async () => { shown = true; },
   });
   assert.equal(shown, true);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).review_state, "Needs Review");

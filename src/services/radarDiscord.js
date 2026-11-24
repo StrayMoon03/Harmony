@@ -15,6 +15,7 @@ const translation = require("./radarTranslationService");
 const { classifyObservation } = require("./radarClassification");
 const deliveries = new Map();
 const handoffs = new Map();
+const entryReview = require("./radarEntryReview").createEntryReview({ handoff, syncRadarChannel, handoffFeedback });
 const EXISTENCE_CHECK_MS = 60 * 60 * 1000;
 function payload(discovery, sources, options = {}) {
   const source = presentation.primarySource(discovery, sources);
@@ -23,7 +24,7 @@ function payload(discovery, sources, options = {}) {
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("harmony-radar:ignore:" + discovery.id).setLabel("Ignore").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("harmony-radar:watch:" + discovery.id).setLabel("Watch for Details").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("harmony-radar:calendar:" + discovery.id).setLabel("Add to Calendar").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId("harmony-radar:calendar:" + discovery.id).setLabel("Review / Add to Calendar").setStyle(ButtonStyle.Primary)
       .setDisabled(Boolean(discovery.handoff_result) || !sourceUrl(source)),
   );
   if (source && view.needsTranslation && !view.translated) controls.addComponents(
@@ -36,7 +37,10 @@ function payload(discovery, sources, options = {}) {
     .setDescription(card.description)
     .setColor(discovery.review_state === "Watching" ? 0xfee75c : 0x5865f2)
     .setAuthor({ name: "🔎 RADAR" });
-  if (card.timing) embed.addFields({ name: "📅 Calendar details", value: card.timing });
+  const suggested = calendarPrefill(discovery, source);
+  embed.addFields({ name: "Calendar timing", value: suggested.date
+    ? presentation.formatDate(suggested.date) + " detected — review required"
+    : "Needs review" + (card.timing.includes("Status: Already published") ? " · This content is already published." : "") });
   embed.addFields({ name: "Source", value: card.source });
   if (card.published) embed.addFields({ name: "Published (source/content)", value: card.published });
   if (card.state) embed.setFooter({ text: card.state });
@@ -156,16 +160,22 @@ async function performHandoff(client, guildId, discoveryId, actorId, details) {
   if (time && (!/^\d{2}:\d{2}$/.test(time) || !timezone)) throw new Error("A timed event needs HH:MM and a time zone.");
   const at = time ? localToUtc(date, time, timezone) : null;
   if (time && !at) throw new Error("The date or local time is invalid.");
+  const title = details.title === undefined ? discovery.title : String(details.title).trim();
+  const description = details.description === undefined ? discovery.summary : String(details.description).trim();
+  if (details.title !== undefined && (!title || title.length > 120)) throw new Error("Provide a calendar title up to 120 characters.");
+  if (details.description !== undefined && description.length > 500) throw new Error("Keep calendar notes within 500 characters.");
+  const categories = require("./eventSchedulerService").CALENDAR_CATEGORIES;
+  if (details.category !== undefined && !categories.includes(details.category)) throw new Error("Choose an existing calendar type.");
   const sources = store.supportingSources(discovery.id);
   const source = sources[0];
   if (!source) throw new Error("This discovery has no saved source evidence.");
   // Existing candidate identity makes a retry safe even after a crash before saving the Radar reference.
   const input = {
-    guildId: target.id, title: discovery.title, proposedEventDate: date,
+    guildId: target.id, title, proposedEventDate: date,
     proposedEventAt: at?.toISOString() || null, proposedEventTimezone: timezone || null,
     sourceUrl: source.canonical_url, sourceProvider: "skz-radar", discoveryKey: "radar:" + guildId + ":" + discovery.id,
-    sourceType: "radar_handoff", skipEnrichment: true, submitterId: actorId, submittedNote: discovery.summary,
-    sourceMetadata: JSON.stringify({ allDay: !time }),
+    sourceType: "radar_handoff", skipEnrichment: true, submitterId: actorId, submittedNote: description,
+    sourceMetadata: JSON.stringify({ allDay: !time, ...(details.category !== undefined ? { calendarCategory: details.category } : {}) }),
     sourceProvenance: sources.map((item) => ({
       provider: item.provider, sourceName: item.provider, sourceId: item.item_id,
       sourceUrl: item.canonical_url, originalTitle: item.title, retrievedAt: item.discovered_at,
@@ -211,15 +221,14 @@ function handoffFeedback(outcome) {
   return `Saved calendar candidate #${outcome.record.id} for review (${outcome.record.proposed_event_date || "date pending"}).\nOpen ${location}.\n${panel ? "If the manager message is unavailable, use /harmony-calendar review in the configured calendar server.\n" : ""}It is awaiting explicit approval and will not appear on the published month calendar yet.`;
 }
 async function handleRadarInteraction(interaction) {
+  if (await entryReview.handle(interaction)) return true;
   const match = /^harmony-radar:(ignore|watch|calendar|handoff|translate):(\d+)$/.exec(interaction.customId || "");
   if (!match) return false;
   const [, action, rawId] = match;
   const isModal = interaction.isModalSubmit?.();
   if ((action === "handoff") !== Boolean(isModal)) return false;
-  if (action !== "calendar") {
-    if (isModal || action === "translate") await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    else await interaction.deferUpdate();
-  }
+  if (isModal || action === "translate" || action === "calendar") await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  else await interaction.deferUpdate();
   const capabilities = await resolveAdminCapabilities({ guild: interaction.guild, member: interaction.member, userId: interaction.user?.id });
   const settings = store.getSettings(interaction.guildId);
   const discovery = store.getDiscovery(interaction.guildId, Number(rawId));
@@ -227,7 +236,7 @@ async function handleRadarInteraction(interaction) {
       interaction.channelId !== settings.channel_id) {
     const content = "Use Radar from its configured Harmony server channel with admin access.";
     if (interaction.deferred) {
-      if (isModal || action === "translate") await interaction.editReply(content);
+      if (isModal || action === "translate" || action === "calendar") await interaction.editReply(content);
       else await interaction.followUp({ content, flags: MessageFlags.Ephemeral });
     } else await interaction.reply({ content, flags: MessageFlags.Ephemeral });
     return true;
@@ -258,11 +267,9 @@ async function handleRadarInteraction(interaction) {
     return true;
   }
   if (action === "calendar") {
-    if (discovery.handoff_result) {
-      await interaction.reply({ content: "This discovery has already completed its calendar handoff.", flags: MessageFlags.Ephemeral });
-    } else if (!settings.calendar_guild_id) {
-      await interaction.reply({ content: "Configure /harmony-radar calendar-target first. This discovery remains saved.", flags: MessageFlags.Ephemeral });
-    } else await interaction.showModal(calendarModal(discovery));
+    if (discovery.handoff_result) await interaction.editReply("This discovery has already completed its calendar handoff.");
+    else if (!settings.calendar_guild_id) await interaction.editReply("Configure /harmony-radar calendar-target first. This discovery remains saved.");
+    else await entryReview.open(interaction, discovery, capabilities);
     return true;
   }
   if (action === "handoff") {
