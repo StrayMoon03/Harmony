@@ -104,9 +104,9 @@ test("confirmed timing is distinct from compacted publication/discovery metadata
   const { discovery } = ingest(s);
   const input = { ...discovery, event_at: "2026-11-20T11:00:00.000Z", event_date: "2026-11-20" };
   const body = discord.payload(input, store.supportingSources(discovery.id));
-  const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "Important timing").value;
+  const timing = body.embeds[0].toJSON().fields.find((field) => field.name === "📅 Calendar details").value;
   assert.doesNotMatch(timing, /Published|Discovered|Nov 18/);
-  assert.match(timing, /Calendar date: Nov 20, 2026/);
+  assert.match(timing, /Date: November 20, 2026/);
   assert.equal(store.supportingSources(discovery.id)[0].published_at, "2026-11-18");
   assert.doesNotMatch(JSON.stringify(body), /2026-11-19T04:37:56\.872Z|2026-11-20T11:00:00/);
   assert.equal(store.getDiscovery(s.guild_id, discovery.id).created_at, "2026-11-19T04:37:56.872Z");
@@ -288,7 +288,7 @@ test("missing provider configuration falls back without external calls", async (
   await worker.whenIdle();
   assert.equal(worker.current(cachedSource(discovery)).status, "unavailable");
   const embed = discord.payload(discovery, store.supportingSources(discovery.id), { translation: worker.current(cachedSource(discovery)) }).embeds[0].toJSON();
-  assert.equal(embed.title, "Official announcement · Release");
+  assert.equal(embed.title, "HAN 新曲リリース");
   assert.match(embed.description, /Translation not configured/);
 });
 test("failed translation still delivers original-language cards and never persists raw provider errors", async (t) => {
@@ -302,7 +302,7 @@ test("failed translation still delivers original-language cards and never persis
   await worker.request(cachedSource(discovery));
   await worker.whenIdle(); await tick(); await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.equal(f.sent[0].embeds[0].title, "Official announcement · Release");
+  assert.equal(f.sent[0].embeds[0].title, "HAN 新曲リリース");
   assert.match(f.sent[0].embeds[0].description, /Translation failed\/unavailable/);
   assert.equal(worker.current(cachedSource(discovery)).error, "translator_failed");
   assert.equal(store.getSettings(s.guild_id).delivery_error, null);
@@ -402,7 +402,7 @@ test("translation-cache failure cannot prevent original Discord delivery", async
   const f = fixture(s.guild_id);
   await discord.syncRadarChannel(f.client, s.guild_id);
   assert.equal(f.sent.length, 1);
-  assert.equal(f.sent[0].embeds[0].title, "Official announcement · Release");
+  assert.equal(f.sent[0].embeds[0].title, "HAN 新曲リリース");
   assert.equal(store.getSettings(s.guild_id).delivery_error, null);
 });
 test("pending enrichment is labeled pending and failure is labeled unavailable", () => {
@@ -632,9 +632,9 @@ test("Radar label and English announcement lead without technical review metadat
   assert.equal(embed.author.name, "🔎 RADAR");
   assert.equal(embed.title, "HAN announces a new song");
   assert.doesNotMatch(embed.description, /新曲|Track List|https?:/);
-  assert.match(embed.fields.find(f => f.name === "Important timing").value, /Release: November 20/);
+  assert.match(embed.fields.find(f => f.name === "📅 Calendar details").value, /Date means: Release/);
   assert.equal(embed.fields.find(f => f.name === "Source").value, "Sony Music Japan");
-  assert.deepEqual(embed.fields.map(f => f.name), ["Source", "Important timing"]);
+  assert.deepEqual(embed.fields.map(f => f.name), ["📅 Calendar details", "Source", "Published (source/content)"]);
   assert.equal(embed.footer, undefined);
 });
 test("foreign fallback is compact and distinguishes not configured, pending and failure", () => {
@@ -685,7 +685,7 @@ test("informational body timing never writes calendar truth or changes identity,
     assert.deepEqual(cachedSource(after), full);
     assert.equal(f.sent.length, 1);
     assert.equal(store.delivery(discovery.id, "radar-channel").message_id, reference.message_id);
-    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /Event Date: Nov 25, 2026/);
+    assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "📅 Calendar details").value, /Date: November 25, 2026/);
   }
 });
 
@@ -874,7 +874,7 @@ test("bounded translation includes late timing evidence and translated timing ne
   const before = store.getDiscovery(s.guild_id, discovery.id);
   await discord.handleRadarInteraction(ownerInteraction(f, discovery));
   assert.ok(input.summary.length <= 900); assert.match(input.summary, /Release: 11月24日/);
-  assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "Important timing").value, /Release: November 24/);
+  assert.match(f.sent[0].embeds[0].fields.find(field => field.name === "📅 Calendar details").value, /Date means: Release/);
   const after = store.getDiscovery(s.guild_id, discovery.id);
   for (const key of ["event_at", "event_date", "calendar_candidate_id", "handoff_result"]) assert.equal(after[key], before[key]);
 });
@@ -966,7 +966,7 @@ test("timing correction leaves existing translation request/cache identity byte-
   assert.equal(view.title, "Details"); assert.match(view.summary, /will follow/);
 });
 test("cached translated card fixes labels without modifying originals, decisions, cache, delivery or calendar truth", async (t) => {
-  const s = source(); const value = item({ title: "アルバムとイベントのお知らせ", summary: "元の発表内容は保持されます。" });
+  const s = source(); const value = item({ title: "アルバムとイベントのお知らせ", summary: "アルバム発売：2026年11月25日。応募締切：2026年11月15日 23:59。公演：2026年12月20日。" });
   const { discovery } = ingest(s, value); store.setReviewState(s.guild_id, discovery.id, "Watching");
   const original = cachedSource(discovery);
   translationStore.claim(original, "azure", Date.now(), 1000);
@@ -979,13 +979,16 @@ test("cached translated card fixes labels without modifying originals, decisions
   const messageId = store.delivery(discovery.id, "radar-channel").message_id;
   await discord.syncRadarChannel(f.client, s.guild_id);
   const embed = f.sent[0].embeds[0];
-  const timing = embed.fields.find(field => field.name === "Important timing").value;
-  assert.match(timing, /Application deadline: November 15 at 23:59/);
-  assert.match(timing, /Release: November 25, 2026/);
-  assert.match(timing, /Event: December 20, 2026/);
+  const timing = embed.fields.find(field => field.name === "📅 Calendar details").value;
+  assert.match(timing, /Date means: Application deadline/);
+  assert.match(timing, /Time: 11:59 PM/);
+  assert.match(timing, /Date: November 25, 2026/);
+  assert.match(timing, /Date means: Album release/);
+  assert.match(timing, /Date: December 20, 2026/);
+  assert.match(timing, /Date means: Event/);
   assert.doesNotMatch(timing, /Event: November 15/);
   assert.equal(embed.title, cached.translated_title);
-  assert.equal(embed.description, "**What this is:**\n" + presentation.cardText(presentation.preview(cached.translated_summary, cached.translated_title, 240), 240) + "\n\n*Machine translated to English*");
+  assert.equal(embed.description, "**What this is:**\n" + presentation.cardText(presentation.preview(cached.translated_summary, cached.translated_title, 360), 360) + "\n\n*Machine translated to English*");
   assert.deepEqual(translationStore.get(original, "azure"), cached);
   assert.deepEqual(cachedSource(discovery), original);
   assert.deepEqual(store.getDiscovery(s.guild_id, discovery.id), before);

@@ -7,18 +7,26 @@ function validDate(value) {
     new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
 }
 
+function validInstant(value) {
+  // Date.parse accepts a bare year/month and invents the remaining date/time.
+  // Only a complete date + exact time + explicit offset can supply a prefill.
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:[0-5]\d)$/.test(value) &&
+    validDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+}
+
 // Suggestions only. Never write extracted timing to Radar or calendar storage.
 // Publication timestamps and translations are deliberately not input evidence.
 function calendarPrefill(discovery, source) {
   const result = { date: validDate(discovery.event_date) ? discovery.event_date : "", time: "",
     timezone: discovery.event_timezone && validTimezone(discovery.event_timezone) ? discovery.event_timezone : "" };
-  if (!result.date && result.timezone && discovery.event_at && Number.isFinite(Date.parse(discovery.event_at))) {
+  if (!result.date && result.timezone && validInstant(discovery.event_at)) {
     const parts = new Intl.DateTimeFormat("en-GB", { timeZone: result.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(discovery.event_at));
     const fields = Object.fromEntries(parts.map(part => [part.type, part.value]));
     result.date = `${fields.year}-${fields.month}-${fields.day}`;
   }
   if (result.date) {
-    if (discovery.event_at && result.timezone && Number.isFinite(Date.parse(discovery.event_at))) {
+    if (validInstant(discovery.event_at) && result.timezone) {
       const parts = new Intl.DateTimeFormat("en-GB", { timeZone: result.timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(discovery.event_at));
       const fields = Object.fromEntries(parts.map(part => [part.type, part.value]));
       if (`${fields.year}-${fields.month}-${fields.day}` === result.date) result.time = `${fields.hour}:${fields.minute}`;
@@ -53,4 +61,4 @@ function calendarPrefill(discovery, source) {
   return result;
 }
 
-module.exports = { calendarPrefill };
+module.exports = { calendarPrefill, validDate, validInstant };
