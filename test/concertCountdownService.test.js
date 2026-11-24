@@ -571,3 +571,248 @@ test("lost send response can be retried immediately without losing the durable d
   assert.equal(f.calls.send, 1);
   assert.equal(f.row().delivery, null);
 });
+function isolateRenderingWork() {
+  db.getDb()
+    .prepare("UPDATE concert_countdowns SET enabled=0,render_version=?")
+    .run(images.RENDER_VERSION);
+}
+async function upgradeFixture() {
+  isolateRenderingWork();
+  const f = fixture();
+  await f.refresh({ publish: true });
+  store.update(f.g, f.c, { render_version: null });
+  return f;
+}
+const upgradeTime = () => new Date("2027-01-01T12:00Z");
+test("renderer version alone changes the fingerprint without changing dates, photo or countdown numbers", () => {
+  const f = fixture(),
+    row = f.row(),
+    m = service.model(row, upgradeTime());
+  assert.notEqual(
+    service.fingerprint(m, row, "previous-renderer"),
+    service.fingerprint(m, row, images.RENDER_VERSION),
+  );
+});
+test("published cards with automatic updates disabled are upgraded once in place with their saved data intact", async () => {
+  const f = await upgradeFixture();
+  store.photo(f.g, f.c, Buffer.from("saved venue photograph"), "jpeg");
+  const before = f.row(),
+    id = before.message_id,
+    pinCalls = f.calls.pin;
+  const result = await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(result.updated, 1);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.calls.edit, 1);
+  assert.equal(f.calls.pin, pinCalls);
+  assert.equal(f.messages.get(id).pinned, true);
+  const after = f.row();
+  for (const key of [
+    "enabled",
+    "message_id",
+    "config",
+    "photo",
+    "photo_type",
+    "revision",
+    "published_at",
+  ])
+    assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.render_version, images.RENDER_VERSION);
+  const calls = { ...f.calls };
+  db.closeDb();
+  const again = await service.runUpdates(f.client, {
+    now: new Date("2027-01-05T12:00Z"),
+  });
+  assert.equal(again.updated, 0);
+  assert.deepEqual(f.calls, calls);
+  assert.equal(f.row().enabled, 0);
+});
+test("unpublished configurations and pending initial send intents are never published by the version refresh", async () => {
+  isolateRenderingWork();
+  const f = fixture();
+  store.update(f.g, f.c, {
+    delivery: JSON.stringify({
+      after: "0",
+      nonce: "pending-owner-publication",
+    }),
+  });
+  const before = f.row();
+  const result = await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(result.updated, 0);
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.calls.fetch, 0);
+  assert.deepEqual(f.row(), before);
+  assert.equal((await f.refresh({ renderUpgrade: true })).skipped, true);
+  assert.equal(f.calls.send, 0);
+});
+test("a failed automatic render refresh persists across restart and retries in place after backoff", async () => {
+  const f = await upgradeFixture(),
+    id = f.row().message_id;
+  f.editError = Error("Temporary edit failure");
+  let result = await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(result.failed, 1);
+  assert.equal(f.row().render_version, null);
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.calls.send, 1);
+  f.editError = null;
+  db.closeDb();
+  result = await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(result.deferred, 1);
+  assert.equal(f.calls.edit, 1);
+  result = await service.runUpdates(f.client, {
+    now: new Date("2027-01-01T12:05:01Z"),
+  });
+  assert.equal(result.updated, 1);
+  assert.equal(f.row().render_version, images.RENDER_VERSION);
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().enabled, 0);
+});
+test("version refreshes respect Discord rate limits even when force is requested", async () => {
+  const f = await upgradeFixture();
+  f.editError = Object.assign(Error("Rate limited"), {
+    status: 429,
+    retry_after: 90,
+  });
+  await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(f.row().render_version, null);
+  assert.equal(f.row().retry_kind, "rate_limit");
+  f.editError = null;
+  assert.equal(
+    (await f.refresh({ renderUpgrade: true, force: true })).deferred,
+    true,
+  );
+  assert.equal(f.calls.edit, 1);
+  await service.runUpdates(f.client, { now: new Date("2027-01-01T12:01:31Z") });
+  assert.equal(f.calls.edit, 2);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().render_version, images.RENDER_VERSION);
+});
+test("a restart after editing but before the version checkpoint only re-edits the original message", async () => {
+  const f = await upgradeFixture(),
+    id = f.row().message_id,
+    original = store.update;
+  store.update = (g, c, fields) => {
+    if (g === f.g && fields.render_version)
+      throw Error("Interrupted version checkpoint");
+    return original(g, c, fields);
+  };
+  try {
+    const result = await service.runUpdates(f.client, { now: upgradeTime() });
+    assert.equal(result.failed, 1);
+    assert.equal(f.calls.edit, 1);
+    assert.equal(f.row().render_version, null);
+  } finally {
+    store.update = original;
+  }
+  db.closeDb();
+  await service.runUpdates(f.client, { now: new Date("2027-01-01T12:05:01Z") });
+  assert.equal(f.calls.edit, 2);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.row().render_version, images.RENDER_VERSION);
+});
+test("simultaneous version-refresh workers cannot create another message or overlap edits", async () => {
+  const f = await upgradeFixture();
+  const results = await Promise.all([
+    service.runUpdates(f.client, { now: upgradeTime() }),
+    service.runUpdates(f.client, { now: upgradeTime() }),
+  ]);
+  assert.equal(
+    results.reduce((n, r) => n + r.updated, 0),
+    1,
+  );
+  assert.equal(f.calls.edit, 1);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().render_version, images.RENDER_VERSION);
+});
+test("adding second and third dates edits the existing published countdown without creating another message", async () => {
+  isolateRenderingWork();
+  const f = fixture();
+  await f.refresh({ publish: true });
+  const id = f.row().message_id,
+    render = images.render;
+  let rendered;
+  images.render = async (m) => {
+    rendered = m;
+    return Buffer.from("rendered PNG");
+  };
+  try {
+    const ids = [f.event];
+    for (const date of ["2027-06-19", "2027-06-20"]) {
+      ids.push(
+        calendar.createCalendarEvent({
+          guildId: f.g,
+          calendarChannelId: "cal",
+          title: "Additional Chicago date",
+          eventDate: date,
+          allDay: true,
+          calendarType: "stray_kids",
+          category: "concert",
+          timezone: "America/Chicago",
+          createdBy: "admin",
+        }),
+      );
+      store.save(f.g, f.c, { ...JSON.parse(f.row().config), eventIds: ids });
+      await f.refresh({ force: true });
+      assert.equal(rendered.panels.length, ids.length);
+      assert.deepEqual(
+        rendered.panels.map((p) => p.day),
+        ids.map((_, n) => n + 1),
+      );
+      assert.equal(f.row().message_id, id);
+      assert.equal(f.calls.send, 1);
+      assert.equal(f.messages.get(id).pinned, true);
+      assert.equal(f.row().enabled, 0);
+    }
+  } finally {
+    images.render = render;
+  }
+});
+test("automatic updates continue normally for enabled cards after their one-time renderer upgrade", async () => {
+  const f = await upgradeFixture();
+  store.update(f.g, f.c, { enabled: 1 });
+  await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(f.row().enabled, 1);
+  assert.equal(f.calls.edit, 1);
+  await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(f.calls.edit, 1);
+  await service.runUpdates(f.client, { now: new Date("2027-01-02T12:00Z") });
+  assert.equal(f.calls.edit, 2);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().enabled, 1);
+});
+test("additive renderer-version migration preserves legacy published data and does not pre-mark the refresh complete", () => {
+  const { DatabaseSync } = require("node:sqlite"),
+    { migrateCountdowns } = require("../src/db/concertCountdownSchema");
+  const d = new DatabaseSync(":memory:");
+  d.exec(
+    "CREATE TABLE concert_countdowns(guild_id TEXT,channel_id TEXT,config TEXT,photo BLOB,photo_type TEXT,message_id TEXT,enabled INTEGER,fingerprint TEXT,last_success TEXT,last_error TEXT,published_at TEXT,PRIMARY KEY(guild_id,channel_id))",
+  );
+  d.prepare("INSERT INTO concert_countdowns VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(
+    "g",
+    "c",
+    JSON.stringify({
+      city: "Milan",
+      venue: "San Siro Stadium",
+      timezone: "Europe/Rome",
+      eventIds: [1],
+    }),
+    Buffer.from("saved photograph"),
+    "jpeg",
+    "existing-message",
+    0,
+    "previous-fingerprint",
+    "previous-success",
+    null,
+    "already-published",
+  );
+  const before = d.prepare("SELECT * FROM concert_countdowns").get();
+  migrateCountdowns(d);
+  const after = d.prepare("SELECT * FROM concert_countdowns").get();
+  for (const key of Object.keys(before))
+    assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.render_version, null);
+  migrateCountdowns(d);
+  assert.deepEqual(d.prepare("SELECT * FROM concert_countdowns").get(), after);
+  d.close();
+});

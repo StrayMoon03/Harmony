@@ -76,6 +76,19 @@ def heart(draw, cx, cy, color):
     draw.polygon(points, fill=color)
 
 
+def panel_content(draw, panel, x, y, show_day):
+    if show_day:
+        block(draw, 'DAY ' + str(panel['day']), (x+12, y+8, 340, 25), 17, '#c9c9ce', True)
+    if panel['state'] == 'upcoming':
+        block(draw, str(panel['days']), (x+12, y+29, 340, 87), 80, ORANGE, True, 1)
+        block(draw, 'DAYS TO GO', (x+12, y+116, 340, 24), 18)
+    else:
+        block(draw, panel['label'], (x+14, y+36, 336, 101), 32, ORANGE, True)
+    import datetime
+    date = datetime.date.fromisoformat(panel['date'])
+    block(draw, date.strftime('%B ') + str(date.day) + date.strftime(', %Y'), (x+10, y+147, 344, 29), 21)
+
+
 def render(model, photo):
     panels = model['panels']
     if len(panels) > 12:
@@ -103,15 +116,15 @@ def render(model, photo):
         x = 218 if single else 28 + (index % 2) * 380
         y = 372 + (index // 2) * 200
         draw.rounded_rectangle((x, y, x+364, y+184), 14, fill='#141519')
-        block(draw, 'DAY ' + str(panel['day']), (x+12, y+8, 340, 25), 17, '#c9c9ce', True)
-        if panel['state'] == 'upcoming':
-            block(draw, str(panel['days']), (x+12, y+29, 340, 87), 80, ORANGE, True, 1)
-            block(draw, 'DAYS TO GO', (x+12, y+116, 340, 24), 18)
+        if len(panels) == 1:
+            # Keep the approved type sizes and internal spacing; center the visible text as a group.
+            content = Image.new('RGBA', (364, 184), (0, 0, 0, 0))
+            panel_content(ImageDraw.Draw(content), panel, 0, 0, show_day=False)
+            bounds = content.getbbox()
+            offset = (184 - (bounds[3] - bounds[1])) // 2 - bounds[1]
+            canvas.paste(content, (x, y + offset), content)
         else:
-            block(draw, panel['label'], (x+14, y+36, 336, 101), 32, ORANGE, True)
-        import datetime
-        date = datetime.date.fromisoformat(panel['date'])
-        block(draw, date.strftime('%B ') + str(date.day) + date.strftime(', %Y'), (x+10, y+147, 344, 29), 21)
+            panel_content(draw, panel, x, y, show_day=True)
     if not panels:
         block(draw, 'No active concert dates', (28, 372, 744, 184), 28, ORANGE)
     y = 372 + rows * 200

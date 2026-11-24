@@ -32,9 +32,16 @@ function text(m) {
       : ["No active concert dates — check the approved calendar."]),
   ].join("\n");
 }
-function fingerprint(m, row) {
+function fingerprint(m, row, renderVersion = images.RENDER_VERSION) {
   return createHash("sha256")
-    .update(JSON.stringify({ city: m.city, venue: m.venue, panels: m.panels }))
+    .update(
+      JSON.stringify({
+        renderVersion,
+        city: m.city,
+        venue: m.venue,
+        panels: m.panels,
+      }),
+    )
     .update(row.photo || Buffer.alloc(0))
     .digest("hex");
 }
@@ -115,6 +122,7 @@ async function refresh(
     publish = false,
     force = false,
     scheduled = false,
+    renderUpgrade = false,
     expectedRevision,
     now = new Date(),
   } = {},
@@ -129,13 +137,19 @@ async function refresh(
   try {
     let row = store.get(g, c);
     if (!row) throw Error("Configure this room first");
-    if (scheduled && !row.enabled) return { skipped: true };
+    if (
+      renderUpgrade &&
+      ((!row.message_id && !row.published_at) ||
+        row.render_version === images.RENDER_VERSION)
+    )
+      return { skipped: true };
+    if (scheduled && !row.enabled && !renderUpgrade) return { skipped: true };
     if (!row.published_at && !row.message_id && !row.delivery && !publish)
       throw Error("Initial publication requires approval");
     if (
       row.retry_at &&
       Date.parse(row.retry_at) > now.getTime() &&
-      !(force && !scheduled && access.canRetryManually(row))
+      !(force && !scheduled && !renderUpgrade && access.canRetryManually(row))
     )
       return { deferred: true, retryAt: row.retry_at };
     const m = model(row, now),
@@ -143,6 +157,7 @@ async function refresh(
     if (
       !force &&
       row.fingerprint === hash &&
+      row.render_version === images.RENDER_VERSION &&
       row.message_id &&
       !row.delivery &&
       now.getTime() - Date.parse(row.checked_at || 0) < HEALTH_MS
@@ -206,7 +221,11 @@ async function refresh(
     }
     if (message && !managed(message, client, marker))
       throw Error("Managed message ownership mismatch");
-    const needsImage = force || row.fingerprint !== hash || !message;
+    const needsImage =
+      force ||
+      row.fingerprint !== hash ||
+      !message ||
+      row.render_version !== images.RENDER_VERSION;
     stage = "render the countdown image";
     const outgoing = needsImage ? await payload(row, m) : null;
     if (lostLease)
@@ -255,8 +274,10 @@ async function refresh(
     }
     stage = "pin the countdown";
     if (!message.pinned) await message.pin("Youtiful STAY concert countdown");
+    stage = "save the rendering checkpoint";
     store.update(g, c, {
       fingerprint: hash,
+      render_version: images.RENDER_VERSION,
       last_success: now.toISOString(),
       last_error: null,
       retry_at: null,
@@ -295,33 +316,45 @@ async function refresh(
     locks.delete(key);
   }
 }
+async function runUpdates(client, { now = new Date() } = {}) {
+  const result = { updated: 0, skipped: 0, deferred: 0, failed: 0 };
+  for (const row of store.renderingWork(images.RENDER_VERSION)) {
+    const upgrade =
+      Boolean(row.message_id || row.published_at) &&
+      row.render_version !== images.RENDER_VERSION;
+    try {
+      const status = await refresh(client, row.guild_id, row.channel_id, {
+        scheduled: true,
+        renderUpgrade: upgrade,
+        now,
+      });
+      if (status.deferred) result.deferred++;
+      else if (status.skipped) result.skipped++;
+      else result.updated++;
+    } catch (error) {
+      result.failed++;
+      console.error(
+        "Concert countdown update failed",
+        row.channel_id,
+        error.message,
+      );
+    }
+  }
+  return result;
+}
 function start(client) {
   let busy = false;
-  async function tick() {
+  const run = async () => {
     if (busy) return;
     busy = true;
     try {
-      for (const row of store.enabled()) {
-        try {
-          await refresh(client, row.guild_id, row.channel_id, {
-            scheduled: true,
-          });
-        } catch (e) {
-          console.error(
-            "Concert countdown update failed",
-            row.channel_id,
-            e.message,
-          );
-        }
-      }
+      await runUpdates(client);
+    } catch (error) {
+      console.error("Concert countdown scheduler failed", error.message);
     } finally {
       busy = false;
     }
-  }
-  const run = () =>
-    tick().catch((e) =>
-      console.error("Concert countdown scheduler failed", e.message),
-    );
+  };
   run();
   const timer = setInterval(run, 60000);
   timer.unref?.();
@@ -333,6 +366,7 @@ module.exports = {
   preview,
   refresh,
   start,
+  runUpdates,
   fingerprint,
   REQUIRED,
   findPinned,

@@ -14,7 +14,7 @@ const config = {
   timezone: "America/Chicago",
   eventIds: [1, 2, 3, 4, 5],
 };
-function model(count = 2) {
+function model(count = 2, now = "2027-01-01T12:00Z") {
   return buildCountdown(
     config,
     Array.from({ length: count }, (_, n) => ({
@@ -25,7 +25,7 @@ function model(count = 2) {
       all_day: 1,
       event_date: `2027-06-${18 + n}`,
     })),
-    new Date("2027-01-01T12:00Z"),
+    new Date(now),
   );
 }
 function fixture(code) {
@@ -142,4 +142,95 @@ test("image queue is bounded under concurrent requests", async () => {
     ),
   );
   assert.ok(results.some((r) => r.status === "fulfilled"));
+});
+// Observe actual Pillow draw calls while the production renderer still generates a PNG.
+// No OCR guesses or test-only renderer branches.
+function renderedText(m) {
+  const script = `import sys,io,json,runpy\nfrom unittest.mock import patch\nfrom PIL import ImageDraw\nrequest=sys.stdin.buffer.read()\noriginal_out=sys.stdout\ntext=[]\nreal=ImageDraw.ImageDraw.text\ndef capture(self,xy,value,*args,**kwargs):\n text.append(str(value))\n return real(self,xy,value,*args,**kwargs)\nsys.stdin=io.TextIOWrapper(io.BytesIO(request))\nsys.stdout=io.TextIOWrapper(io.BytesIO())\nwith patch.object(ImageDraw.ImageDraw,'text',capture):\n runpy.run_path('src/renderers/concert_countdown.py',run_name='__main__')\nsys.stdout=original_out\nprint(json.dumps(text))`;
+  const p = spawnSync("python3", ["-c", script], {
+    input: JSON.stringify({ action: "render", model: m }),
+    encoding: "utf8",
+  });
+  assert.equal(p.status, 0, p.stderr);
+  return JSON.parse(p.stdout);
+}
+test("single-date cards omit DAY 1 and vertically center all remaining content for every concert state", async () => {
+  for (const [state, label, days] of [
+    ["upcoming", "DAYS TO GO", 206],
+    ["tomorrow", "TOMORROW!", 1],
+    ["today", "IT'S D-DAY, STAY!", 0],
+    ["completed", "THANK YOU FOR THE MEMORIES!", 0],
+  ]) {
+    const m = model(1);
+    m.panels[0] = { ...m.panels[0], state, label, days };
+    const text = renderedText(m);
+    assert.ok(!text.some((t) => /^DAY \d+$/.test(t)));
+    assert.ok(text.join(" ").includes(label));
+    assert.ok(text.includes("June 18, 2027"));
+    if (state === "upcoming") assert.ok(text.includes("206"));
+    const png = await render(m);
+    const center = Number(
+      inspect(
+        png,
+        "crop=im.crop((218,372,583,557)); mask=crop.convert('L').point(lambda v:255 if v>65 else 0); b=mask.getbbox(); print((b[1]+b[3])/2)",
+      ),
+    );
+    assert.ok(Math.abs(center - 92) <= 2, `${state} text center ${center}`);
+  }
+});
+test("multiple-date cards retain every DAY label, including a centered third panel", () => {
+  for (const count of [2, 3, 5]) {
+    const m = model(count),
+      text = renderedText(m);
+    assert.deepEqual(
+      text.filter((t) => /^DAY \d+$/.test(t)),
+      Array.from({ length: count }, (_, i) => "DAY " + (i + 1)),
+    );
+    for (const p of m.panels)
+      assert.ok(
+        text.includes(
+          new Intl.DateTimeFormat("en-US", {
+            dateStyle: "long",
+            timeZone: "UTC",
+          }).format(new Date(p.date + "T12:00Z")),
+        ),
+      );
+  }
+});
+test("the approved double-date graphic is byte-for-byte unchanged", async () => {
+  const fs = require("node:fs"),
+    path = require("node:path");
+  const m = {
+    ...model(2, "2026-11-24T17:00Z"),
+    testLabel: "TEST PREVIEW • FIXTURE DATES • NO VENUE PHOTO",
+  };
+  assert.deepEqual(
+    await render(m),
+    fs.readFileSync(
+      path.join(__dirname, "../docs/countdown-previews/chicago-two-dates.png"),
+    ),
+  );
+});
+test("single-date changes are confined to text inside the existing panel; card size and all other pixels stay identical", async () => {
+  const fs = require("node:fs"),
+    path = require("node:path");
+  const m = {
+    ...model(1, "2026-11-24T17:00Z"),
+    testLabel: "TEST PREVIEW • FIXTURE DATES • NO VENUE PHOTO",
+  };
+  const before = fs.readFileSync(
+      path.join(__dirname, "../docs/countdown-previews/single-date.png"),
+    ),
+    after = await render(m);
+  const script =
+    "import sys,json,io,base64\nfrom PIL import Image,ImageChops\nx=json.load(sys.stdin)\na,b=[Image.open(io.BytesIO(base64.b64decode(v))) for v in x]\nassert a.size==b.size==(800,658)\nbox=ImageChops.difference(a,b).getbbox()\nassert box and box[0]>=218 and box[1]>=372 and box[2]<=583 and box[3]<=557,box\nprint('ok')";
+  const p = spawnSync("python3", ["-c", script], {
+    input: JSON.stringify([
+      before.toString("base64"),
+      after.toString("base64"),
+    ]),
+    encoding: "utf8",
+  });
+  assert.equal(p.status, 0, p.stderr);
+  assert.match(p.stdout, /ok/);
 });
