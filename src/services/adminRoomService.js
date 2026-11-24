@@ -62,6 +62,7 @@ const ADMIN_CONTROLS = [
   ["collections", "Collections", ButtonStyle.Secondary],
   ["status", "Status / Health", ButtonStyle.Primary],
   ["media", "Media & Errors", ButtonStyle.Secondary],
+  ["countdown", "Concert Countdowns", ButtonStyle.Secondary],
 ];
 
 function buildHomeComponents() {
@@ -1346,7 +1347,7 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   const [, action, parameter, panelId] = interaction.customId.split(":");
-  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "status", "media"]);
+  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "status", "media", "countdown"]);
   if (panelActions.has(action) && !(["guard", "welcome"].includes(action) && parameter === "ephemeral")) {
     if (!isActiveRoomPanel(interaction, interaction.message?.id)) {
       await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
@@ -1383,6 +1384,12 @@ async function handleAdminRoomInteraction(interaction) {
       const current = roomStore.getPanel(interaction.guildId);
       if (current?.enabled) await syncAdminRoom(interaction.guild, current);
     });
+    return true;
+  }
+  if (action === "countdown") {
+    const rows = require("../stores/concertCountdownStore").list(interaction.guildId);
+    const summary = rows.map(r => JSON.parse(r.config).city + " — " + (r.enabled ? "On" : "Off") + " — " + (r.last_error || r.last_success || "Not published")).join("\n");
+    await interaction.reply({ ...pagePayload("Concert Countdown Manager", (summary || "No countdowns configured.") + "\n\nUse `/harmony-countdown events`, `configure`, `photo`, `preview`, `publish`, `enable`, `disable`, or `refresh` in this Admin Room."), flags: MessageFlags.Ephemeral });
     return true;
   }
   if (action === "status") {
