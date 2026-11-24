@@ -9,6 +9,7 @@ const { isAdminRoomAuthorized } = require("../services/adminAuthorization");
 const room = require("../stores/adminRoomStore");
 const store = require("../stores/concertCountdownStore");
 const calendar = require("../stores/eventSchedulerStore");
+const { isCountdownConcert } = require("../services/concertTourIdentity");
 const service = require("../services/concertCountdownService");
 const {
   localDate,
@@ -144,7 +145,7 @@ async function execute(i) {
           start.toISOString(),
           end.toISOString(),
         )
-        .filter((e) => e.category === "concert");
+        .filter(isCountdownConcert);
       return i.editReply({
         content:
           rows
@@ -170,12 +171,7 @@ async function execute(i) {
       const eventIds = [...new Set(raw.map(Number))];
       for (const id of eventIds) {
         const e = calendar.getEvent(g, id);
-        if (
-          !e ||
-          e.cancelled_at ||
-          e.calendar_type !== "stray_kids" ||
-          e.category !== "concert"
-        )
+        if (!isCountdownConcert(e))
           throw Error("Event " + id + " is not an active approved concert");
       }
       const config = {

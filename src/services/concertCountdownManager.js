@@ -17,6 +17,15 @@ const {
 } = require("discord.js");
 const store = require("../stores/concertCountdownStore");
 const rooms = require("../stores/adminRoomStore");
+const tour = require("./concertTourCalendar");
+const { dateAt, matchesQuery } = require("./concertTourIdentity");
+const eventDay = (e) =>
+  dateAt(
+    e,
+    e.countdown_location?.timezone || e.event_timezone || e.timezone || "UTC",
+  ) ||
+  e.event_date ||
+  "Date needs review";
 const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const { validateConfig } = require("./concertCountdownModel");
 const service = require("./concertCountdownService");
@@ -97,6 +106,8 @@ function home(s, notice = "") {
   components.push(
     new Row().addComponents(
       button(s, "add", "Add countdown", Style.Primary),
+      button(s, "tour-audit", "Tour dates & calendar audit"),
+      button(s, "tour-upload", "Upload confirmed dates"),
       button(s, "list-prev", "Previous").setDisabled(page === 0),
       button(s, "list-next", "Next").setDisabled(
         (page + 1) * 25 >= rows.length,
@@ -109,7 +120,7 @@ function home(s, notice = "") {
     embeds: [
       embed(
         "Concert Countdown Manager",
-        `${rows.length} configured concert room${rows.length === 1 ? "" : "s"}. Choose one to edit, preview, publish or repair.\n\nNew countdowns remain private until you explicitly publish them. Dates come from the approved Stray Kids calendar.`,
+        `${rows.length} configured concert room${rows.length === 1 ? "" : "s"}. Choose one to edit, preview, publish or repair.\n\nNew countdowns remain private until you explicitly publish them. Dates come from the approved Stray Kids calendar. If a location is missing, use Tour dates & calendar audit to review confirmed missing dates.`,
       ),
     ],
     components,
@@ -171,7 +182,7 @@ function draftPage(s, notice = "") {
             .map((id) => {
               const e = events.find((e) => e.id === id);
               return e
-                ? `${e.event_date || e.event_at?.slice(0, 10)} — ${e.title}`
+                ? `${eventDay(e)} — ${e.title}`
                 : "Unavailable date — select a replacement";
             })
             .join("\n") || "None yet"
@@ -188,8 +199,10 @@ function draftPage(s, notice = "") {
     ],
   };
 }
-function eventPage(s) {
-  const events = store.concerts(s.guild, s.query),
+function datePage(s, location) {
+  const events = location.events.filter((e) =>
+      matchesQuery(e, location, s.query),
+    ),
     page = (s.eventPage = Math.min(
       s.eventPage,
       Math.max(0, Math.ceil(events.length / 25) - 1),
@@ -207,12 +220,9 @@ function eventPage(s) {
           .setMaxValues(Math.min(12, slice.length))
           .addOptions(
             slice.map((e) => ({
-              label:
-                `${e.event_date || e.event_at?.slice(0, 10)} — ${e.title}`.slice(
-                  0,
-                  100,
-                ),
+              label: `${eventDay(e)} — ${e.title}`.slice(0, 100),
               description: (
+                e.countdown_location?.venue ||
                 e.event_location ||
                 e.event_timezone ||
                 "Approved concert"
@@ -233,19 +243,152 @@ function eventPage(s) {
       button(s, "draft", "Done selecting", Style.Primary),
     ),
   );
+  components.push(
+    new Row().addComponents(
+      button(
+        s,
+        "select-location-all",
+        "Select all dates here",
+        Style.Success,
+      ).setDisabled(!events.length || events.length > 12),
+      button(s, "other-locations", "Other locations"),
+      button(s, "tour-review", "Review missing tour dates"),
+    ),
+  );
   return {
     ...safe,
     content: null,
     attachments: [],
     embeds: [
       embed(
-        "Choose approved concert dates",
-        `Page ${page + 1} · ${events.length} matching concerts · ${s.draft.eventIds.length}/12 selected\nSearch by city, venue, title or date. Selections on other pages are retained.\n${s.query ? "Filter: " + s.query : "All approved concerts"}\n\n${slice.length ? "Select one or more dates, then choose Done selecting." : "No matching concerts. Approve the concert in Calendar Review first, or change the search."}`,
+        `${location.city} — ${location.venue}`,
+        `${location.country} · Page ${page + 1} · ${events.length} matching concerts · ${s.draft.eventIds.length}/12 selected\nSelect dates for this location. Selections on other pages are retained.\n${s.query ? "Filter: " + s.query : "All approved concerts"}\n\n${location.audit.length ? "Announced dates: " + location.audit.map((a) => (a.existing ? eventDay({ ...a.existing, countdown_location: location }) : a.date) + (a.status === "missing" ? " (needs import)" : a.status === "blocked" ? " (needs review)" : a.status === "cancelled" ? " (canceled)" : a.status === "rescheduled" ? " (rescheduled)" : "")).join(", ") + "\n\n" : ""}${slice.length ? "Select one or more dates, then choose Done selecting." : "No selectable calendar dates yet. Use Review missing tour dates to add confirmed dates safely."}`,
       ),
     ],
     components,
   };
 }
+function eventPage(s) {
+  const locations = tour.groups(s.guild, s.query);
+  if (!s.locationKey && locations.length === 1)
+    s.locationKey = locations[0].key;
+  const location = locations.find((l) => l.key === s.locationKey);
+  if (location) return datePage(s, location);
+  const page = (s.locationPage = Math.min(
+    s.locationPage || 0,
+    Math.max(0, Math.ceil(locations.length / 25) - 1),
+  ));
+  const slice = locations.slice(page * 25, page * 25 + 25);
+  s.offeredLocations = slice.map((l) => l.key);
+  s.offered = [];
+  const components = [];
+  if (slice.length)
+    components.push(
+      new Row().addComponents(
+        new Select()
+          .setCustomId(id(s, "location"))
+          .setPlaceholder("Choose a city and venue")
+          .addOptions(
+            slice.map((l) => ({
+              label: `${l.city} — ${l.venue}`.slice(0, 100),
+              description:
+                `${l.country} · ${l.events.length} selectable · ${l.audit.filter((a) => a.status === "missing").length} missing from calendar`.slice(
+                  0,
+                  100,
+                ),
+              value: l.key,
+            })),
+          ),
+      ),
+    );
+  components.push(
+    new Row().addComponents(
+      button(s, "location-prev", "Previous").setDisabled(page === 0),
+      button(s, "location-next", "Next").setDisabled(
+        (page + 1) * 25 >= locations.length,
+      ),
+      button(s, "search", "Search tour dates"),
+      button(s, "draft", "Back to configuration"),
+    ),
+  );
+  return {
+    ...safe,
+    content: null,
+    attachments: [],
+    embeds: [
+      embed(
+        "Choose concert location",
+        `${locations.length} matching city/venue groups · Page ${page + 1}\n\nAll source-confirmed tour locations are shown, including dates not yet in your calendar. Choose a location to select its existing dates or review a safe import.\n\nSearch by city, country, venue or date.${s.query ? "\nFilter: " + s.query : ""}`,
+      ),
+    ],
+    components,
+  };
+}
+function tourReviewPage(s, manifest, page = 0, reuse = false) {
+  const plan =
+    reuse && s.importReview?.plan
+      ? s.importReview.plan
+      : tour.audit(s.guild, manifest);
+  s.importReview = { manifest, fingerprint: plan.fingerprint, plan };
+  s.importPage = Math.min(
+    Math.max(0, page),
+    Math.max(0, Math.ceil(plan.entries.length / 15) - 1),
+  );
+  const labels = {
+    ready: "Ready",
+    reuse: "Link existing",
+    repair: "Fix calendar/category",
+    missing: "Add missing date",
+    blocked: "Needs review — skipped",
+    cancelled: "Canceled — skipped",
+    rescheduled: "Keep rescheduled date",
+  };
+  const lines = plan.entries
+    .slice(s.importPage * 15, s.importPage * 15 + 15)
+    .map((e) => `${e.location.city} · ${e.date} — **${labels[e.status]}**`);
+  const sources = [...new Set(plan.entries.map((e) => e.sourceUrl))]
+    .slice(0, 3)
+    .map((url, n) => `[Official source ${n + 1}](${url})`)
+    .join(" · ");
+  return {
+    ...safe,
+    content: null,
+    attachments: [],
+    embeds: [
+      embed(
+        "Review confirmed tour dates",
+        `${plan.entries.length} source-confirmed dates · checked ${manifest.verifiedAt}\n**Add:** ${plan.counts.missing} · **Reuse:** ${plan.counts.reuse + plan.counts.ready + plan.counts.rescheduled} · **Fix classification:** ${plan.counts.repair}\n**Needs review:** ${plan.counts.blocked} · **Canceled:** ${plan.counts.cancelled}\n\n${lines.join("\n")}\n\nPage ${s.importPage + 1}/${Math.ceil(plan.entries.length / 15)}\n\nApproval writes only the existing calendar and tour metadata. Existing IDs, timing, reminders and countdowns are preserved. Ambiguous or canceled entries are skipped. No public messages are sent.\n\n${sources}`,
+      ),
+    ],
+    components: [
+      new Row().addComponents(
+        button(
+          s,
+          "tour-approve",
+          "Approve calendar import",
+          Style.Success,
+        ).setDisabled(
+          !plan.entries.some((e) =>
+            ["missing", "reuse", "repair"].includes(e.status),
+          ),
+        ),
+        button(s, "tour-prev", "Previous").setDisabled(s.importPage === 0),
+        button(s, "tour-next", "Next").setDisabled(
+          (s.importPage + 1) * 15 >= plan.entries.length,
+        ),
+        button(s, "tour-export", "Download full audit"),
+      ),
+      new Row().addComponents(
+        button(
+          s,
+          "tour-return",
+          s.room ? "Back to concert dates" : "Back to countdowns",
+        ),
+      ),
+    ],
+  };
+}
+
 function fieldsModal(s) {
   const modal = new Modal()
     .setCustomId(id(s, "details-save"))
@@ -398,7 +541,7 @@ async function handle(i) {
             new Row().addComponents(
               new Input()
                 .setCustomId("query")
-                .setLabel("City, venue, title or date (blank for all)")
+                .setLabel("City, country, venue or date (blank for all)")
                 .setStyle(InputStyle.Short)
                 .setRequired(false)
                 .setMaxLength(100),
@@ -408,6 +551,8 @@ async function handle(i) {
     } else if (action === "search-save") {
       s.query = i.fields.getTextInputValue("query").trim();
       s.eventPage = 0;
+      s.locationPage = 0;
+      s.locationKey = null;
       await i.update(eventPage(s));
     } else if (["events", "event-prev", "event-next"].includes(action)) {
       s.eventPage = Math.max(
@@ -416,6 +561,125 @@ async function handle(i) {
           (action === "event-next" ? 1 : action === "event-prev" ? -1 : 0),
       );
       await i.update(eventPage(s));
+    } else if (action === "location") {
+      if (!s.offeredLocations?.includes(i.values[0]))
+        throw Error("Choose a location from the current page");
+      s.locationKey = i.values[0];
+      s.eventPage = 0;
+      await i.update(eventPage(s));
+    } else if (
+      action === "other-locations" ||
+      action === "location-prev" ||
+      action === "location-next"
+    ) {
+      s.locationKey = null;
+      s.locationPage = Math.max(
+        0,
+        (s.locationPage || 0) +
+          (action === "location-next"
+            ? 1
+            : action === "location-prev"
+              ? -1
+              : 0),
+      );
+      await i.update(eventPage(s));
+    } else if (action === "select-location-all") {
+      const location = tour
+        .groups(s.guild)
+        .find((l) => l.key === s.locationKey);
+      if (!location) throw Error("Choose a concert location first");
+      const selected = [
+        ...new Set([
+          ...s.draft.eventIds,
+          ...location.events
+            .filter((e) => matchesQuery(e, location, s.query))
+            .map((e) => e.id),
+        ]),
+      ];
+      if (selected.length > 12)
+        throw Error("Select up to 12 concerts per countdown");
+      s.draft.eventIds = selected;
+      for (const key of ["city", "country", "venue", "timezone"])
+        s.draft[key] ||= location[key] || "";
+      await i.update(eventPage(s));
+    } else if (action === "tour-audit" || action === "tour-review") {
+      const manifest = tour.scopedManifest(
+        action === "tour-review" ? s.locationKey : null,
+      );
+      if (!manifest.locations.length)
+        throw Error(
+          "For future dates, use Upload confirmed dates from the manager home",
+        );
+      await i.update(tourReviewPage(s, manifest));
+    } else if (action === "tour-prev" || action === "tour-next") {
+      if (!s.importReview) throw Error("Review the confirmed dates first");
+      await i.update(
+        tourReviewPage(
+          s,
+          s.importReview.manifest,
+          (s.importPage || 0) + (action === "tour-next" ? 1 : -1),
+          true,
+        ),
+      );
+    } else if (action === "tour-approve") {
+      if (!s.importReview)
+        throw Error("Review the confirmed dates before approving");
+      const review = s.importReview;
+      delete s.importReview;
+      await i.deferUpdate();
+      const result = tour.importConfirmed(
+        s.guild,
+        review.manifest,
+        review.fingerprint,
+        i.user.id,
+      );
+      const message = `Calendar import complete: ${result.created} added, ${result.reused} reused, ${result.repaired} classifications fixed. ${result.blocked} need review; ${result.cancelled} canceled dates skipped. No public messages sent.`;
+      const page = s.room ? eventPage(s) : home(s);
+      await i.editReply({ ...page, content: message });
+    } else if (action === "tour-export") {
+      if (!s.importReview) throw Error("Open a tour audit first");
+      const audit = s.importReview.plan;
+      await i.reply({
+        ...safe,
+        content:
+          "Private calendar audit. Includes existing classifications and source links.",
+        files: [
+          {
+            attachment: Buffer.from(JSON.stringify(audit, null, 2)),
+            name: "concert-tour-audit.json",
+          },
+        ],
+        flags: MessageFlags.Ephemeral,
+      });
+    } else if (action === "tour-return") {
+      delete s.importReview;
+      await i.update(s.room ? eventPage(s) : home(s));
+    } else if (action === "tour-upload") {
+      await i.showModal(
+        new Modal()
+          .setCustomId(id(s, "tour-upload-save"))
+          .setTitle("Upload confirmed tour dates")
+          .addLabelComponents(
+            new Label()
+              .setLabel("Confirmed-tour JSON (up to 512 KB)")
+              .setDescription(
+                "Official source links are required. You review and approve changes next.",
+              )
+              .setFileUploadComponent(
+                new Upload()
+                  .setCustomId("tour-file")
+                  .setMinValues(1)
+                  .setMaxValues(1)
+                  .setRequired(true),
+              ),
+          ),
+      );
+    } else if (action === "tour-upload-save") {
+      await i.deferUpdate();
+      const manifest = await tour.readManifestAttachment(
+        i.fields.getUploadedFiles("tour-file", true).first(),
+      );
+      await i.editReply(tourReviewPage(s, manifest));
     } else if (action === "select-events") {
       const ids = i.values.map(Number);
       if (ids.some((id) => !s.offered.includes(id)))
@@ -429,6 +693,8 @@ async function handle(i) {
       s.draft.eventIds = selected;
       const first = store.concerts(s.guild).find((e) => e.id === ids[0]);
       if (first) {
+        for (const key of ["city", "country", "venue", "timezone"])
+          s.draft[key] ||= first.countdown_location?.[key] || "";
         s.draft.venue ||= first.event_location || "";
         s.draft.timezone ||=
           first.event_timezone || (!first.all_day ? first.timezone : "") || "";
@@ -594,6 +860,7 @@ module.exports = {
   draftPage,
   eventPage,
   fieldsModal,
+  tourReviewPage,
   createSession,
   authorize,
 };

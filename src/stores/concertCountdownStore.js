@@ -116,20 +116,9 @@ function release(g, c, token) {
 }
 // Reads only the approved calendar; candidates and Radar discoveries are separate tables.
 function concerts(g, query = "") {
-  return getDb()
-    .prepare(
-      `SELECT * FROM scheduled_events WHERE guild_id=? AND calendar_type='stray_kids' AND category='concert' AND cancelled_at IS NULL ORDER BY COALESCE(event_date,substr(event_at,1,10)),id`,
-    )
-    .all(g)
-    .filter(
-      (e) =>
-        !query ||
-        [e.title, e.event_location, e.event_date]
-          .join(" ")
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-    );
+  return require("../services/concertTourCalendar").listConcerts(g, query);
 }
+
 module.exports = {
   get,
   list,

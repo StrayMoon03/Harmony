@@ -1,0 +1,433 @@
+{
+  "locations": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Choose concert location",
+        "description": "34 matching city/venue groups · Page 1\n\nAll source-confirmed tour locations are shown, including dates not yet in your calendar. Choose a location to select its existing dates or review a safe import.\n\nSearch by city, country, venue or date."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:PREVIEW:location",
+            "placeholder": "Choose a city and venue",
+            "options": [
+              {
+                "label": "Arlington — AT&T Stadium",
+                "value": "arlington",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Arnhem — GelreDome",
+                "value": "arnhem",
+                "description": "Netherlands · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Atlanta — Mercedes-Benz Stadium",
+                "value": "atlanta",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Baltimore — M&T Bank Stadium",
+                "value": "baltimore",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Bangkok — Impact Arena",
+                "value": "bangkok",
+                "description": "Thailand · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Barcelona — Estadi Olímpic Lluís Companys",
+                "value": "barcelona",
+                "description": "Spain · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Chicago — Soldier Field",
+                "value": "chicago",
+                "description": "United States · 1 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "East Rutherford — MetLife Stadium",
+                "value": "east-rutherford",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Fukuoka — Mizuho PayPay Dome Fukuoka",
+                "value": "fukuoka",
+                "description": "Japan · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Hong Kong — Kai Tak Stadium",
+                "value": "hong-kong",
+                "description": "Hong Kong · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Houston — Reliant Stadium",
+                "value": "houston",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "London — Tottenham Hotspur Stadium",
+                "value": "london",
+                "description": "United Kingdom · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Los Angeles — SoFi Stadium",
+                "value": "los-angeles",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Miami — Hard Rock Stadium",
+                "value": "miami",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Milan — San Siro Stadium",
+                "value": "milan",
+                "description": "Italy · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Munich — Allianz Arena",
+                "value": "munich",
+                "description": "Germany · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Nagoya — Vantelin Dome Nagoya",
+                "value": "nagoya",
+                "description": "Japan · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Orlando — Camping World Stadium",
+                "value": "orlando",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Osaka — Kyocera Dome Osaka",
+                "value": "osaka-kyocera",
+                "description": "Japan · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Osaka — Yanmar Stadium Nagai",
+                "value": "osaka-yanmar",
+                "description": "Japan · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "Paris — Plenitude Arena",
+                "value": "paris",
+                "description": "France · 0 selectable · 2 missing from calendar"
+              },
+              {
+                "label": "San Diego — PETCO Park",
+                "value": "san-diego",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Santa Clara — Levi’s Stadium",
+                "value": "santa-clara",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Seattle — Lumen Field",
+                "value": "seattle",
+                "description": "United States · 0 selectable · 1 missing from calendar"
+              },
+              {
+                "label": "Seoul — Gocheok Sky Dome",
+                "value": "seoul-special",
+                "description": "South Korea · 0 selectable · 2 missing from calendar"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:location-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:location-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:search",
+            "label": "Search tour dates",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:draft",
+            "label": "Back to configuration",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "missing": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Chicago — Soldier Field",
+        "description": "United States · Page 1 · 1 matching concerts · 0/12 selected\nSelect dates for this location. Selections on other pages are retained.\nAll approved concerts\n\nAnnounced dates: 2027-06-18, 2027-06-19 (needs import)\n\nSelect one or more dates, then choose Done selecting."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:PREVIEW:select-events",
+            "placeholder": "Select dates on this page",
+            "min_values": 0,
+            "max_values": 1,
+            "options": [
+              {
+                "label": "2027-06-18 — RUN IT Chicago",
+                "value": "1",
+                "description": "Soldier Field",
+                "default": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:search",
+            "label": "Search concerts",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:draft",
+            "label": "Done selecting",
+            "style": 1
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:select-location-all",
+            "label": "Select all dates here",
+            "style": 3,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:other-locations",
+            "label": "Other locations",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-review",
+            "label": "Review missing tour dates",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "review": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Review confirmed tour dates",
+        "description": "2 source-confirmed dates · checked 2026-11-24\n**Add:** 1 · **Reuse:** 0 · **Fix classification:** 1\n**Needs review:** 0 · **Canceled:** 0\n\nChicago · 2027-06-18 — **Fix calendar/category**\nChicago · 2027-06-19 — **Add missing date**\n\nPage 1/1\n\nApproval writes only the existing calendar and tour metadata. Existing IDs, timing, reminders and countdowns are preserved. Ambiguous or canceled entries are skipped. No public messages are sent.\n\n[Official source 1](https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events)"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-approve",
+            "label": "Approve calendar import",
+            "style": 3,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-export",
+            "label": "Download full audit",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-return",
+            "label": "Back to concert dates",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "ready": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Chicago — Soldier Field",
+        "description": "United States · Page 1 · 2 matching concerts · 0/12 selected\nSelect dates for this location. Selections on other pages are retained.\nAll approved concerts\n\nAnnounced dates: 2027-06-18, 2027-06-19\n\nSelect one or more dates, then choose Done selecting."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:PREVIEW:select-events",
+            "placeholder": "Select dates on this page",
+            "min_values": 0,
+            "max_values": 2,
+            "options": [
+              {
+                "label": "2027-06-18 — RUN IT Chicago",
+                "value": "1",
+                "description": "Soldier Field",
+                "default": false
+              },
+              {
+                "label": "2027-06-19 — Stray Kids World Tour RUN IT — Chicago",
+                "value": "2",
+                "description": "Soldier Field",
+                "default": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:search",
+            "label": "Search concerts",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:draft",
+            "label": "Done selecting",
+            "style": 1
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:select-location-all",
+            "label": "Select all dates here",
+            "style": 3,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:other-locations",
+            "label": "Other locations",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:tour-review",
+            "label": "Review missing tour dates",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  }
+}
