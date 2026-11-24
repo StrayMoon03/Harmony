@@ -1,0 +1,116 @@
+{
+  "renderVersion": "countdown-card-v2-single-date-centered",
+  "examples": {
+    "single-after": {
+      "city": "Milan",
+      "venue": "San Siro Stadium",
+      "today": "2026-11-24",
+      "panels": [
+        {
+          "date": "2027-07-31",
+          "day": 1,
+          "state": "upcoming",
+          "days": 249,
+          "label": "DAYS TO GO"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    },
+    "two-dates": {
+      "city": "Chicago",
+      "venue": "Soldier Field",
+      "today": "2026-11-24",
+      "panels": [
+        {
+          "date": "2027-06-18",
+          "day": 1,
+          "state": "upcoming",
+          "days": 206,
+          "label": "DAYS TO GO"
+        },
+        {
+          "date": "2027-06-19",
+          "day": 2,
+          "state": "upcoming",
+          "days": 207,
+          "label": "DAYS TO GO"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    },
+    "three-dates": {
+      "city": "Tokyo",
+      "venue": "Tokyo Dome",
+      "today": "2026-11-01",
+      "panels": [
+        {
+          "date": "2026-11-06",
+          "day": 1,
+          "state": "upcoming",
+          "days": 5,
+          "label": "DAYS TO GO"
+        },
+        {
+          "date": "2026-11-07",
+          "day": 2,
+          "state": "upcoming",
+          "days": 6,
+          "label": "DAYS TO GO"
+        },
+        {
+          "date": "2026-11-08",
+          "day": 3,
+          "state": "upcoming",
+          "days": 7,
+          "label": "DAYS TO GO"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    },
+    "single-tomorrow": {
+      "city": "Milan",
+      "venue": "San Siro Stadium",
+      "today": "2027-07-30",
+      "panels": [
+        {
+          "date": "2027-07-31",
+          "day": 1,
+          "state": "tomorrow",
+          "days": 1,
+          "label": "TOMORROW!"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    },
+    "single-d-day": {
+      "city": "Milan",
+      "venue": "San Siro Stadium",
+      "today": "2027-07-31",
+      "panels": [
+        {
+          "date": "2027-07-31",
+          "day": 1,
+          "state": "today",
+          "days": 0,
+          "label": "IT'S D-DAY, STAY!"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    },
+    "single-completed": {
+      "city": "Milan",
+      "venue": "San Siro Stadium",
+      "today": "2027-08-01",
+      "panels": [
+        {
+          "date": "2027-07-31",
+          "day": 1,
+          "state": "completed",
+          "days": 0,
+          "label": "THANK YOU FOR THE MEMORIES!"
+        }
+      ],
+      "testLabel": "TEST PREVIEW • FIXTURE CLOCK • NO VENUE PHOTO"
+    }
+  }
+}

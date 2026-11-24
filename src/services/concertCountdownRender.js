@@ -1,6 +1,8 @@
 "use strict";
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+// Bump for every renderer change that must refresh already-published cards.
+const RENDER_VERSION = "countdown-card-v2-single-date-centered";
 let tail = Promise.resolve(),
   queued = 0;
 function worker(payload) {
@@ -78,4 +80,4 @@ async function validatePhoto(bytes) {
 async function render(model, photo) {
   return worker({ action: "render", model, photo: photoData(photo) });
 }
-module.exports = { render, validatePhoto };
+module.exports = { render, validatePhoto, RENDER_VERSION };

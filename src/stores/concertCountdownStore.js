@@ -19,6 +19,17 @@ const enabled = () =>
       "SELECT guild_id,channel_id FROM concert_countdowns WHERE enabled=1",
     )
     .all();
+// Metadata only: do not load every saved photograph during scheduler scans.
+function renderingWork(version) {
+  return getDb()
+    .prepare(
+      `SELECT guild_id,channel_id,enabled,message_id,published_at,render_version
+    FROM concert_countdowns
+    WHERE enabled=1 OR ((message_id IS NOT NULL OR published_at IS NOT NULL) AND COALESCE(render_version,'')<>?)
+    ORDER BY guild_id,channel_id`,
+    )
+    .all(version);
+}
 function save(g, c, config, expected) {
   const old = get(g, c);
   if (expected !== undefined && (old?.revision ?? -1) !== expected)
@@ -75,6 +86,7 @@ function update(g, c, fields) {
     "published_at",
     "retry_at",
     "retry_kind",
+    "render_version",
     "checked_at",
     "legacy_recovery",
   ];
@@ -124,6 +136,7 @@ module.exports = {
   get,
   list,
   enabled,
+  renderingWork,
   save,
   photo,
   photos,
