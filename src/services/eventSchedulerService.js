@@ -3011,7 +3011,12 @@ async function handleManagerInteraction(interaction) {
         const settings = store.getCalendarChannels(interaction.guildId) || {};
         const eventAt = eventTime ? localToUtc(eventDate, eventTime, eventTimezone) : null;
         if (eventTime && !eventAt) throw new Error("That event date or time is invalid.");
-        const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: settings.stray_kids_channel_id || null, title, link: candidate.source_url || "", timezone: eventTimezone, eventAt: eventAt?.toISOString() || null, eventDate, eventTimezone, calendarType: "stray_kids", category: "other", allDay: !eventTime, description, createdBy: interaction.user.id });
+        let candidateCategory = "other";
+        try {
+          const metadata = JSON.parse(candidate.source_metadata || "{}");
+          if (candidate.source_type === "radar_handoff" && CALENDAR_CATEGORIES.includes(metadata.calendarCategory)) candidateCategory = metadata.calendarCategory;
+        } catch { /* Older candidates use the existing Other default. */ }
+        const eventId = store.createCalendarEvent({ guildId: interaction.guildId, calendarChannelId: settings.stray_kids_channel_id || null, title, link: candidate.source_url || "", timezone: eventTimezone, eventAt: eventAt?.toISOString() || null, eventDate, eventTimezone, calendarType: "stray_kids", category: candidateCategory, allDay: !eventTime, description, createdBy: interaction.user.id });
         store.decideCalendarCandidate(interaction.guildId, candidateId, "added", interaction.user.id, "Added to Stray Kids calendar", eventId);
         await disableCandidateNotice(interaction.client, interaction.guildId, candidateId);
         await refreshPublishedCalendar(interaction.client, interaction.guildId, "stray_kids", eventDate).catch(() => {});

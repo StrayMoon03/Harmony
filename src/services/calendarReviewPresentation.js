@@ -74,7 +74,8 @@ function view(candidate) {
   const identities = [...new Set(provenance.map(source => names[source.provider] || source.sourceName).filter(name => name && !/^[a-z]+(?:-[a-z]+)+$/.test(name)))];
   const sourceName = identities.join(" + ") || names[candidate.source_provider] || (sourceUrl(candidate) ? new URL(sourceUrl(candidate)).hostname : "Identity not confirmed");
   const category = classifyObservation({ provider: youtube ? "youtube-uploads" : candidate.source_provider }, { title: candidate.title, summary: candidate.submitted_note || "", url: candidate.source_url }).category;
-  const type = youtube ? "YouTube / Content" : ({ "New Content": "Video / Content", Unknown: "Not confirmed" }[category] || category);
+  const { CALENDAR_CATEGORIES, CALENDAR_CATEGORY_LABELS } = require("./eventSchedulerService");
+  const type = candidate.source_type === "radar_handoff" && CALENDAR_CATEGORIES.includes(metadata.calendarCategory) ? CALENDAR_CATEGORY_LABELS[metadata.calendarCategory] : youtube ? "YouTube / Content" : ({ "New Content": "Video / Content", Unknown: "Not confirmed" }[category] || category);
   let time = metadata.allDay === true && !candidate.proposed_event_at ? "All Day" : "Not confirmed";
   if (candidate.proposed_event_at && candidate.proposed_event_timezone) {
     try { time = new Intl.DateTimeFormat("en-GB", { timeZone: candidate.proposed_event_timezone, hourCycle: "h23", hour: "2-digit", minute: "2-digit" }).format(new Date(candidate.proposed_event_at)) + " (" + candidate.proposed_event_timezone + ")"; } catch { /* Do not invent timing. */ }
