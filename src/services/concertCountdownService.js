@@ -24,11 +24,13 @@ async function refresh(client,g,c,{publish=false,force=false}={}){
  let message;
  if(row.message_id){try{message=await channel.messages.fetch(row.message_id);}catch(e){if(Number(e.code)!==10008)throw e;}}
  if(!message){
- const recent=await channel.messages.fetch({limit:100});
- message=recent.find(x=>x.author.id===client.user.id&&x.content.endsWith(marker));
+ const pins=await channel.messages.fetchPins();
+ const pinned=Array.isArray(pins.items)?pins.items.map(x=>x.message):[...pins.values()];
+ message=pinned.find(x=>x.author.id===client.user.id&&x.content.endsWith(marker));
+ if(!message){const recent=await channel.messages.fetch({limit:100});message=recent.find(x=>x.author.id===client.user.id&&x.content.endsWith(marker));}
  }
  if(message&&message.author.id!==client.user.id)throw Error("Managed message ownership mismatch");
- if(!force&&row.fingerprint===hash&&message?.pinned)return;
+ if(!force&&row.fingerprint===hash&&message?.pinned){if(row.message_id!==message.id)store.update(g,c,{message_id:message.id});return;}
  const payload={content:text(m)+"\n"+marker,files:[{attachment:await render(m,row.photo?{type:row.photo_type,bytes:row.photo}:null),name:"countdown.png"}],allowedMentions:{parse:[]}};
  if(message)await message.edit({...payload,attachments:[]});
  else message=await channel.send({...payload,nonce:c,enforceNonce:true});
