@@ -1,0 +1,321 @@
+{
+  "home": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Concert Countdown Manager",
+        "description": "1 configured concert room. Choose one to edit, preview, publish or repair.\n\nNew countdowns remain private until you explicitly publish them. Dates come from the approved Stray Kids calendar."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:PREVIEW:open",
+            "placeholder": "Choose a configured countdown",
+            "options": [
+              {
+                "label": "Chicago",
+                "value": "fixture-concert-room",
+                "description": "Soldier Field · Automatic updates off"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:add",
+            "label": "Add countdown",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:list-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:list-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          }
+        ]
+      }
+    ],
+    "attachments": []
+  },
+  "details": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Chicago concert countdown",
+        "description": "Soldier Field · United States\nRoom: <#fixture-concert-room>\nTime zone: America/Chicago\n\n2027-06-18 — 206 days to go\n2027-06-19 — 207 days to go\n\n**Publication:** Private draft\n**Automatic updates:** Off\n**Photograph:** No photograph — fallback shown\n**Last successful update:** Never\n**Status:** Ready"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:edit",
+            "label": "Edit details & dates",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:photo",
+            "label": "Upload photograph",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:photos",
+            "label": "Reuse photograph",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:preview",
+            "label": "Private preview",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:publish",
+            "label": "Publish / Repair",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:refresh",
+            "label": "Refresh Now",
+            "style": 2,
+            "disabled": true
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:toggle",
+            "label": "Enable automatic updates",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:home",
+            "label": "All countdowns",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "setup": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Configure concert countdown",
+        "description": "Room: <#fixture-concert-room>\nCity: Chicago\nCountry: United States\nVenue: Soldier Field\nTime zone: America/Chicago\n\n**Selected approved dates:**\n2027-06-18 — Chicago concert — TEST FIXTURE\n2027-06-19 — Chicago concert — TEST FIXTURE\n\nNew rooms remain private until you publish. Saving changes to an existing published countdown applies them at its next automatic update. Preview before publishing manually."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:events",
+            "label": "Select concert dates",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:details",
+            "label": "Venue details",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:save",
+            "label": "Save configuration",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:home",
+            "label": "Cancel",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "events": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Choose approved concert dates",
+        "description": "Page 1 · 2 matching concerts · 2/12 selected\nSearch by city, venue, title or date. Selections on other pages are retained.\nAll approved concerts\n\nSelect one or more dates, then choose Done selecting."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:PREVIEW:select-events",
+            "placeholder": "Select dates on this page",
+            "min_values": 0,
+            "max_values": 2,
+            "options": [
+              {
+                "label": "2027-06-18 — Chicago concert — TEST FIXTURE",
+                "value": "1",
+                "description": "Soldier Field",
+                "default": true
+              },
+              {
+                "label": "2027-06-19 — Chicago concert — TEST FIXTURE",
+                "value": "2",
+                "description": "Soldier Field",
+                "default": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:event-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:search",
+            "label": "Search concerts",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:PREVIEW:draft",
+            "label": "Done selecting",
+            "style": 1
+          }
+        ]
+      }
+    ]
+  },
+  "venueModal": {
+    "custom_id": "harmony-countdown:PREVIEW:details-save",
+    "title": "Concert venue details",
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 4,
+            "custom_id": "city",
+            "label": "City",
+            "style": 1,
+            "required": true,
+            "max_length": 80,
+            "value": "Chicago"
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 4,
+            "custom_id": "country",
+            "label": "Country",
+            "style": 1,
+            "required": true,
+            "max_length": 80,
+            "value": "United States"
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 4,
+            "custom_id": "venue",
+            "label": "Venue name",
+            "style": 1,
+            "required": true,
+            "max_length": 120,
+            "value": "Soldier Field"
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 4,
+            "custom_id": "timezone",
+            "label": "Venue time zone (e.g. America/Chicago)",
+            "style": 1,
+            "required": true,
+            "max_length": 80,
+            "value": "America/Chicago"
+          }
+        ]
+      }
+    ]
+  }
+}

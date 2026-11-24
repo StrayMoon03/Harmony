@@ -31,6 +31,7 @@ function getDb() {
  */
 function migrate(database) {
   require("./radarSchema").migrateRadar(database);
+  require("./concertCountdownSchema").migrateCountdowns(database);
   database.exec(`
     CREATE TABLE IF NOT EXISTS shares (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,

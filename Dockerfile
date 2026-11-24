@@ -5,9 +5,9 @@ FROM node:24-bookworm-slim
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates chromium libatomic1 \
+    && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates chromium libatomic1 fonts-dejavu-core \
     && python3 -m pip install --no-cache-dir --break-system-packages --upgrade --pre "yt-dlp[default]" \
-    && python3 -m pip install --no-cache-dir --break-system-packages --upgrade gallery-dl playwright \
+    && python3 -m pip install --no-cache-dir --break-system-packages --upgrade gallery-dl playwright "Pillow==13.0.0" \
     && python3 -m playwright install --with-deps chromium \
     && yt-dlp --version \
     && python3 -m playwright --version \

@@ -145,8 +145,8 @@ test("Admin Room install, persistence, refresh, move, and off lifecycle", async 
   assert.equal(roomStore.getEnabledPanels().filter((panel) => panel.guild_id === guild.id).length, 1);
   assert.equal(first.sent.length, 1, "refresh edits the persisted panel instead of posting a duplicate");
   const refreshedControls = first.sent[0].payload.components.flatMap((row) => row.components).map((item) => item.data.custom_id);
-  assert.equal(refreshedControls.length, 8);
-  assert.equal(new Set(refreshedControls).size, 8);
+  assert.equal(refreshedControls.length, 9);
+  assert.equal(new Set(refreshedControls).size, 9);
 
   await room.execute(setupInteraction({ guild, channel: second, action: "move" }));
   saved = roomStore.getPanel(guild.id);
@@ -200,9 +200,9 @@ test("the persistent panel exposes direct non-schedule admin controls only", asy
   assert.match(embed.title, /HARMONY ADMIN CONTROLS/);
   assert.doesNotMatch(JSON.stringify(payload), /Calendar & Events|Open Stray Kids Schedule Manager|Open Youtiful Stays Schedule Manager|Choose an Admin Room section/);
   assert.equal(payload.components.length, 2);
-  assert.deepEqual(payload.components.map((row) => row.components.length), [5, 3]);
+  assert.deepEqual(payload.components.map((row) => row.components.length), [5, 4]);
   assert.equal(new Set(ids).size, ids.length);
-  for (const action of ["guard", "moderation-history", "welcome", "greetings", "members", "collections", "status", "media"]) {
+  for (const action of ["guard", "moderation-history", "welcome", "greetings", "members", "collections", "status", "media", "countdown"]) {
     assert.ok(ids.includes(`harmony-admin-room:${action}`), `missing direct control for ${action}`);
   }
   assert.ok(ids.every((id) => !/calendar|schedule|category|home/.test(id)));

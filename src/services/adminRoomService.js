@@ -83,7 +83,7 @@ async function buildHomePayload() {
     .setDescription("Use these controls for Harmony’s community, system, and media tools. The Stray Kids and Youtiful Stays Schedule Manager panels in this channel remain your calendar controls.")
     .addFields(
       { name: "COMMUNITY", value: "Guard · Moderation History · Welcome Pass · Greetings · Member Counts", inline: false },
-      { name: "OTHER ADMIN TOOLS", value: "Collections · Status / Health · Media & Errors", inline: false },
+      { name: "OTHER ADMIN TOOLS", value: "Collections · Status / Health · Media & Errors · Concert Countdowns", inline: false },
     );
   return { embeds: [embed], components: buildHomeComponents(), allowedMentions: { parse: [] } };
 }
@@ -1387,9 +1387,7 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   if (action === "countdown") {
-    const rows = require("../stores/concertCountdownStore").list(interaction.guildId);
-    const summary = rows.map(r => JSON.parse(r.config).city + " — " + (r.enabled ? "On" : "Off") + " — " + (r.last_error || r.last_success || "Not published")).join("\n");
-    await interaction.reply({ ...pagePayload("Concert Countdown Manager", (summary || "No countdowns configured.") + "\n\nUse `/harmony-countdown events`, `configure`, `photo`, `preview`, `publish`, `enable`, `disable`, or `refresh` in this Admin Room."), flags: MessageFlags.Ephemeral });
+    await require("./concertCountdownManager").open(interaction);
     return true;
   }
   if (action === "status") {

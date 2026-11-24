@@ -441,6 +441,7 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
   try {
+    if (await require("./services/concertCountdownManager").handle(interaction)) return;
     if (await adminRoomCommand.handleAdminRoomInteraction(interaction)) return;
     if (await sessionRefreshService.handleRefreshInteraction(interaction)) return;
     if (await statusCommand.handleStatusInteraction(interaction)) return;
