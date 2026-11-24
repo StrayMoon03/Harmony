@@ -10,7 +10,7 @@ const get = (g, c) =>
 const list = (g) =>
   getDb()
     .prepare(
-      "SELECT guild_id,channel_id,config,message_id,enabled,last_success,last_error,revision FROM concert_countdowns WHERE guild_id=? ORDER BY channel_id",
+      "SELECT guild_id,channel_id,config,message_id,published_at,enabled,last_success,last_error,revision FROM concert_countdowns WHERE guild_id=? ORDER BY channel_id",
     )
     .all(g);
 const enabled = () =>
@@ -43,6 +43,25 @@ function save(g, c, config, expected) {
     )
     .run(g, c, JSON.stringify({ ...config, guildId: g }));
   return get(g, c);
+}
+// Correct a newly created private draft's room without leaving a second draft.
+// Published or in-flight countdowns are never moved by the creation UI.
+function moveDraft(g, from, to, expected) {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const old = get(g, from);
+    if (!old || old.revision !== expected) throw Error("This draft changed. Reopen it before changing rooms.");
+    if (old.message_id || old.published_at || old.delivery || old.lease_until > Date.now())
+      throw Error("A published or in-flight countdown cannot be moved from setup.");
+    if (get(g, to)) throw Error("This room already has a countdown.");
+    db.prepare("UPDATE concert_countdowns SET channel_id=?,revision=revision+1,fingerprint=NULL WHERE guild_id=? AND channel_id=?").run(to, g, from);
+    db.exec("COMMIT");
+    return get(g, to);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 function photo(g, c, bytes, type) {
   const row = get(g, c);
@@ -138,6 +157,7 @@ module.exports = {
   enabled,
   renderingWork,
   save,
+  moveDraft,
   photo,
   photos,
   reusePhoto,
