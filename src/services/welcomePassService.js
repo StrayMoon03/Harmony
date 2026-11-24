@@ -128,7 +128,8 @@ async function configureWelcomePass(client, settings) {
   if (settings.entryChannelId) channels.push([settings.entryChannelId, "Welcome Pass entry"]);
   for (const [id, label] of channels) {
     const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
-    if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
+    const allowedTypes = label === "member" ? [ChannelType.GuildText, ChannelType.GuildAnnouncement] : [ChannelType.GuildText];
+    if (!channel || channel.guildId !== guild.id || !allowedTypes.includes(channel.type)) {
       throw new Error(`Choose a server text channel for the ${label} channel.`);
     }
   }
@@ -148,7 +149,8 @@ async function updateWelcomePassSetting(client, guildId, field, value) {
     validateWelcomePassRole(guild, role);
   } else if (["channelId", "releaseChannelId", "entryChannelId"].includes(field)) {
     const channel = guild.channels.cache.get(value) || await guild.channels.fetch(value).catch(() => null);
-    if (!channel || channel.guildId !== guild.id || channel.type !== ChannelType.GuildText) {
+    const allowedTypes = field === "releaseChannelId" ? [ChannelType.GuildText, ChannelType.GuildAnnouncement] : [ChannelType.GuildText];
+    if (!channel || channel.guildId !== guild.id || !allowedTypes.includes(channel.type)) {
       throw new Error("Choose a text channel in this server.");
     }
   }

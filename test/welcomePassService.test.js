@@ -101,6 +101,42 @@ test("a fresh automatic approval sends its public and staff messages once", asyn
   assert.ok(store.getWelcomePassAssignment("YS-NEWPASS1").assigned_at);
 });
 
+test("saved approved welcome destination is used by future approvals without replaying existing welcomes", async () => {
+  const { ChannelType } = require("discord.js");
+  const env = environment({ guildId: "changed-welcome-destination" });
+  const oldId = env.release.id;
+  const next = { id: "original-announcement-room", guildId: env.guildId, type: ChannelType.GuildAnnouncement, sent: [], isTextBased: () => true, send: async (payload) => next.sent.push(payload) };
+  env.guild.channels.cache.set(next.id, next);
+  const prior = { ...store.getWelcomePassSettings(env.guildId) };
+  await service.updateWelcomePassSetting(env.client, env.guildId, "releaseChannelId", next.id);
+  assert.equal(env.release.sent.length + env.staff.sent.length + next.sent.length, 0, "saving the channel sends no test or replay messages");
+  let saved = store.getWelcomePassSettings(env.guildId);
+  for (const field of ["role_id", "channel_id", "entry_channel_id", "release_message", "grant_mode"]) assert.equal(saved[field], prior[field]);
+  closeDb(); getDb();
+  saved = store.getWelcomePassSettings(env.guildId);
+  assert.equal(saved.release_channel_id, next.id, "destination survives database reopen");
+  addApprovedLink("YS-DEST0001", env);
+  assert.equal((await service.assignApprovedWelcomePass(env.client, "YS-DEST0001")).status, "assigned");
+  assert.equal(next.sent.length, 1);
+  assert.equal(env.guild.channels.cache.get(oldId).sent.length, 0);
+  assert.equal(env.staff.sent.length, 1);
+  await service.assignApprovedWelcomePass(env.client, "YS-DEST0001");
+  assert.equal(next.sent.length, 1, "unchanged retry behavior sends no duplicate welcome");
+});
+
+test("direct setting updates reject invalid welcome destinations without overwriting the saved channel", async () => {
+  const { ChannelType } = require("discord.js");
+  const env = environment({ guildId: "invalid-welcome-destinations" });
+  for (const channel of [
+    { id: "category", guildId: env.guildId, type: ChannelType.GuildCategory },
+    { id: "foreign", guildId: "another-guild", type: ChannelType.GuildText },
+  ]) {
+    env.guild.channels.cache.set(channel.id, channel);
+    await assert.rejects(service.updateWelcomePassSetting(env.client, env.guildId, "releaseChannelId", channel.id), /text channel in this server/);
+    assert.equal(store.getWelcomePassSettings(env.guildId).release_channel_id, env.release.id);
+  }
+});
+
 test("automatic release resolves configured staff names and only allows explicit user mentions", async () => {
   const env = environment({
     guildId: "auto-mentions-guild",
