@@ -4,16 +4,10 @@ const events = require("../stores/eventSchedulerStore");
 const { buildCountdown } = require("./concertCountdownModel");
 const images = require("./concertCountdownRender");
 const { createHash, randomBytes } = require("node:crypto");
-const { ChannelType, PermissionFlagsBits: P } = require("discord.js");
+const access = require("./concertCountdownPermissions");
 const locks = new Set();
 const HEALTH_MS = 6 * 60 * 60 * 1000;
-const REQUIRED = [
-  P.ViewChannel,
-  P.ReadMessageHistory,
-  P.SendMessages,
-  P.AttachFiles,
-  P.PinMessages,
-];
+const REQUIRED = access.REQUIRED.map((p) => p.flag);
 function model(row, now) {
   const config = JSON.parse(row.config);
   return buildCountdown(
@@ -117,7 +111,13 @@ async function refresh(
   client,
   g,
   c,
-  { publish = false, force = false, scheduled = false, now = new Date() } = {},
+  {
+    publish = false,
+    force = false,
+    scheduled = false,
+    expectedRevision,
+    now = new Date(),
+  } = {},
 ) {
   const key = g + ":" + c;
   if (locks.has(key)) throw Error("Countdown update already running");
@@ -125,14 +125,19 @@ async function refresh(
   let lease,
     heartbeat,
     lostLease = false;
+  let stage = "prepare the countdown";
   try {
     let row = store.get(g, c);
     if (!row) throw Error("Configure this room first");
     if (scheduled && !row.enabled) return { skipped: true };
     if (!row.published_at && !row.message_id && !row.delivery && !publish)
       throw Error("Initial publication requires approval");
-    if (row.retry_at && Date.parse(row.retry_at) > now.getTime())
-      return { deferred: true };
+    if (
+      row.retry_at &&
+      Date.parse(row.retry_at) > now.getTime() &&
+      !(force && !scheduled && access.canRetryManually(row))
+    )
+      return { deferred: true, retryAt: row.retry_at };
     const m = model(row, now),
       hash = fingerprint(m, row);
     if (
@@ -148,6 +153,18 @@ async function refresh(
       throw Error(
         "Countdown update already running or recovering after restart; retry shortly",
       );
+    const current = store.get(g, c);
+    if (expectedRevision !== undefined && current.revision !== expectedRevision)
+      throw Object.assign(
+        Error(
+          "Configuration changed. Preview it and approve publication again.",
+        ),
+        { code: "COUNTDOWN_CONFIGURATION_CHANGED" },
+      );
+    if (current.revision !== row.revision)
+      throw Error(
+        "Configuration changed during this update. Retry using the saved settings.",
+      );
     heartbeat = setInterval(() => {
       try {
         if (!store.renew(g, c, lease)) lostLease = true;
@@ -156,18 +173,14 @@ async function refresh(
       }
     }, 30000);
     heartbeat.unref?.();
-    const channel = await client.channels.fetch(c);
-    if (channel?.guildId !== g || channel.type !== ChannelType.GuildText)
-      throw Error("Choose an existing text room in this server");
-    const permissions = channel.permissionsFor(client.user);
-    if (!permissions?.has(REQUIRED))
-      throw Error(
-        "Harmony needs View Channel, Read Message History, Send Messages, Attach Files and Pin Messages in this room",
-      );
+    const { channel } = access.assertAllowed(
+      await access.inspect(client, g, c),
+    );
     const marker = "Youtiful STAY • World Tour Countdown";
     let message;
     if (row.message_id) {
       try {
+        stage = "read the saved countdown";
         message = await channel.messages.fetch({
           message: row.message_id,
           force: true,
@@ -176,19 +189,25 @@ async function refresh(
         if (Number(e.code) !== 10008) throw e;
       }
     }
+    stage = "read pinned countdown messages";
     if (!message) message = await findPinned(channel, client, marker);
-    if (!message && row.delivery)
+    if (!message && row.delivery) {
+      stage = "recover a previous countdown delivery";
       message = await recoverDelivery(
         channel,
         client,
         marker,
         JSON.parse(row.delivery),
       );
-    if (!message && row.legacy_recovery)
+    }
+    if (!message && row.legacy_recovery) {
+      stage = "recover a previous countdown delivery";
       message = await recoverDelivery(channel, client, marker, { after: "0" });
+    }
     if (message && !managed(message, client, marker))
       throw Error("Managed message ownership mismatch");
     const needsImage = force || row.fingerprint !== hash || !message;
+    stage = "render the countdown image";
     const outgoing = needsImage ? await payload(row, m) : null;
     if (lostLease)
       throw Error("Countdown update lock was lost; retry recovery shortly");
@@ -200,14 +219,17 @@ async function refresh(
         delivery: null,
         legacy_recovery: 0,
       });
-      if (outgoing)
+      if (outgoing) {
+        stage = "edit the countdown image";
         await message.edit({
           ...outgoing,
           content: outgoing.content + "\n" + marker,
           attachments: [],
         });
+      }
     } else {
       if (!row.delivery) {
+        stage = "read the concert-room history";
         const latest = await channel.messages.fetch({ limit: 1, cache: false });
         const delivery = {
           after: latest.first()?.id || "0",
@@ -217,6 +239,7 @@ async function refresh(
         row = store.get(g, c);
       }
       const delivery = JSON.parse(row.delivery);
+      stage = "send the countdown image";
       message = await channel.send({
         ...outgoing,
         content: outgoing.content + "\n" + marker,
@@ -230,23 +253,36 @@ async function refresh(
         legacy_recovery: 0,
       });
     }
+    stage = "pin the countdown";
     if (!message.pinned) await message.pin("Youtiful STAY concert countdown");
     store.update(g, c, {
       fingerprint: hash,
       last_success: now.toISOString(),
       last_error: null,
       retry_at: null,
+      retry_kind: null,
       checked_at: now.toISOString(),
     });
     return { updated: needsImage, messageId: message.id };
-  } catch (e) {
-    if (store.get(g, c) && lease) {
+  } catch (original) {
+    const saved = store.get(g, c);
+    const e = lease
+      ? await access.operationError(original, {
+          client,
+          guildId: g,
+          channelId: c,
+          stage,
+          messageSaved: Boolean(saved?.message_id),
+        })
+      : original;
+    if (saved && lease) {
       const wait = Math.max(
         60,
         Number(e.retry_after) || Number(e.retryAfter) / 1000 || 300,
       );
       store.update(g, c, {
         last_error: String(e.message).slice(0, 300),
+        retry_kind: access.retryKind(e),
         retry_at: new Date(
           now.getTime() + Math.min(wait, 86400) * 1000,
         ).toISOString(),

@@ -30,6 +30,7 @@ const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const { validateConfig } = require("./concertCountdownModel");
 const service = require("./concertCountdownService");
 const { downloadPhoto } = require("./concertCountdownPhoto");
+const roomAccess = require("./concertCountdownPermissions");
 const sessions = new Map(),
   TTL = 20 * 60 * 1000;
 const safe = { allowedMentions: { parse: [] } };
@@ -146,6 +147,7 @@ function detail(s, notice = "") {
         button(s, "edit", "Edit details & dates"),
         button(s, "photo", "Upload photograph"),
         button(s, "photos", "Reuse photograph"),
+        button(s, "permissions", "Check room access"),
       ),
       new Row().addComponents(
         button(s, "preview", "Private preview", Style.Primary),
@@ -457,6 +459,10 @@ async function handle(i) {
   }
   s.expires = Date.now() + TTL;
   try {
+    if (s.publicationInFlight && action !== "permissions")
+      throw Error(
+        "Countdown publication is already running. Wait for its result.",
+      );
     if (action === "home" || action === "list-prev" || action === "list-next") {
       s.listPage = Math.max(
         0,
@@ -753,6 +759,7 @@ async function handle(i) {
     } else if (action === "publish") {
       const row = store.get(s.guild, s.room);
       s.publishRevision = row.revision;
+      s.publishRoom = s.room;
       await i.update({
         ...safe,
         content: null,
@@ -773,25 +780,53 @@ async function handle(i) {
       const row = store.get(s.guild, s.room);
       if (
         action === "confirm-publish" &&
-        (s.publishRevision === undefined || s.publishRevision !== row.revision)
+        (s.publishRevision === undefined ||
+          s.publishRevision !== row.revision ||
+          s.publishRoom !== s.room)
       )
         throw Error(
           "Configuration changed. Preview it and approve publication again.",
         );
-      if (action === "confirm-publish") delete s.publishRevision;
-      await i.deferUpdate();
-      const result = await service.refresh(i.client, s.guild, s.room, {
-        publish: action === "confirm-publish",
-        force: true,
+      s.publicationInFlight = true;
+      try {
+        await i.deferUpdate();
+        const result = await service.refresh(i.client, s.guild, s.room, {
+          publish: action === "confirm-publish",
+          expectedRevision:
+            action === "confirm-publish" ? s.publishRevision : undefined,
+          force: true,
+        });
+        if (action === "confirm-publish" && !result.deferred) {
+          delete s.publishRevision;
+          delete s.publishRoom;
+        }
+        const retryStamp = Date.parse(result.retryAt);
+        const retryMessage =
+          "Discord requested a retry delay. Try again " +
+          (Number.isFinite(retryStamp)
+            ? `<t:${Math.floor(retryStamp / 1000)}:R>`
+            : "after the saved retry time") +
+          ".";
+        await i.editReply(
+          result.deferred && action === "confirm-publish"
+            ? publicationRetry(s, retryMessage)
+            : detail(
+                s,
+                result.deferred
+                  ? retryMessage
+                  : "Countdown updated and pinned.",
+              ),
+        );
+      } finally {
+        delete s.publicationInFlight;
+      }
+    } else if (action === "permissions") {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const snapshot = await roomAccess.inspect(i.client, s.guild, s.room);
+      await i.editReply({
+        ...safe,
+        content: roomAccess.description(snapshot.diagnostics),
       });
-      await i.editReply(
-        detail(
-          s,
-          result.deferred
-            ? "Discord retry delay is active. Try again after the saved error clears."
-            : "Countdown updated and pinned.",
-        ),
-      );
     } else if (action === "toggle") {
       const row = store.get(s.guild, s.room);
       if (!row.message_id && !row.published_at)
@@ -799,6 +834,8 @@ async function handle(i) {
       store.update(s.guild, s.room, { enabled: row.enabled ? 0 : 1 });
       await i.update(detail(s));
     } else if (action === "back") {
+      delete s.publishRevision;
+      delete s.publishRoom;
       await i.update(detail(s));
     } else throw Error("Reopen the current countdown manager");
   } catch (e) {
@@ -806,10 +843,42 @@ async function handle(i) {
       content: "Countdown: " + String(e.message).slice(0, 400),
       ...safe,
     };
-    if (i.deferred) await i.editReply(response);
+    if (
+      i.deferred &&
+      action === "confirm-publish" &&
+      s.publishRevision !== undefined &&
+      s.publishRoom === s.room &&
+      store.get(s.guild, s.room)?.revision === s.publishRevision
+    )
+      await i.editReply(publicationRetry(s, response.content));
+    else if (i.deferred && action === "confirm-publish") {
+      delete s.publishRevision;
+      delete s.publishRoom;
+      await i.editReply(detail(s, response.content));
+    } else if (i.deferred) await i.editReply(response);
     else await i.reply({ ...response, flags: MessageFlags.Ephemeral });
   }
   return true;
+}
+function publicationRetry(s, message) {
+  return {
+    ...safe,
+    content: message,
+    attachments: [],
+    embeds: [
+      embed(
+        "Countdown publication needs a retry",
+        "Saved dates, venue details and photograph are unchanged. Check room access if needed, then retry. Any saved countdown message will be reused.",
+      ),
+    ],
+    components: [
+      new Row().addComponents(
+        button(s, "confirm-publish", "Retry publication", Style.Success),
+        button(s, "permissions", "Check room access"),
+        button(s, "back", "Back"),
+      ),
+    ],
+  };
 }
 function photoPage(s, photos) {
   const page = (s.photoPage = Math.min(
