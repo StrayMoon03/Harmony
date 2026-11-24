@@ -425,7 +425,6 @@ test("Member Counts Manager reads Welcome Pass automatically and opens with no r
   assert.match(payload.embeds[0].data.description, /Moderator Role:\*\* Not configured/);
   assert.doesNotMatch(payload.embeds[0].data.description, /Exclude staff from STAY count/);
   assert.equal(guild.channels.cache.size, 1);
-  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
   const controls = payload.components.flatMap((row) => row.components);
   assert.ok(controls.every((item) => item.data.custom_id !== "harmony-admin-room:members-exclusion"));
   assert.ok(controls.every((item) => item.toJSON().type === 2));
@@ -492,7 +491,6 @@ test("Member Counts configures and persists one Admin and Moderator role", async
   const saved = memberCountStore.getMemberCountAccounting(guild.id);
   assert.equal(saved.admin_role_id, admin.id);
   assert.equal(saved.moderator_role_id, moderator.id);
-  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
   t.mock.timers.tick(0);
   await new Promise(setImmediate);
 });
@@ -513,128 +511,20 @@ test("Member Counts refresh gives setup guidance until both staff roles exist", 
   }
 });
 
-test("Member Counts public setup uses Welcome Pass and refreshes existing voice channels in place", async () => {
-  const { guild, addChannel, addRole } = createGuild("member-count-manager-setup");
-  const panel = addChannel("controls");
-  const stay = addRole("approved", "STAY");
-  const legacy = addRole("legacy-stay", "Former STAY");
-  saveApprovedRole(guild, stay);
-  guild.members.fetch = async () => new Map([
-    ["approved-one", { user: { bot: false }, roles: { cache: new Set([stay.id]) } }],
-    ["approved-two", { user: { bot: false }, roles: { cache: new Set([stay.id]) } }],
-    ["legacy-only", { user: { bot: false }, roles: { cache: new Set([legacy.id]) } }],
-    ["bot", { user: { bot: true }, roles: { cache: new Set([stay.id]) } }],
-  ]);
-  await openMemberCounts(guild, panel);
-  const setup = await useMemberCounts(guild, "public-setup");
-  assert.match(setup.response.embeds[0].data.description, /public SERVER STATS counters are ready/);
-  const saved = memberCountStore.getMemberCountSettings(guild.id);
-  assert.equal(saved.role_id, stay.id);
-  assert.equal(guild.channels.cache.size, 5);
-  const ids = [saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id];
-  const names = () => ids.map((id) => guild.channels.cache.get(id).name);
-  assert.deepEqual(names(), ["👥 Total Members: 3", "💜 Stay Role: 2", "⚠️ No Stay Role: 1"]);
-
-  saveApprovedRole(guild, legacy);
-  memberCountStore.saveMemberCountStaffRole(guild.id, "admin", addRole("staff-admin", "Admin").id);
-  memberCountStore.saveMemberCountStaffRole(guild.id, "moderator", addRole("staff-mod", "Moderator").id);
-  await useMemberCounts(guild, "refresh");
-  assert.deepEqual(names(), ["👥 Total Members: 3", "💜 Stay Role: 1", "⚠️ No Stay Role: 2"]);
-  assert.equal(guild.channels.cache.size, 5);
-  assert.deepEqual(memberCountStore.getMemberCountSettings(guild.id), saved);
-});
-
-test("Member Counts public setup reuses intact untracked counters and shares concurrent setup", async () => {
-  const { guild, addChannel, addRole } = createGuild("member-count-reuse-public");
-  saveApprovedRole(guild, addRole("stay", "STAY"));
-  const category = addChannel("existing-stats");
-  category.type = ChannelType.GuildCategory;
-  category.name = "📊 SERVER STATS";
-  const channels = ["👥 Total Members: 430", "💜 Stay Role: 421", "⚠️ No Stay Role: 9"].map((name, index) => {
-    const channel = addChannel(`existing-voice-${index}`);
-    channel.name = name;
-    channel.type = ChannelType.GuildVoice;
-    channel.parentId = category.id;
-    return channel;
-  });
-  guild.channels.create = async () => assert.fail("existing counters should be reused");
-  const before = guild.channels.cache.size;
-  await Promise.all([countsService.setupMemberCounts(guild), countsService.setupMemberCounts(guild)]);
-  assert.equal(guild.channels.cache.size, before);
-  const saved = memberCountStore.getMemberCountSettings(guild.id);
-  assert.equal(saved.category_id, category.id);
-  assert.deepEqual([saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map(({ id }) => id));
-  await countsService.setupMemberCounts(guild);
-  assert.equal(guild.channels.cache.size, before);
-});
-
-test("Member Counts public setup stops before creating channels when existing stats are ambiguous", async () => {
-  const { guild, addChannel, addRole } = createGuild("member-count-ambiguous-public");
-  saveApprovedRole(guild, addRole("stay", "STAY"));
-  for (const id of ["stats-a", "stats-b"]) {
-    const category = addChannel(id);
-    category.type = ChannelType.GuildCategory;
-    category.name = "📊 SERVER STATS";
-  }
-  guild.channels.create = async () => assert.fail("ambiguous server stats cannot be replaced automatically");
-  await assert.rejects(countsService.setupMemberCounts(guild), { code: "AMBIGUOUS_SERVER_STATS" });
-  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
-});
-
-test("Member Counts On/Off preserves setup and re-enables saved counters without recreation", async () => {
-  const { guild, addChannel } = createGuild("member-count-manager-toggle");
-  const panel = addChannel("member-count-toggle-panel");
-  const channels = [addChannel("count-category"), addChannel("count-total"), addChannel("count-stay"), addChannel("count-no-role")];
-  memberCountStore.saveMemberCountSettings({ guildId: guild.id, roleId: "stay-role-toggle", categoryId: channels[0].id, totalChannelId: channels[1].id, stayChannelId: channels[2].id, noRoleChannelId: channels[3].id });
-  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-toggle-panel-message", enabled: true });
-  const open = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-toggle-panel-message" } });
-  await room.handleAdminRoomInteraction(open);
-  assert.match(open.response.embeds[0].data.description, /Public SERVER STATS:\*\* On/);
-  const before = guild.channels.cache.size;
-
-  const off = guardInteraction(guild, "harmony-admin-room:members-toggle");
-  await room.handleAdminRoomInteraction(off);
-  let saved = memberCountStore.getMemberCountSettings(guild.id);
-  assert.equal(saved.enabled, 0);
-  assert.deepEqual([saved.category_id, saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map((channel) => channel.id));
-  assert.equal(guild.channels.cache.size, before);
-
-  const on = guardInteraction(guild, "harmony-admin-room:members-toggle");
-  await room.handleAdminRoomInteraction(on);
-  saved = memberCountStore.getMemberCountSettings(guild.id);
-  assert.equal(saved.enabled, 1);
-  assert.deepEqual([saved.category_id, saved.total_channel_id, saved.stay_channel_id, saved.no_role_channel_id], channels.map((channel) => channel.id));
-  assert.equal(guild.channels.cache.size, before, "re-enabling changes only the saved enabled flag");
-});
-
-test("Member Counts setup preserves the bot Manage Channels permission check and stale Admin panel protection", async () => {
-  const { guild, addChannel, addRole } = createGuild("member-count-manager-protection");
+test("Member Counts rejects refresh from a stale Admin Room panel", async () => {
+  const { guild, addChannel } = createGuild("member-count-manager-protection");
   const panel = addChannel("member-count-protection-panel");
-  saveApprovedRole(guild, addRole("stay-role-protection", "STAY"));
-  roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-protection-panel-message", enabled: true });
-  const noPermission = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-protection-panel-message" } });
-  await room.handleAdminRoomInteraction(noPermission);
-  guild.members.me.permissions.has = (permission) => permission !== PermissionFlagsBits.ManageChannels;
-  const denied = guardInteraction(guild, "harmony-admin-room:members-public-setup");
-  await room.handleAdminRoomInteraction(denied);
-  assert.match(denied.response.content, /needs \*\*Manage Channels\*\*/);
-  assert.equal(memberCountStore.getMemberCountSettings(guild.id), null);
-
-  guild.members.me.permissions.has = () => true;
-  const staleOpen = guardInteraction(guild, "harmony-admin-room:members", { channelId: panel.id, message: { id: "member-count-protection-panel-message" } });
-  await room.handleAdminRoomInteraction(staleOpen);
+  await openMemberCounts(guild, panel);
   roomStore.savePanel({ guildId: guild.id, channelId: panel.id, messageId: "member-count-replaced-panel", enabled: true });
-  const stale = guardInteraction(guild, "harmony-admin-room:members-toggle");
-  await room.handleAdminRoomInteraction(stale);
+  const stale = await useMemberCounts(guild, "refresh");
   assert.match(stale.response.content, /panel that is no longer active/i);
 });
 
-test("/harmony-member-counts slash command remains registered with its existing subcommands and permissions", () => {
+test("/harmony-member-counts exposes only private refresh and status", () => {
   const command = require("../src/commands/memberCounts");
   const schema = command.data.toJSON();
   assert.equal(schema.name, "harmony-member-counts");
-  assert.deepEqual(schema.options.map((option) => option.name), ["setup", "refresh", "status", "off"]);
-  assert.deepEqual(schema.options[0].options, []);
+  assert.deepEqual(schema.options.map((option) => option.name), ["refresh", "status"]);
   assert.equal(schema.default_member_permissions, String(PermissionFlagsBits.Administrator));
 });
 
@@ -1423,7 +1313,7 @@ test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-function liveRoomFixture(id, { publicStats = true } = {}) {
+function liveRoomFixture(id) {
   const { guild, addChannel, addRole } = createGuild(id);
   const first = addChannel("private-controls");
   const next = addChannel("other-private-controls");
@@ -1434,15 +1324,6 @@ function liveRoomFixture(id, { publicStats = true } = {}) {
   saveApprovedRole(guild, role);
   memberCountStore.saveMemberCountStaffRole(guild.id, "admin", admin.id);
   memberCountStore.saveMemberCountStaffRole(guild.id, "moderator", moderator.id);
-  const stats = publicStats ? ["total-voice", "stay-voice", "no-role-voice"].map(addChannel) : [];
-  for (const channel of stats) channel.type = ChannelType.GuildVoice;
-  if (publicStats) {
-    memberCountStore.saveMemberCountSettings({
-      guildId: guild.id, roleId: role.id, categoryId: "stats",
-      totalChannelId: stats[0].id, stayChannelId: stats[1].id, noRoleChannelId: stats[2].id,
-    });
-  }
-
   const members = new Map();
   guild.members.fetch = async () => members;
   const setMember = (id, { bot = false, stay = false, isAdmin = false, isModerator = false } = {}) => {
@@ -1451,7 +1332,7 @@ function liveRoomFixture(id, { publicStats = true } = {}) {
     members.set(id, member);
     return member;
   };
-  return { guild, first, next, stats, members, setMember };
+  return { guild, first, next, members, setMember };
 }
 
 const countsService = require("../src/services/memberCountService");
@@ -1488,7 +1369,7 @@ test("live display updates on join, leave, and all three role grants and removal
     t.mock.timers.tick(2500);
     await new Promise(setImmediate);
   };
-  const { guild, first, stats, members, setMember } = liveRoomFixture("live-count-events");
+  const { guild, first, members, setMember } = liveRoomFixture("live-count-events");
   guild.members.cache = members;
   Object.defineProperty(guild, "memberCount", { get: () => members.size });
   let fullFetches = 0;
@@ -1525,9 +1406,6 @@ test("live display updates on join, leave, and all three role grants and removal
   countsService.scheduleMemberCountRoleRefresh(bot, botWithStay);
   await runDebounce();
   assertLiveCounts(counter, 2, 1, 0, 0, 1, 1);
-  assert.deepEqual(stats.map((channel) => channel.name), [
-    "👥 Total Members: 1", "💜 Stay Role: 0", "⚠️ No Stay Role: 1",
-  ]);
 
   members.delete("entrant");
   countsService.observeMembershipChange(entrant, "leave");
@@ -1542,8 +1420,8 @@ test("live display updates on join, leave, and all three role grants and removal
   assert.equal(fullFetches, 0, "join, leave, and role events can use the complete Discord member cache");
 });
 
-test("private counts overlap STAY with staff and bots while public counters stay human-only", async () => {
-  const { guild, first, stats, setMember } = liveRoomFixture("live-count-overlap");
+test("private counts overlap STAY with staff and bots", async () => {
+  const { guild, first, setMember } = liveRoomFixture("live-count-overlap");
   setMember("admin-stay", { isAdmin: true, stay: true });
   setMember("mod-stay", { isModerator: true, stay: true });
   setMember("dual-staff", { isAdmin: true, isModerator: true });
@@ -1556,17 +1434,14 @@ test("private counts overlap STAY with staff and bots while public counters stay
   assertLiveCounts(counter, 7, 4, 2, 1, 1, 2);
   assert.match(counterText(counter), /STAY includes everyone holding the role, including staff and bots/);
   const snapshot = await countsService.getMemberCounts(guild);
-  assert.deepEqual(snapshot.privateCounts, {
+  assert.deepEqual(snapshot, {
     total: 7, stay: 4, bots: 2, admins: 2, moderators: 1, noRole: 1,
   });
   await countsService.refreshMemberCounts(guild);
-  const publicNames = stats.map((channel) => channel.name);
-  assert.deepEqual(publicNames, ["👥 Total Members: 5", "💜 Stay Role: 3", "⚠️ No Stay Role: 2"]);
 
   getDb().prepare("UPDATE member_count_accounting SET exclude_staff = 0 WHERE guild_id = ?").run(guild.id);
   await countsService.refreshMemberCounts(guild);
   assertLiveCounts(counter, 7, 4, 2, 1, 1, 2);
-  assert.deepEqual(stats.map((channel) => channel.name), publicNames);
   assert.deepEqual(liveCounters(first), [counter]);
 });
 
@@ -1578,8 +1453,8 @@ async function openLiveMemberCounts(guild, channel) {
   }));
 }
 
-test("simultaneous manual and background member counts share one full request without public stats", async () => {
-  const { guild, first, members, setMember } = liveRoomFixture("live-count-shared-fetch", { publicStats: false });
+test("simultaneous manual and background private member counts share one full request", async () => {
+  const { guild, first, members, setMember } = liveRoomFixture("live-count-shared-fetch");
   await openLiveMemberCounts(guild, first);
   const [counter] = liveCounters(first);
   setMember("stay", { stay: true });
@@ -1595,7 +1470,6 @@ test("simultaneous manual and background member counts share one full request wi
   response.resolve(members);
   const [button, result, snapshot] = await Promise.all([manual, background, direct]);
   assert.equal(result.privateRefreshed, true);
-  assert.equal(result.publicCounts, null);
   assert.equal(snapshot.total, 1);
   assert.match(button.response.embeds[0].data.description, /Private member counts refreshed/);
   assertLiveCounts(counter, 1, 1, 0, 0, 0);
@@ -1604,7 +1478,7 @@ test("simultaneous manual and background member counts share one full request wi
 
 test("rate limiting queues one retry, preserves the display and leaves, then applies the fresh counts", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: new Date("2026-11-16T07:00:00Z") });
-  const { guild, first, members, setMember } = liveRoomFixture("live-count-rate-limit", { publicStats: false });
+  const { guild, first, members, setMember } = liveRoomFixture("live-count-rate-limit");
   const departing = setMember("departing", { stay: true });
   await openLiveMemberCounts(guild, first);
   const [counter] = liveCounters(first);
@@ -1648,31 +1522,18 @@ test("rate limiting queues one retry, preserves the display and leaves, then app
   assert.equal(fetches, 2, "there is no second queued retry");
 });
 
-test("Refresh Now reports public and private failures separately", async () => {
-  const { guild, first, stats, setMember } = liveRoomFixture("live-count-split-errors");
+test("Refresh Now reports private failures", async () => {
+  const { guild, first } = liveRoomFixture("live-count-private-error");
   await openLiveMemberCounts(guild, first);
-  const [counter] = liveCounters(first);
-  setMember("stay", { stay: true });
-  const rename = stats[0].setName;
-  stats[0].setName = async () => { throw new Error("Voice channel rename denied"); };
-  const publicFailure = await useMemberCounts(guild, "refresh");
-  const publicMessage = publicFailure.response.embeds[0].data.description;
-  assert.match(publicMessage, /Private member counts refreshed/);
-  assert.match(publicMessage, /Public SERVER STATS refresh failed: Voice channel rename denied/);
-  assert.doesNotMatch(publicMessage, /Private refresh failed/);
-  assertLiveCounts(counter, 1, 1, 0, 0, 0);
-
-  stats[0].setName = rename;
   first.messages.fetch = async () => { throw new Error("Private message access denied"); };
-  const privateFailure = await useMemberCounts(guild, "refresh");
-  const privateMessage = privateFailure.response.embeds[0].data.description;
-  assert.match(privateMessage, /Private refresh failed: Private message access denied/);
-  assert.doesNotMatch(privateMessage, /Public SERVER STATS refresh failed|Private member counts refreshed/);
-  assert.equal(stats[0].name, "👥 Total Members: 1");
+  const failure = await useMemberCounts(guild, "refresh");
+  const message = failure.response.embeds[0].data.description;
+  assert.match(message, /Private refresh failed: Private message access denied/);
+  assert.doesNotMatch(message, /Private member counts refreshed/);
 });
 
 test("live display reports STAY when staff setup is incomplete", async () => {
-  const { guild, first, stats, setMember } = liveRoomFixture("live-count-missing-staff");
+  const { guild, first, setMember } = liveRoomFixture("live-count-missing-staff");
   guild.roles.cache.delete("configured-mod");
   setMember("member", { stay: true });
   await room.execute(setupInteraction({ guild, channel: first }));
@@ -1680,7 +1541,6 @@ test("live display reports STAY when staff setup is incomplete", async () => {
   assertLiveCounts(counter, 1, 1, "—", "—", "—");
   assert.match(counterText(counter), /Configure distinct STAY, Admin, and Moderator roles/);
   await countsService.refreshMemberCounts(guild);
-  assert.equal(stats[1].name, "💜 Stay Role: 1");
 });
 
 test("weekly activity uses Eastern Monday midnight and seeds only the owner-confirmed guild and weeks once", async () => {
@@ -1758,15 +1618,14 @@ test("restart recovers a pending counter send even beyond the first page of Disc
   assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, delivered.id);
 });
 
-test("missing permissions do not trigger a replacement and public counters still refresh", async () => {
-  const { guild, first, stats, setMember } = liveRoomFixture("live-count-permissions");
+test("missing private permissions do not trigger a replacement", async () => {
+  const { guild, first, setMember } = liveRoomFixture("live-count-permissions");
   await room.execute(setupInteraction({ guild, channel: first }));
   const saved = roomStore.getDelivery(guild.id, "counter");
   const fetch = first.messages.fetch;
   first.messages.fetch = async () => { throw Object.assign(new Error("Missing Access"), { code: 50001 }); };
   setMember("human", { stay: true });
-  await countsService.refreshMemberCounts(guild);
-  assert.equal(stats[0].name, "👥 Total Members: 1");
+  await assert.rejects(countsService.refreshMemberCounts(guild), /Missing Access/);
   assert.equal(liveCounters(first).length, 1);
   assert.equal(roomStore.getDelivery(guild.id, "counter").message_id, saved.message_id);
 
@@ -1775,11 +1634,11 @@ test("missing permissions do not trigger a replacement and public counters still
   first.permissionsFor = (target) => ({
     has: (bit) => bit !== PermissionFlagsBits.ReadMessageHistory && permissionsFor(target).has(bit),
   });
-  await countsService.refreshMemberCounts(guild);
+  await assert.rejects(countsService.refreshMemberCounts(guild), /Read Message History/);
   assert.equal(liveCounters(first).length, 1);
   first.permissionsFor = permissionsFor;
   first.private = false;
-  await countsService.refreshMemberCounts(guild);
+  await assert.rejects(countsService.refreshMemberCounts(guild), /Admin Room must be private/);
   assert.equal(liveCounters(first).length, 0);
   assert.ok(roomStore.getPanel(guild.id).enabled);
 });
@@ -1804,4 +1663,71 @@ test("moving the admin room retires the old display and off/on restores one in t
   const [turnedOn] = liveCounters(next);
   assert.equal(liveCounters(next).length, 1);
   assert.ok(BigInt(roomStore.getPanel(guild.id).message_id) > BigInt(turnedOn.id));
+});
+
+test("legacy public settings stay dormant while manual, scheduled, and slash refreshes update the private display", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const { guild, first, setMember } = liveRoomFixture("member-count-legacy-public-with-room");
+  const oldGuild = createGuild("member-count-legacy-public-only").guild;
+  const legacyChannel = {
+    id: "legacy-total",
+    type: ChannelType.GuildVoice,
+    name: "Total Members: 999",
+    setName: async () => assert.fail("legacy channels must never be renamed"),
+    delete: async () => assert.fail("legacy channels must never be deleted"),
+  };
+  guild.channels.cache.set(legacyChannel.id, legacyChannel);
+  guild.channels.create = async () => assert.fail("legacy channels must never be created");
+  const fetchChannel = guild.channels.fetch;
+  guild.channels.fetch = async (id) => {
+    assert.ok(id && !id.startsWith("legacy-"), `unexpected legacy channel lookup: ${id}`);
+    return fetchChannel(id);
+  };
+
+  const db = getDb();
+  const insert = db.prepare(`
+    INSERT INTO member_count_settings (
+      guild_id, role_id, category_id, total_channel_id, stay_channel_id, no_role_channel_id, enabled, updated_at
+    ) VALUES (?, 'legacy-role', 'legacy-category', 'legacy-total', 'legacy-stay', 'legacy-no-role', 1, '2026-11-16')
+  `);
+  for (const id of [guild.id, oldGuild.id]) insert.run(id);
+  const rows = () => db.prepare("SELECT * FROM member_count_settings WHERE guild_id IN (?, ?) ORDER BY guild_id").all(guild.id, oldGuild.id);
+  const before = rows();
+
+  await openLiveMemberCounts(guild, first);
+  const panel = roomStore.getPanel(guild.id);
+  const manager = guardInteraction(guild, "harmony-admin-room:members", {
+    channelId: first.id, message: { id: panel.message_id },
+  });
+  await room.handleAdminRoomInteraction(manager);
+  assert.doesNotMatch(JSON.stringify(manager.response), /public|members-toggle/i);
+
+  setMember("human", { stay: true });
+  const manual = await useMemberCounts(guild, "refresh");
+  assert.match(manual.response.embeds[0].data.description, /Private member counts refreshed/);
+  const [counter] = liveCounters(first);
+  assertLiveCounts(counter, 1, 1, 0, 0, 0);
+
+  oldGuild.members.fetch = async () => assert.fail("a legacy setting alone must not trigger a member fetch");
+  assert.deepEqual(await countsService.refreshMemberCounts(oldGuild), { privateRefreshed: false });
+  const runtime = client(guild);
+  const lookedUpGuilds = [];
+  runtime.guilds.fetch = async (id) => { lookedUpGuilds.push(id); return null; };
+  setMember("bot", { bot: true, stay: true });
+  countsService.startMemberCountScheduler(runtime);
+  await new Promise(setImmediate);
+  t.mock.timers.tick(0);
+  await new Promise(setImmediate);
+  assert.ok(!lookedUpGuilds.includes(oldGuild.id));
+  assertLiveCounts(counter, 2, 2, 0, 0, 0, 1);
+
+  const command = require("../src/commands/memberCounts");
+  const replies = [];
+  await command.execute({
+    guild, guildId: guild.id, options: { getSubcommand: () => "refresh" },
+    deferReply: async () => {}, editReply: async (message) => { replies.push(message); },
+  });
+  assert.deepEqual(replies, ["Private member counts refreshed."]);
+  assert.equal(guild.channels.cache.get(legacyChannel.id), legacyChannel);
+  assert.deepEqual(rows(), before);
 });

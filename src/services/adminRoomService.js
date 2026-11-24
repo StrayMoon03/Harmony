@@ -843,34 +843,18 @@ function hasActiveMemberCountNavigation(interaction) {
 }
 
 function memberCountManagerPayload(guild, notice = null) {
-  const settings = memberCountStore.getMemberCountSettings(guild.id);
   const { stayRoleId, adminRoleId, moderatorRoleId } = memberCountService.getMemberCountRoles(guild);
   const role = (id) => id ? `<@&${id}>` : "Not configured";
-  const channel = (id) => id ? `<#${id}>` : "Not configured";
-  const enabled = Boolean(settings?.enabled);
   const description = [
     notice,
     `**STAY Role:** ${stayRoleId ? `${role(stayRoleId)} (Welcome Pass Approved Role)` : "Set the Approved Role in Welcome Pass"}`,
     `**Admin Role:** ${role(adminRoleId)}`,
     `**Moderator Role:** ${role(moderatorRoleId)}`,
-    "",
-    `**Public SERVER STATS:** ${settings ? (enabled ? "On" : "Off") : "Not configured"}`,
-    ...(settings ? [
-      `Category: ${channel(settings.category_id)}`,
-      `Total Members: ${channel(settings.total_channel_id)}`,
-      `STAY Role: ${channel(settings.stay_channel_id)}`,
-      `No STAY Role: ${channel(settings.no_role_channel_id)}`,
-    ] : []),
   ].filter((line) => line != null).join("\n");
   return pagePayload("📊 Member Counts Manager", description, [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-admin").setLabel("Set Admin Role").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("harmony-admin-room:members-pick-moderator").setLabel("Set Moderator Role").setStyle(ButtonStyle.Secondary),
-    ),
-    new ActionRowBuilder().addComponents(
-      settings
-        ? new ButtonBuilder().setCustomId("harmony-admin-room:members-toggle").setLabel(enabled ? "Turn Public Stats Off" : "Turn Public Stats On").setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success)
-        : new ButtonBuilder().setCustomId("harmony-admin-room:members-public-setup").setLabel("Set Up Public Stats").setStyle(ButtonStyle.Secondary).setDisabled(!stayRoleId),
       new ButtonBuilder().setCustomId("harmony-admin-room:members-refresh").setLabel("Refresh Now").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("harmony-admin-room:members-close").setLabel("Close Manager").setStyle(ButtonStyle.Secondary),
     ),
@@ -1121,16 +1105,15 @@ async function syncLiveCounter(guild, channel, snapshot) {
   }
   await validateRoomChannel(guild, channel);
   const counts = snapshot || await memberCountService.getMemberCounts(guild);
-  const roles = counts.privateCounts;
   const week = memberCountStore.getWeeklyMemberCountActivity(guild.id);
   const payload = pagePayload("👥 YOUTIFUL STAY — LIVE MEMBER COUNT", [
-    `**Total Members:** ${roles.total}`,
-    `**STAY:** ${roles.stay ?? "—"}`,
-    `**Bots:** ${roles.bots}`,
-    `**Admins:** ${roles.admins ?? "—"}`,
-    `**Moderators:** ${roles.moderators ?? "—"}`,
-    `**No Role:** ${roles.noRole ?? "—"}`,
-    ...(roles.noRole === null
+    `**Total Members:** ${counts.total}`,
+    `**STAY:** ${counts.stay ?? "—"}`,
+    `**Bots:** ${counts.bots}`,
+    `**Admins:** ${counts.admins ?? "—"}`,
+    `**Moderators:** ${counts.moderators ?? "—"}`,
+    `**No Role:** ${counts.noRole ?? "—"}`,
+    ...(counts.noRole === null
       ? ["", "Configure distinct STAY, Admin, and Moderator roles to show staff and No Role counts."]
       : ["", "STAY includes everyone holding the role, including staff and bots."]),
     "",
@@ -1183,7 +1166,6 @@ function refreshMemberCountDisplay(guild, snapshot) {
     const panel = roomStore.getPanel(guild.id);
     if (!panel?.enabled) throw new Error("The Admin Room is disabled.");
     await syncAdminRoom(guild, panel, { snapshot, refreshPanel: false });
-    return true;
   });
 }
 
@@ -1453,23 +1435,6 @@ async function handleAdminRoomInteraction(interaction) {
       }
       return true;
     }
-    if (action === "members-public-setup") {
-      if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageChannels)) {
-        await interaction.reply({ content: "Harmony needs **Manage Channels** to set up the public counters.", flags: MessageFlags.Ephemeral });
-        return true;
-      }
-      await interaction.deferUpdate();
-      try {
-        await memberCountService.setupMemberCounts(guild);
-        await interaction.editReply(memberCountManagerPayload(guild, "The public SERVER STATS counters are ready."));
-      } catch (error) {
-        console.error("Harmony Admin Room member-count setup failed:", error);
-        const notice = error.code === "AMBIGUOUS_SERVER_STATS" ? error.message :
-          "Harmony couldn’t set up the public counters. Check the Welcome Pass Approved Role and Harmony’s channel permissions.";
-        await interaction.editReply(memberCountManagerPayload(guild, notice));
-      }
-      return true;
-    }
     if (action === "members-refresh") {
       const { stayRoleId, adminRoleId, moderatorRoleId } = memberCountService.getMemberCountRoles(guild);
       if (!stayRoleId) {
@@ -1483,29 +1448,13 @@ async function handleAdminRoomInteraction(interaction) {
       await interaction.deferUpdate();
       try {
         const result = await memberCountService.refreshMemberCounts(guild);
-        const notice = result.queued ? memberCountService.REFRESH_QUEUED_MESSAGE : [
-          result.privateRefreshed
-            ? "Private member counts refreshed."
-            : `Private refresh failed: ${result.privateError?.message || "The Admin Room is unavailable."}`,
-          result.publicError && `Public SERVER STATS refresh failed: ${result.publicError.message}`,
-        ].filter(Boolean).join("\n");
+        const notice = result.queued ? memberCountService.REFRESH_QUEUED_MESSAGE
+          : result.privateRefreshed ? "Private member counts refreshed." : "The Admin Room is unavailable.";
         await interaction.editReply(memberCountManagerPayload(guild, notice));
       } catch (error) {
         console.error("Harmony Admin Room member-count refresh failed:", error);
         await interaction.editReply(memberCountManagerPayload(guild, `Private refresh failed: ${error.message}`));
       }
-      return true;
-    }
-    if (action === "members-toggle") {
-      const settings = memberCountStore.getMemberCountSettings(guild.id);
-      if (!settings) {
-        await interaction.update(memberCountManagerPayload(guild, "Set up the public SERVER STATS counters first."));
-        return true;
-      }
-      const nextEnabled = !settings.enabled;
-      memberCountStore.setMemberCountEnabled(guild.id, nextEnabled);
-      if (nextEnabled) memberCountService.scheduleMemberCountRefresh(guild, 0);
-      await interaction.update(memberCountManagerPayload(guild));
       return true;
     }
     if (action === "members-close") {
