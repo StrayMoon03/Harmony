@@ -82,41 +82,31 @@ function fixture() {
 function serialize(p) {
   return JSON.stringify(p);
 }
-test("graphical add flow selects a room and approved events, fills metadata and saves privately", async () => {
-  const f = fixture(),
-    event = f.event();
-  let i = f.i("add");
+test("concert-first creation fills both dates and venue, suggests a unique room and persists privately without Save", async () => {
+  const f = fixture();
+  const events = [f.event(), f.event("2027-06-19")];
+  f.base.guild.channels.fetch = async (id) => id ? { id, guildId: f.g, type: ChannelType.GuildText } : new Collection([[f.c, { id: f.c, name: "chicago-concert", guildId: f.g, type: ChannelType.GuildText }]]);
+  await manager.handle(f.i("add"));
+  const i = f.i("choose-concert", { values: ["chicago"] });
   await manager.handle(i);
-  assert.match(serialize(i.response), /Choose a concert room/);
-  i = f.i("room", { values: [f.c] });
-  await manager.handle(i);
-  assert.match(serialize(i.response), /Select concert dates/);
-  await manager.handle(f.i("events"));
-  i = f.i("select-events", { values: [String(event)] });
-  await manager.handle(i);
+  assert.match(serialize(i.response), /Confirm Setup/);
+  assert.equal(f.s.room, f.c);
+  assert.equal(f.s.auto, true);
+  assert.deepEqual(f.s.draft.eventIds, events);
   assert.equal(f.s.draft.venue, "Soldier Field");
   assert.equal(f.s.draft.timezone, "America/Chicago");
-  i = f.i("details");
-  await manager.handle(i);
-  assert.ok(i.modal.toJSON());
-  i = f.i("details-save", {
-    fields: {
-      getTextInputValue: (k) =>
-        ({
-          city: "Chicago",
-          country: "United States",
-          venue: "Soldier Field",
-          timezone: "America/Chicago",
-        })[k],
-    },
-  });
-  await manager.handle(i);
-  i = f.i("save");
-  await manager.handle(i);
-  assert.ok(store.get(f.g, f.c));
-  assert.equal(store.get(f.g, f.c).message_id, null);
-  assert.equal(store.get(f.g, f.c).enabled, 0);
-  assert.match(serialize(i.response), /Private preview/);
+  assert.ok(!serialize(i.response).includes("Save configuration"));
+  assert.equal(store.get(f.g, f.c), undefined);
+  const preview = service.preview;
+  service.preview = async () => ({ content: "", files: [{ attachment: Buffer.from("PNG"), name: "test.png" }] });
+  try {
+    const next = f.i("preview");
+    await manager.handle(next);
+    assert.match(serialize(next.response), /Approve & Publish/);
+    assert.equal(store.get(f.g, f.c).message_id, null);
+    assert.equal(store.get(f.g, f.c).enabled, 0);
+    assert.equal(f.s.publishRevision, store.get(f.g, f.c).revision);
+  } finally { service.preview = preview; }
 });
 test("unauthorized users, other users sessions, stale panels, wrong channels and expired sessions are rejected", async () => {
   const f = fixture();
@@ -734,4 +724,298 @@ test("Check room access is private, read-only and does not consume pending publi
   } finally {
     access.inspect = original;
   }
+});
+
+async function creation({ ambiguous = false } = {}) {
+  const f = fixture();
+  f.event(); f.event("2027-06-19");
+  const channel = { id: f.c, name: "chicago-concert", guildId: f.g, type: ChannelType.GuildText };
+  const channels = new Collection([[f.c, channel]]);
+  if (ambiguous) channels.set("second", { ...channel, id: "second", name: "chicago-trip" });
+  f.base.guild.channels.fetch = async id => id ? channels.get(id) : channels;
+  await manager.handle(f.i("add"));
+  await manager.handle(f.i("choose-concert", { values: ["chicago"] }));
+  return f;
+}
+test("home contains exactly three primary options and back, with existing configurations in their own clean list", async () => {
+  const f = fixture();
+  const event = f.event();
+  store.save(f.g, f.c, { city: "Chicago", venue: "Soldier Field", country: "USA", timezone: "America/Chicago", eventIds: [event] });
+  store.update(f.g, f.c, { message_id: "existing", enabled: 0, published_at: "before" });
+  const before = store.get(f.g, f.c);
+  const home = manager.home(f.s);
+  assert.deepEqual(home.components.flatMap(r => r.toJSON().components.map(c => c.label)), ["Configured Countdowns", "Add Countdown", "Search for New Concerts", "Back to Control Center"]);
+  const list = f.i("configured"); await manager.handle(list);
+  assert.match(serialize(list.response), /Chicago — Soldier Field/);
+  assert.match(serialize(list.response), /Published · Automatic updates off/);
+  await manager.handle(f.i("open", { values: [f.c] }));
+  assert.deepEqual(store.get(f.g, f.c), before);
+  const text = serialize(manager.detail(f.s));
+  for (const label of ["Edit details & dates", "Upload photograph", "Reuse photograph", "Private preview", "Publish / Repair", "Refresh Now", "Check room access", "Last successful update"]) assert.ok(text.includes(label));
+});
+test("ambiguous room matching leaves setup unassigned and refuses an existing configured room", async () => {
+  const f = await creation({ ambiguous: true });
+  assert.equal(f.s.room, null);
+  assert.match(serialize(manager.setup(f.s)), /no unambiguous match/);
+  const preview = f.i("preview"); await manager.handle(preview);
+  assert.match(serialize(preview.response), /Choose the concert room/);
+  const selected = f.i("setup-room", { values: [f.c] }); await manager.handle(selected);
+  assert.equal(f.s.room, f.c);
+  const other = { ...f.s.draft, city: "Other city" };
+  store.save(f.g, "second", other);
+  const before = store.get(f.g, "second");
+  await manager.handle(f.i("setup-room", { values: ["second"] }));
+  assert.equal(f.s.room, f.c);
+  assert.deepEqual(store.get(f.g, "second"), before);
+});
+test("all announced dates at a location require approved import, and approval populates the complete setup", async () => {
+  const f = fixture(); f.event();
+  await manager.handle(f.i("add"));
+  await manager.handle(f.i("choose-concert", { values: ["chicago"] }));
+  assert.equal(f.s.missingDates, true);
+  const preview = f.i("preview"); await manager.handle(preview);
+  assert.match(serialize(preview.response), /approve the missing calendar dates/);
+  await manager.handle(f.i("tour-review"));
+  assert.equal(store.concerts(f.g).length, 1);
+  await manager.handle(f.i("tour-approve"));
+  assert.equal(store.concerts(f.g).length, 2);
+  assert.equal(f.s.draft.eventIds.length, 2);
+  assert.equal(f.s.missingDates, false);
+});
+test("creation preview and approval use the reviewed automatic-update preference and offer post-publication navigation", async () => {
+  for (const automatic of [true, false]) {
+    const f = await creation();
+    const originalPreview = service.preview, originalRefresh = service.refresh;
+    let calls = 0;
+    service.preview = async row => { assert.equal(row.message_id, null); return { content: "", files: [{ attachment: Buffer.from("actual-fixture"), name: "countdown.png" }] }; };
+    service.refresh = async (client, g, c, options) => {
+      calls++;
+      assert.equal(options.publish, true);
+      assert.equal(options.expectedRevision, store.get(g, c).revision);
+      assert.equal(store.get(g, c).enabled, automatic ? 1 : 0);
+      store.update(g, c, { message_id: "published", published_at: "now" });
+      return { updated: true };
+    };
+    try {
+      if (!automatic) await manager.handle(f.i("setup-auto"));
+      const preview = f.i("preview"); await manager.handle(preview);
+      assert.match(serialize(preview.response), /Approve & Publish/);
+      assert.equal(calls, 0);
+      const confirm = f.i("confirm-publish"); await manager.handle(confirm);
+      assert.equal(calls, 1);
+      for (const label of ["Create Another Countdown", "Configured Countdowns", "Back to Countdown Manager"]) assert.ok(serialize(confirm.response).includes(label));
+      assert.equal(store.get(f.g, f.c).enabled, automatic ? 1 : 0);
+      await manager.handle(f.i("confirm-publish"));
+      assert.equal(calls, 1);
+    } finally { service.preview = originalPreview; service.refresh = originalRefresh; }
+  }
+});
+test("backward navigation preserves details, dates, photograph and daily-update choice and invalidates stale approval", async () => {
+  const f = await creation();
+  const preview = service.preview;
+  service.preview = async () => ({ content: "", files: [] });
+  try {
+    await manager.handle(f.i("preview"));
+    store.photo(f.g, f.c, Buffer.from("saved photograph"), "jpeg");
+    f.s.revision = store.get(f.g, f.c).revision;
+    await manager.handle(f.i("setup-auto"));
+    const before = structuredClone(f.s.draft);
+    await manager.handle(f.i("creation-back"));
+    await manager.handle(f.i("choose-concert", { values: ["chicago"] }));
+    assert.deepEqual(f.s.draft, before);
+    assert.equal(f.s.auto, false);
+    assert.equal(Buffer.from(store.get(f.g, f.c).photo).toString(), "saved photograph");
+    await manager.handle(f.i("preview"));
+    await manager.handle(f.i("back"));
+    assert.equal(f.s.publishRevision, undefined);
+    const approve = f.i("confirm-publish"); await manager.handle(approve);
+    assert.match(serialize(approve.response), /approve publication again/);
+  } finally { service.preview = preview; }
+});
+test("new creation retry retains the reviewed configuration, photograph and automatic-update preference", async () => {
+  const f = await creation(), preview = service.preview, refresh = service.refresh;
+  service.preview = async () => ({ content: "", files: [] });
+  let count = 0;
+  service.refresh = async () => {
+    if (!count++) throw Error("Temporary Discord permission failure");
+    store.update(f.g, f.c, { message_id: "same-message", published_at: "now" });
+    return { updated: true };
+  };
+  try {
+    await manager.handle(f.i("preview"));
+    const first = f.i("confirm-publish"); await manager.handle(first);
+    assert.match(serialize(first.response), /Retry publication/);
+    assert.ok(f.s.publishRevision !== undefined);
+    const config = store.get(f.g, f.c).config;
+    await manager.handle(f.i("confirm-publish"));
+    assert.equal(count, 2);
+    assert.equal(store.get(f.g, f.c).enabled, 1);
+    assert.equal(store.get(f.g, f.c).config, config);
+  } finally { service.preview = preview; service.refresh = refresh; }
+});
+test("source discovery stays private, requires announcement review and explicit approved calendar import", async () => {
+  const f = fixture(), discovery = require("../src/services/concertCountdownDiscovery"), search = discovery.search;
+  discovery.search = async () => ({ checkedAt: "2026-11-24T12:00Z", sources: [{ provider: "jype-notice", ok: true }], items: [{ title: "RUN IT Chicago additional date", summary: "Concert 2027-06-20 at Soldier Field", url: "https://straykids.jype.com/notice/123", location: require("../src/services/concertTourCalendar").bundled.locations.find(l => l.key === "chicago"), dates: ["2027-06-20"] }] });
+  try {
+    await manager.handle(f.i("discover"));
+    const check = f.i("discovery-run"); await manager.handle(check);
+    assert.match(serialize(check.response), /announcements to review/);
+    assert.equal(store.concerts(f.g).length, 0);
+    await manager.handle(f.i("discovery-item", { values: ["0"] }));
+    const prepare = f.i("discovery-prepare"); await manager.handle(prepare);
+    assert.equal(prepare.modal.toJSON().components.length, 5);
+    await manager.handle(f.i("discovery-fields", { fields: { getTextInputValue: k => ({ city: "Chicago", country: "United States", venue: "Soldier Field", timezone: "America/Chicago", dates: "2027-06-20" })[k] } }));
+    assert.equal(store.concerts(f.g).length, 0);
+    assert.equal(f.s.importReview.plan.counts.missing, 1);
+    await manager.handle(f.i("tour-approve"));
+    assert.equal(store.concerts(f.g).length, 1);
+    assert.equal(store.concerts(f.g)[0].link, "https://straykids.jype.com/notice/123");
+    assert.equal(store.list(f.g).length, 0);
+  } finally { discovery.search = search; }
+});
+test("new UI pages validate Discord limits, pagination, configured markers and private close navigation", async () => {
+  const f = await creation();
+  const pages = [manager.home(f.s), manager.configured(f.s), manager.concertPicker(f.s), manager.setup(f.s), manager.discoveryPage(f.s)];
+  for (const page of pages) {
+    assert.ok(page.components.length <= 5);
+    for (const row of page.components) {
+      const json = row.toJSON();
+      assert.ok(json.components.length <= 5);
+      for (const c of json.components) if (c.options) assert.ok(c.options.length <= 25);
+    }
+    for (const e of page.embeds) e.toJSON();
+  }
+  const offered = [...f.s.offeredLocations];
+  await manager.handle(f.i("concert-next"));
+  assert.notDeepEqual(f.s.offeredLocations, offered);
+  const close = f.i("close", { deleteReply: async () => {} }); await manager.handle(close);
+  assert.equal(manager.authorize(f.i("add"), f.s), true); // panel access is unchanged
+  const expired = f.i("add"); await manager.handle(expired);
+  assert.match(expired.response.content, /expired/);
+});
+test("new setup uploads and reuses photographs, and reopening its private draft preserves the automatic-update preference", async () => {
+  const f = await creation(), originalFetch = global.fetch;
+  const bytes = require("node:child_process").spawnSync("python3", ["-c", "from PIL import Image; import sys; Image.new('RGB',(300,150),'orange').save(sys.stdout.buffer,format='PNG')"]).stdout;
+  global.fetch = async () => ({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } }) });
+  try {
+    const upload = f.i("photo-save", { fields: { getUploadedFiles: () => new Collection([["1", { url: "https://cdn.discordapp.com/attachments/fixture/photo.png", size: bytes.length }]]) } });
+    await manager.handle(upload);
+    assert.match(serialize(upload.response), /Confirm Setup/);
+    assert.ok(store.get(f.g, f.c).photo.length);
+    assert.equal(store.get(f.g, f.c).message_id, null);
+    await manager.handle(f.i("setup-auto"));
+    const before = Buffer.from(store.get(f.g, f.c).photo);
+    const id = store.photos(f.g)[0].id;
+    await manager.handle(f.i("photos"));
+    await manager.handle(f.i("reuse-photo", { values: [id] }));
+    assert.deepEqual(Buffer.from(store.get(f.g, f.c).photo), before);
+    await manager.handle(f.i("configured"));
+    await manager.handle(f.i("open", { values: [f.c] }));
+    assert.equal(f.s.creating, true);
+    assert.equal(f.s.auto, false);
+    assert.deepEqual(Buffer.from(store.get(f.g, f.c).photo), before);
+    assert.equal(store.get(f.g, f.c).enabled, 0);
+    assert.equal(f.s.draft.eventIds.length, 2);
+  } finally { global.fetch = originalFetch; }
+});
+test("location search finds city/country/venue/date and existing locations route to management without overwriting", async () => {
+  const f = await creation();
+  const draft = structuredClone(f.s.draft);
+  store.save(f.g, f.c, draft);
+  store.update(f.g, f.c, { message_id: "owner-published", enabled: 0, published_at: "before" });
+  const before = store.get(f.g, f.c);
+  f.s.creating = false;
+  for (const query of ["Chicago", "United States", "Soldier Field", "2027-06-19"]) {
+    await manager.handle(f.i("add"));
+    const search = f.i("search-save", { fields: { getTextInputValue: () => query } });
+    await manager.handle(search);
+    assert.ok(f.s.offeredLocations.includes("chicago"));
+    assert.match(serialize(search.response), /Already configured/);
+  }
+  const selected = f.i("choose-concert", { values: ["chicago"] });
+  await manager.handle(selected);
+  assert.match(serialize(selected.response), /Publish \/ Repair/);
+  assert.deepEqual(store.get(f.g, f.c), before);
+});
+test("correcting a saved new draft's room moves its photograph and preferences without leaving another draft or touching a published room", async () => {
+  const f = await creation(), preview = service.preview;
+  service.preview = async () => ({ content: "", files: [] });
+  try { await manager.handle(f.i("preview")); } finally { service.preview = preview; }
+  store.photo(f.g, f.c, Buffer.from("photo to keep"), "jpeg");
+  f.s.revision = store.get(f.g, f.c).revision;
+  f.base.guild.channels.fetch = async id => ({ id, guildId: f.g, type: ChannelType.GuildText });
+  const change = f.i("setup-room", { values: ["corrected-room"] }); await manager.handle(change);
+  assert.equal(store.get(f.g, f.c), undefined);
+  assert.equal(f.s.room, "corrected-room");
+  assert.equal(Buffer.from(store.get(f.g, "corrected-room").photo).toString(), "photo to keep");
+  assert.equal(JSON.parse(store.get(f.g, "corrected-room").config).setupAuto, true);
+  assert.equal(store.list(f.g).length, 1);
+  store.update(f.g, "corrected-room", { message_id: "existing-pin", published_at: "before" });
+  const before = store.get(f.g, "corrected-room");
+  assert.throws(() => store.moveDraft(f.g, "corrected-room", "another", before.revision), /cannot be moved/);
+  assert.deepEqual(store.get(f.g, "corrected-room"), before);
+});
+test("actual private creation preview and service publication recover a failed pin in the same message", async () => {
+  const f = await creation();
+  const roles = new Collection([[f.g, { id: f.g, name: "@everyone" }]]);
+  const bot = { id: "bot", guild: f.base.guild, roles: { cache: roles } };
+  const calls = { send: 0, edit: 0 }, messages = new Collection();
+  let failPin = true;
+  const channel = {
+    id: f.c, guildId: f.g, type: ChannelType.GuildText, name: "chicago-concert",
+    overwritesFor: () => ({ roles: [] }), permissionsFor: () => ({ has: () => true }),
+    messages: {
+      fetch: async o => o.message ? messages.get(o.message) : messages,
+      fetchPins: async () => ({ items: [...messages.values()].filter(m => m.pinned).map(message => ({ message })), hasMore: false }),
+    },
+    send: async p => {
+      calls.send++;
+      const message = { id: "existing-countdown", channelId: f.c, author: { id: "bot" }, content: p.content, attachments: new Collection(p.files.map((file, i) => [String(i), { name: file.name }])), pinned: false,
+        pin: async () => { if (failPin) throw Object.assign(Error("Pin refused"), { code: 50013 }); message.pinned = true; },
+        edit: async p => { calls.edit++; assert.equal(p.content, ""); return message; },
+      };
+      messages.set(message.id, message);
+      return message;
+    },
+  };
+  f.base.guild.roles = { cache: roles, fetch: async () => roles };
+  f.base.guild.members = { fetchMe: async () => bot };
+  f.base.guild.channels.fetch = async () => channel;
+  const client = { user: { id: "bot" }, guilds: { cache: new Collection([[f.g, f.base.guild]]), fetch: async () => f.base.guild } };
+  const open = f.i("home"); await manager.open(open);
+  assert.equal(open.response.flags, 64);
+  const preview = f.i("preview"); await manager.handle(preview);
+  assert.equal(preview.response.content, "");
+  assert.equal(preview.response.files[0].attachment.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(calls.send, 0);
+  const first = f.i("confirm-publish", { client }); await manager.handle(first);
+  assert.match(serialize(first.response), /Retry publication/);
+  assert.equal(store.get(f.g, f.c).message_id, "existing-countdown");
+  assert.equal(store.get(f.g, f.c).enabled, 1);
+  failPin = false;
+  const retry = f.i("confirm-publish", { client }); await manager.handle(retry);
+  assert.match(serialize(retry.response), /Countdown Published/);
+  assert.equal(calls.send, 1);
+  assert.equal(calls.edit, 1);
+  assert.equal(messages.first().pinned, true);
+  assert.equal(store.get(f.g, f.c).message_id, "existing-countdown");
+});
+test("a slow creation preview cannot be approved for a different room or a configuration edited during rendering", async () => {
+  const f = await creation(), preview = service.preview;
+  let release;
+  service.preview = async () => { await new Promise(resolve => { release = resolve; }); return { content: "", files: [] }; };
+  try {
+    const first = f.i("preview"), work = manager.handle(first);
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    const room = f.s.room, change = f.i("setup-room", { values: ["wrong-room"] });
+    await manager.handle(change);
+    assert.equal(f.s.room, room);
+    assert.match(serialize(change.response), /Wait for its result/);
+    store.save(f.g, f.c, { ...f.s.draft, venue: "Venue changed by another admin" });
+    release(); await work;
+    assert.match(serialize(first.response), /Configuration changed during preview/);
+    assert.equal(f.s.publishRevision, undefined);
+    assert.equal(f.s.uiInFlight, undefined);
+    assert.equal(store.get(f.g, f.c).message_id, null);
+  } finally { service.preview = preview; if (release) release(); }
 });

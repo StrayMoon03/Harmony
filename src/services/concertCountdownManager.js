@@ -18,6 +18,8 @@ const {
 const store = require("../stores/concertCountdownStore");
 const rooms = require("../stores/adminRoomStore");
 const tour = require("./concertTourCalendar");
+const discovery = require("./concertCountdownDiscovery");
+const { normalize, phrase } = require("./concertTourIdentity");
 const { dateAt, matchesQuery } = require("./concertTourIdentity");
 const eventDay = (e) =>
   dateAt(
@@ -74,7 +76,7 @@ function createSession(i) {
   sessions.set(s.token, s);
   return s;
 }
-function home(s, notice = "") {
+function configured(s, notice = "") {
   const rows = store.list(s.guild),
     page = (s.listPage = Math.min(
       s.listPage,
@@ -92,9 +94,9 @@ function home(s, notice = "") {
             slice.map((r) => {
               const c = JSON.parse(r.config);
               return {
-                label: c.city.slice(0, 100),
+                label: `${c.city} — ${c.venue}`.slice(0, 100),
                 description: (
-                  c.venue +
+                  (r.message_id || r.published_at ? "Published" : "Draft") +
                   " · " +
                   (r.enabled ? "Automatic updates on" : "Automatic updates off")
                 ).slice(0, 100),
@@ -107,8 +109,7 @@ function home(s, notice = "") {
   components.push(
     new Row().addComponents(
       button(s, "add", "Add countdown", Style.Primary),
-      button(s, "tour-audit", "Tour dates & calendar audit"),
-      button(s, "tour-upload", "Upload confirmed dates"),
+      button(s, "home", "Back"),
       button(s, "list-prev", "Previous").setDisabled(page === 0),
       button(s, "list-next", "Next").setDisabled(
         (page + 1) * 25 >= rows.length,
@@ -120,13 +121,112 @@ function home(s, notice = "") {
     content: notice || null,
     embeds: [
       embed(
-        "Concert Countdown Manager",
-        `${rows.length} configured concert room${rows.length === 1 ? "" : "s"}. Choose one to edit, preview, publish or repair.\n\nNew countdowns remain private until you explicitly publish them. Dates come from the approved Stray Kids calendar. If a location is missing, use Tour dates & calendar audit to review confirmed missing dates.`,
+        "Configured Countdowns",
+        `${rows.length} configured concert room${rows.length === 1 ? "" : "s"}. Choose a countdown to manage its dates, photograph, publication and automatic updates.`,
       ),
     ],
     components,
     attachments: [],
   };
+}
+function home(s, notice = "") {
+  return { ...safe, content: notice || null, attachments: [],
+    embeds: [embed("Concert Countdown Manager", "Choose what you would like to do. New countdowns stay private until you approve publication.")],
+    components: [
+      new Row().addComponents(button(s, "configured", "Configured Countdowns")),
+      new Row().addComponents(button(s, "add", "Add Countdown", Style.Primary)),
+      new Row().addComponents(button(s, "discover", "Search for New Concerts")),
+      new Row().addComponents(button(s, "close", "Back to Control Center")),
+    ],
+  };
+}
+function configuredLocations(s, l) {
+  return store.list(s.guild).filter(r => {
+    const c = JSON.parse(r.config);
+    return normalize(c.city) === normalize(l.city) && normalize(c.venue) === normalize(l.venue);
+  });
+}
+function concertPicker(s) {
+  const locations = tour.groups(s.guild, s.query), page = s.locationPage = Math.min(s.locationPage || 0, Math.max(0, Math.ceil(locations.length / 25) - 1));
+  const slice = locations.slice(page * 25, page * 25 + 25);
+  s.offeredLocations = slice.map(l => l.key);
+  const components = [];
+  if (slice.length) components.push(new Row().addComponents(new Select().setCustomId(id(s, "choose-concert")).setPlaceholder("Choose a city and venue").addOptions(slice.map(l => ({
+    label: `${l.city} — ${l.venue}`.slice(0, 100), value: l.key,
+    description: `${configuredLocations(s, l).length ? "Already configured · " : ""}${l.country} · ${l.events.length} approved dates${l.audit.some(a => a.status === "missing") ? " · More dates need import" : ""}`.slice(0, 100),
+  })))));
+  components.push(new Row().addComponents(button(s, "concert-prev", "Previous").setDisabled(page === 0), button(s, "concert-next", "Next").setDisabled((page + 1) * 25 >= locations.length), button(s, "search", "Search Locations"), button(s, "home", "Back")));
+  return { ...safe, content: null, attachments: [], embeds: [embed("Add Countdown — Select Concert", `${locations.length} locations · Page ${page + 1}\nSearch by city, country, venue or date. All approved dates at the selected venue will be filled in together. Locations needing calendar approval remain marked.`)], components };
+}
+function setup(s, notice = "") {
+  const c = s.draft, events = store.concerts(s.guild);
+  const buttons = [button(s, "photo", "Upload Photograph"), button(s, "details", "Edit Details"), button(s, "events", "Edit Dates")];
+  if (store.photos(s.guild).length) buttons.splice(1, 0, button(s, "photos", "Reuse Photograph"));
+  const row = s.room && store.get(s.guild, s.room);
+  return { ...safe, content: notice || null, attachments: [], embeds: [embed("Confirm Setup", `${c.city} · ${c.country}\n${c.venue}\nTime zone: ${c.timezone}\n\n${c.eventIds.map(n => { const e = events.find(e => e.id === n); return e ? eventDay(e) : "Date unavailable — review dates"; }).join("\n") || "No approved dates yet — review missing dates before previewing."}\n\nRoom: ${s.room ? `<#${s.room}>${s.roomSuggested ? " (suggested; change below if needed)" : ""}` : "Choose a room below; no unambiguous match was found."}\nPhotograph: ${row?.photo || s.creationPhoto ? "Saved" : "Upload or reuse a photograph"}\nAutomatic daily updates: **${s.auto ? "On" : "Off"}**\n\n${s.missingDates ? "Additional confirmed dates need calendar approval. Use Review Missing Dates below. " : ""}${c.eventIds.length > 12 ? "Select up to 12 dates for one countdown. " : ""}Review the details, add your photograph, then preview. Nothing is published yet.`)], components: [
+    new Row().addComponents(new Channels().setCustomId(id(s, "setup-room")).setPlaceholder("Confirm or change concert room").addChannelTypes(ChannelType.GuildText)),
+    ...Array.from({ length: Math.ceil(buttons.length / 2) }, (_, n) => new Row().addComponents(...buttons.slice(n * 2, n * 2 + 2))),
+    new Row().addComponents(button(s, "setup-auto", s.auto ? "Daily Updates: On" : "Daily Updates: Off"), button(s, "preview", "Preview Countdown", Style.Primary).setDisabled(Boolean(!s.room || !c.eventIds.length || c.eventIds.length > 12 || s.missingDates)), button(s, "creation-back", "Back")),
+    ...(s.missingDates ? [new Row().addComponents(button(s, "tour-review", "Review Missing Dates"))] : []),
+  ] };
+}
+async function suggestRoom(i, s, location) {
+  const channels = await i.guild.channels.fetch().catch(() => null);
+  const values = typeof channels?.values === "function" ? [...channels.values()] : [channels];
+  const candidates = values.filter(c => c?.guildId === s.guild && c.type === ChannelType.GuildText && !store.get(s.guild, c.id) && [location.city, ...(location.cityAliases || []), location.venue].some(name => phrase(c.name, name)));
+  s.room = candidates.length === 1 ? candidates[0].id : null;
+  s.roomSuggested = Boolean(s.room);
+  s.revision = -1;
+}
+function persistDraft(s) {
+  if (!s.room) throw Error("Choose the concert room before continuing");
+  validateConfig(s.draft, store.concerts(s.guild));
+  const old = store.get(s.guild, s.room);
+  if (old && s.revision === -1) throw Error("This room already has a countdown. Open it from Configured Countdowns.");
+  if (!old || JSON.stringify(JSON.parse(old.config)) !== JSON.stringify(s.draft)) {
+    store.save(s.guild, s.room, s.draft, s.revision);
+  } else if (old.revision !== s.revision) throw Error("This countdown changed. Reopen it before continuing.");
+  s.revision = store.get(s.guild, s.room).revision;
+  return store.get(s.guild, s.room);
+}
+function openSaved(s, room) {
+  s.room = room;
+  s.publishRevision = undefined;
+  const row = store.get(s.guild, room);
+  if (!row) throw Error("Countdown no longer exists");
+  const config = JSON.parse(row.config);
+  s.creating = !row.message_id && !row.published_at && typeof config.setupAuto === "boolean";
+  if (!s.creating) return detail(s);
+  s.draft = config;
+  s.auto = config.setupAuto;
+  s.revision = row.revision;
+  const location = tour.groups(s.guild).find(l => normalize(l.city) === normalize(config.city) && normalize(l.venue) === normalize(config.venue));
+  s.creationLocation = s.locationKey = location?.key;
+  s.missingDates = location?.audit.some(a => a.status === "missing" || a.status === "repair");
+  s.creationPhoto = row.photo ? { bytes: row.photo, type: row.photo_type } : null;
+  return setup(s);
+}
+function published(s) {
+  return { ...safe, content: null, attachments: [], embeds: [embed("Countdown Published", "Your countdown is published and pinned. You can manage it at any time from Configured Countdowns.")], components: [new Row().addComponents(button(s, "add", "Create Another Countdown", Style.Primary), button(s, "configured", "Configured Countdowns"), button(s, "home", "Back to Countdown Manager"))] };
+}
+function discoveryPage(s, notice = "") {
+  const result = s.discovery, items = result?.items || [], page = s.discoveryPage = Math.min(s.discoveryPage || 0, Math.max(0, Math.ceil(items.length / 25) - 1));
+  s.offeredDiscoveries = items.slice(page * 25, page * 25 + 25).map((_, n) => page * 25 + n);
+  const components = [];
+  if (items.length) components.push(new Row().addComponents(new Select().setCustomId(id(s, "discovery-item")).setPlaceholder("Review an official announcement").addOptions(s.offeredDiscoveries.map(n => ({ label: items[n].title.slice(0, 100) || "Official announcement", value: String(n), description: "Review concert dates before any calendar import" })))));
+  components.push(new Row().addComponents(button(s, "discovery-run", "Check Official Sources", Style.Primary), button(s, "tour-audit", "Tour Reference & Audit"), button(s, "tour-upload", "Upload Confirmed Dates")));
+  components.push(new Row().addComponents(button(s, "discovery-prev", "Previous").setDisabled(page === 0), button(s, "discovery-next", "Next").setDisabled((page + 1) * 25 >= items.length), button(s, "home", "Back")));
+  return { ...safe, content: notice || null, attachments: [], embeds: [embed("Search for New Concerts", `Check recent JYPE and Sony Japan announcements using Harmony's official-source readers. Searches cover the last seven days of available listings; image-only schedules may require manual date review. This does not import dates or send public messages.\n\n${result ? `Checked ${result.checkedAt} · ${items.length} announcements to review\n${result.sources.map(r => `${({ "jype-notice": "JYPE notices", "sony-info": "Sony Japan" })[r.provider] || r.provider}: ${r.ok ? "Checked" : "Unavailable"}${r.limitation ? " — " + r.limitation : ""}`).join("\n")}\n\nNo matching announcements is not proof there are no new concerts.` : "Choose Check Official Sources to search. Tour Reference & Audit is the saved reference, not a live search."}`)], components };
+}
+function discoveryModal(s) {
+  const item = s.discovery.items[s.discoveryIndex], l = item.location || {};
+  const modal = new Modal().setCustomId(id(s, "discovery-fields")).setTitle("Review announced concert dates");
+  for (const [key, label, value, max] of [["city", "City", l.city, 80], ["country", "Country", l.country, 80], ["venue", "Venue", l.venue, 120], ["timezone", "Venue time zone", l.timezone, 80], ["dates", "Confirmed dates (YYYY-MM-DD, comma separated)", item.dates.join(", "), 200]]) {
+    const input = new Input().setCustomId(key).setLabel(label).setStyle(InputStyle.Short).setRequired(true).setMaxLength(max);
+    if (value) input.setValue(value);
+    modal.addComponents(new Row().addComponents(input));
+  }
+  return modal;
 }
 function detail(s, notice = "") {
   const row = store.get(s.guild, s.room),
@@ -164,12 +264,13 @@ function detail(s, notice = "") {
             ? "Disable automatic updates"
             : "Enable automatic updates",
         ).setDisabled(!row.published_at && !row.message_id),
-        button(s, "home", "All countdowns"),
+        button(s, "configured", "Configured Countdowns"),
       ),
     ],
   };
 }
 function draftPage(s, notice = "") {
+  if (s.creating) return setup(s, notice);
   const c = s.draft,
     events = store.concerts(s.guild);
   return {
@@ -458,38 +559,120 @@ async function handle(i) {
     return true;
   }
   s.expires = Date.now() + TTL;
+  let ownsWork = false;
   try {
+    if (s.uiInFlight) throw Error("This countdown is preparing an update. Wait for its result.");
+    if (["choose-concert", "setup-room", "photo-save", "preview", "reuse-photo", "tour-upload-save", "tour-approve", "discovery-run"].includes(action)) {
+      s.uiInFlight = true;
+      ownsWork = true;
+    }
+    if (s.discoveryInFlight) throw Error("An official-source search is already running. Wait for its result.");
     if (s.publicationInFlight && action !== "permissions")
       throw Error(
         "Countdown publication is already running. Wait for its result.",
       );
-    if (action === "home" || action === "list-prev" || action === "list-next") {
+    if (["details-save", "select-events", "select-location-all", "setup-room", "setup-auto", "edit", "toggle"].includes(action)) {
+      delete s.publishRevision;
+      delete s.publishRoom;
+    }
+    if (action === "close") {
+      await i.deferUpdate();
+      await i.deleteReply();
+      sessions.delete(s.token);
+    } else if (action === "home") {
+      await i.update(home(s));
+    } else if (action === "configured" || action === "list-prev" || action === "list-next") {
+      s.creating = false;
       s.listPage = Math.max(
         0,
         s.listPage +
           (action === "list-next" ? 1 : action === "list-prev" ? -1 : 0),
       );
-      await i.update(home(s));
+      await i.update(configured(s));
     } else if (action === "add") {
-      await i.update({
-        ...safe,
-        content: null,
-        embeds: [
-          embed(
-            "Choose the concert room",
-            "Select an existing concert text room. Harmony will manage one countdown in that room.",
-          ),
-        ],
-        components: [
-          new Row().addComponents(
-            new Channels()
-              .setCustomId(id(s, "room"))
-              .setPlaceholder("Choose a concert room")
-              .addChannelTypes(ChannelType.GuildText),
-          ),
-          new Row().addComponents(button(s, "home", "Cancel")),
-        ],
-      });
+      s.pickingConcert = true;
+      s.query = "";
+      s.locationPage = 0;
+      await i.update(concertPicker(s));
+    } else if (action === "concert-prev" || action === "concert-next" || action === "creation-back") {
+      s.pickingConcert = true;
+      s.locationPage = Math.max(0, (s.locationPage || 0) + (action === "concert-next" ? 1 : action === "concert-prev" ? -1 : 0));
+      await i.update(concertPicker(s));
+    } else if (action === "choose-concert") {
+      if (!s.offeredLocations?.includes(i.values[0])) throw Error("Choose a concert from the current page");
+      await i.deferUpdate();
+      const location = tour.groups(s.guild).find(l => l.key === i.values[0]);
+      if (!location) throw Error("Concert location no longer available");
+      s.pickingConcert = false;
+      if (s.creating && s.creationLocation === location.key) {
+        await i.editReply(setup(s));
+      } else {
+        const existing = configuredLocations(s, location);
+        if (existing.length) {
+          s.creating = false;
+          s.room = existing.length === 1 ? existing[0].channel_id : null;
+          await i.editReply(s.room ? openSaved(s, s.room) : configured(s, "Multiple countdowns use this location. Choose the room to manage."));
+        } else {
+          s.creating = true;
+          s.creationLocation = s.locationKey = location.key;
+          s.draft = { guildId: s.guild, ...Object.fromEntries(["city", "country", "venue", "timezone"].map(k => [k, location[k] || ""])), eventIds: location.events.map(e => e.id) };
+
+          s.auto = true;
+          s.draft.setupAuto = true;
+          s.creationPhoto = null;
+          s.publishRevision = undefined;
+          s.missingDates = location.audit.some(a => a.status === "missing" || a.status === "repair");
+          await suggestRoom(i, s, location);
+          await i.editReply(setup(s));
+        }
+      }
+    } else if (action === "setup-room") {
+      if (!s.creating) throw Error("Open a new countdown setup before changing rooms.");
+      await i.deferUpdate();
+      const channel = await i.guild.channels.fetch(i.values[0]);
+      if (channel?.guildId !== s.guild || channel.type !== ChannelType.GuildText) throw Error("Choose a text room in this server");
+      if (channel.id !== s.room && store.get(s.guild, channel.id)) throw Error("This room already has a countdown. Manage it from Configured Countdowns.");
+      if (channel.id !== s.room) {
+        const old = s.room && store.get(s.guild, s.room);
+        s.revision = old ? store.moveDraft(s.guild, s.room, channel.id, s.revision).revision : -1;
+      }
+      s.room = channel.id;
+      s.roomSuggested = false;
+      s.publishRevision = undefined;
+      await i.editReply(setup(s));
+    } else if (action === "setup-auto") {
+      if (!s.creating) throw Error("Open a new countdown setup before changing its preference.");
+      s.auto = !s.auto;
+      s.draft.setupAuto = s.auto;
+      if (s.room && store.get(s.guild, s.room)) persistDraft(s);
+      s.publishRevision = undefined;
+      await i.update(setup(s));
+    } else if (action === "discover" || action === "discovery-prev" || action === "discovery-next") {
+      s.discoveryPage = Math.max(0, (s.discoveryPage || 0) + (action === "discovery-next" ? 1 : action === "discovery-prev" ? -1 : 0));
+      await i.update(discoveryPage(s));
+    } else if (action === "discovery-run") {
+      if (s.discoveryInFlight) throw Error("An official-source search is already running");
+      s.discoveryInFlight = true;
+      await i.deferUpdate();
+      try {
+        s.discovery = await discovery.search(s.guild);
+        s.discoveryPage = 0;
+        await i.editReply(discoveryPage(s));
+      } finally { s.discoveryInFlight = false; }
+    } else if (action === "discovery-item") {
+      const n = Number(i.values[0]);
+      if (!s.offeredDiscoveries?.includes(n)) throw Error("Choose an announcement from the current page");
+      s.discoveryIndex = n;
+      const item = s.discovery.items[n];
+      await i.update({ ...safe, content: null, attachments: [], embeds: [embed("Review Official Announcement", `${item.title}\n\n${item.summary.slice(0, 1800)}\n\n[Read the original announcement](${item.url})\n\nConfirm concert dates, not ticket-sale dates. Nothing will be imported until you review and approve the calendar changes.`)], components: [new Row().addComponents(button(s, "discovery-prepare", "Review Dates", Style.Primary), button(s, "discover", "Back"))] });
+    } else if (action === "discovery-prepare") {
+      if (!s.discovery?.items[s.discoveryIndex]) throw Error("Choose an announcement first");
+      await i.showModal(discoveryModal(s));
+    } else if (action === "discovery-fields") {
+      const fields = Object.fromEntries(["city", "country", "venue", "timezone", "dates"].map(k => [k, i.fields.getTextInputValue(k).trim()]));
+      const manifest = discovery.manifest(s.discovery?.items[s.discoveryIndex], fields);
+      s.reviewReturn = "discover";
+      await i.update(tourReviewPage(s, manifest));
     } else if (action === "room") {
       await i.deferUpdate();
       const channel = await i.guild.channels.fetch(i.values[0]);
@@ -514,11 +697,7 @@ async function handle(i) {
           };
       await i.editReply(row ? detail(s) : draftPage(s));
     } else if (action === "open") {
-      s.publishRevision = undefined;
-      s.room = i.values[0];
-      if (!store.get(s.guild, s.room))
-        throw Error("Countdown no longer exists");
-      await i.update(detail(s));
+      await i.update(openSaved(s, i.values[0]));
     } else if (action === "edit") {
       const row = store.get(s.guild, s.room);
       s.draft = JSON.parse(row.config);
@@ -559,8 +738,9 @@ async function handle(i) {
       s.eventPage = 0;
       s.locationPage = 0;
       s.locationKey = null;
-      await i.update(eventPage(s));
+      await i.update(s.pickingConcert ? concertPicker(s) : eventPage(s));
     } else if (["events", "event-prev", "event-next"].includes(action)) {
+      s.pickingConcert = false;
       s.eventPage = Math.max(
         0,
         s.eventPage +
@@ -609,6 +789,7 @@ async function handle(i) {
         s.draft[key] ||= location[key] || "";
       await i.update(eventPage(s));
     } else if (action === "tour-audit" || action === "tour-review") {
+      s.reviewReturn = action === "tour-audit" ? "discover" : null;
       const manifest = tour.scopedManifest(
         action === "tour-review" ? s.locationKey : null,
       );
@@ -640,7 +821,12 @@ async function handle(i) {
         i.user.id,
       );
       const message = `Calendar import complete: ${result.created} added, ${result.reused} reused, ${result.repaired} classifications fixed. ${result.blocked} need review; ${result.cancelled} canceled dates skipped. No public messages sent.`;
-      const page = s.room ? eventPage(s) : home(s);
+      if (s.creating) {
+        const l = tour.groups(s.guild).find(l => l.key === s.creationLocation);
+        if (l && l.events.length <= 12) s.draft.eventIds = l.events.map(e => e.id);
+        s.missingDates = l?.audit.some(a => a.status === "missing" || a.status === "repair");
+      }
+      const page = s.reviewReturn === "discover" ? discoveryPage(s) : s.creating ? setup(s) : s.room ? eventPage(s) : discoveryPage(s);
       await i.editReply({ ...page, content: message });
     } else if (action === "tour-export") {
       if (!s.importReview) throw Error("Open a tour audit first");
@@ -659,8 +845,9 @@ async function handle(i) {
       });
     } else if (action === "tour-return") {
       delete s.importReview;
-      await i.update(s.room ? eventPage(s) : home(s));
+      await i.update(s.reviewReturn === "discover" ? discoveryPage(s) : s.creating ? setup(s) : s.room ? eventPage(s) : discoveryPage(s));
     } else if (action === "tour-upload") {
+      s.reviewReturn = "discover";
       await i.showModal(
         new Modal()
           .setCustomId(id(s, "tour-upload-save"))
@@ -734,12 +921,13 @@ async function handle(i) {
       );
     } else if (action === "photo-save") {
       await i.deferUpdate();
+      if (s.creating) persistDraft(s);
       const a = i.fields.getUploadedFiles("image", true).first();
       const p = await downloadPhoto(a);
       store.photo(s.guild, s.room, p.bytes, p.type);
-      await i.editReply(
-        detail(s, "Photograph saved. Use Private preview to inspect its crop."),
-      );
+      if (s.creating) { s.creationPhoto = p; s.revision = store.get(s.guild, s.room).revision; }
+      s.publishRevision = undefined;
+      await i.editReply(s.creating ? setup(s, "Photograph saved. Preview to inspect its crop.") : detail(s, "Photograph saved. Use Private preview to inspect its crop."));
     } else if (action === "photos") {
       const photos = store.photos(s.guild);
       s.photoPage = 0;
@@ -751,12 +939,33 @@ async function handle(i) {
       );
       await i.update(photoPage(s, store.photos(s.guild)));
     } else if (action === "reuse-photo") {
+      if (s.creating) persistDraft(s);
       store.reusePhoto(s.guild, s.room, i.values[0]);
-      await i.update(detail(s, "Venue photograph reused."));
+      if (s.creating) { const row = store.get(s.guild, s.room); s.revision = row.revision; s.creationPhoto = { bytes: row.photo, type: row.photo_type }; }
+      s.publishRevision = undefined;
+      await i.update(s.creating ? setup(s, "Venue photograph reused.") : detail(s, "Venue photograph reused."));
     } else if (action === "preview") {
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await i.editReply(await service.preview(store.get(s.guild, s.room)));
+      if (s.creating) {
+        s.publishRevision = undefined;
+        await i.deferUpdate();
+        if (s.missingDates) throw Error("Review and approve the missing calendar dates before previewing.");
+        persistDraft(s);
+        if (s.creationPhoto && !store.get(s.guild, s.room).photo) {
+          store.photo(s.guild, s.room, s.creationPhoto.bytes, s.creationPhoto.type);
+          s.revision = store.get(s.guild, s.room).revision;
+        }
+        const row = store.get(s.guild, s.room), payload = await service.preview(row);
+        if (store.get(s.guild, s.room)?.revision !== row.revision) throw Error("Configuration changed during preview. Reopen the saved countdown and preview again.");
+        s.publishRevision = row.revision;
+        s.publishRoom = s.room;
+        s.reviewAuto = s.auto;
+        await i.editReply({ ...payload, components: [new Row().addComponents(button(s, "confirm-publish", "Approve & Publish", Style.Success), button(s, "back", "Edit / Back"))] });
+      } else {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await i.editReply(await service.preview(store.get(s.guild, s.room)));
+      }
     } else if (action === "publish") {
+      if (s.creating) throw Error("Use Preview Countdown before approving a new countdown.");
       const row = store.get(s.guild, s.room);
       s.publishRevision = row.revision;
       s.publishRoom = s.room;
@@ -790,6 +999,13 @@ async function handle(i) {
       s.publicationInFlight = true;
       try {
         await i.deferUpdate();
+        if (s.creating && action === "confirm-publish") {
+          const current = store.get(s.guild, s.room);
+          if (current.revision !== s.publishRevision) throw Error("Configuration changed. Preview it and approve publication again.");
+          // Persist the reviewed preference only after explicit approval, before a send
+          // can succeed. A restart after delivery must not lose the owner's choice.
+          store.update(s.guild, s.room, { enabled: s.reviewAuto ? 1 : 0 });
+        }
         const result = await service.refresh(i.client, s.guild, s.room, {
           publish: action === "confirm-publish",
           expectedRevision:
@@ -810,13 +1026,14 @@ async function handle(i) {
         await i.editReply(
           result.deferred && action === "confirm-publish"
             ? publicationRetry(s, retryMessage)
-            : detail(
+            : s.creating && action === "confirm-publish" && !result.deferred ? published(s) : detail(
                 s,
                 result.deferred
                   ? retryMessage
                   : "Countdown updated and pinned.",
               ),
         );
+        if (action === "confirm-publish" && !result.deferred) s.creating = false;
       } finally {
         delete s.publicationInFlight;
       }
@@ -836,7 +1053,7 @@ async function handle(i) {
     } else if (action === "back") {
       delete s.publishRevision;
       delete s.publishRoom;
-      await i.update(detail(s));
+      await i.update(s.creating ? setup(s) : detail(s));
     } else throw Error("Reopen the current countdown manager");
   } catch (e) {
     const response = {
@@ -855,8 +1072,12 @@ async function handle(i) {
       delete s.publishRevision;
       delete s.publishRoom;
       await i.editReply(detail(s, response.content));
-    } else if (i.deferred) await i.editReply(response);
+    } else if (i.deferred && s.creating) await i.editReply(setup(s, response.content));
+    else if (i.deferred && action === "discovery-run") await i.editReply(discoveryPage(s, response.content));
+    else if (i.deferred) await i.editReply(response);
     else await i.reply({ ...response, flags: MessageFlags.Ephemeral });
+  } finally {
+    if (ownsWork) delete s.uiInFlight;
   }
   return true;
 }
@@ -925,6 +1146,11 @@ module.exports = {
   open,
   handle,
   home,
+  configured,
+  concertPicker,
+  setup,
+  discoveryPage,
+  discoveryModal,
   detail,
   draftPage,
   eventPage,

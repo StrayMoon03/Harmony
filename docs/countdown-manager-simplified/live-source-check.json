@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-24",
+  "readOnly": true,
+  "sources": [
+    {
+      "provider": "jype-notice",
+      "ok": true,
+      "limitation": "Partial listings; the next check continues the remaining articles."
+    },
+    {
+      "provider": "sony-info",
+      "ok": true,
+      "limitation": "Partial listings; the next check continues the remaining articles."
+    }
+  ],
+  "matchingAnnouncements": 0,
+  "completeCoverageVerified": false
+}

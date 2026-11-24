@@ -1,0 +1,874 @@
+{
+  "home": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Concert Countdown Manager",
+        "description": "Choose what you would like to do. New countdowns stay private until you approve publication."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:configured",
+            "label": "Configured Countdowns",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:add",
+            "label": "Add Countdown",
+            "style": 1
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discover",
+            "label": "Search for New Concerts",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:close",
+            "label": "Back to Control Center",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "concert-picker": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Add Countdown — Select Concert",
+        "description": "34 locations · Page 1\nSearch by city, country, venue or date. All approved dates at the selected venue will be filled in together. Locations needing calendar approval remain marked."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:choose-concert",
+            "placeholder": "Choose a city and venue",
+            "options": [
+              {
+                "label": "Arlington — AT&T Stadium",
+                "value": "arlington",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Arnhem — GelreDome",
+                "value": "arnhem",
+                "description": "Netherlands · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Atlanta — Mercedes-Benz Stadium",
+                "value": "atlanta",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Baltimore — M&T Bank Stadium",
+                "value": "baltimore",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Bangkok — Impact Arena",
+                "value": "bangkok",
+                "description": "Thailand · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Barcelona — Estadi Olímpic Lluís Companys",
+                "value": "barcelona",
+                "description": "Spain · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Chicago — Soldier Field",
+                "value": "chicago",
+                "description": "United States · 2 approved dates"
+              },
+              {
+                "label": "East Rutherford — MetLife Stadium",
+                "value": "east-rutherford",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Fukuoka — Mizuho PayPay Dome Fukuoka",
+                "value": "fukuoka",
+                "description": "Japan · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Hong Kong — Kai Tak Stadium",
+                "value": "hong-kong",
+                "description": "Hong Kong · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Houston — Reliant Stadium",
+                "value": "houston",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "London — Tottenham Hotspur Stadium",
+                "value": "london",
+                "description": "United Kingdom · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Los Angeles — SoFi Stadium",
+                "value": "los-angeles",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Miami — Hard Rock Stadium",
+                "value": "miami",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Milan — San Siro Stadium",
+                "value": "milan",
+                "description": "Italy · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Munich — Allianz Arena",
+                "value": "munich",
+                "description": "Germany · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Nagoya — Vantelin Dome Nagoya",
+                "value": "nagoya",
+                "description": "Japan · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Orlando — Camping World Stadium",
+                "value": "orlando",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Osaka — Kyocera Dome Osaka",
+                "value": "osaka-kyocera",
+                "description": "Japan · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Osaka — Yanmar Stadium Nagai",
+                "value": "osaka-yanmar",
+                "description": "Japan · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Paris — Plenitude Arena",
+                "value": "paris",
+                "description": "France · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "San Diego — PETCO Park",
+                "value": "san-diego",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Santa Clara — Levi’s Stadium",
+                "value": "santa-clara",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Seattle — Lumen Field",
+                "value": "seattle",
+                "description": "United States · 0 approved dates · More dates need import"
+              },
+              {
+                "label": "Seoul — Gocheok Sky Dome",
+                "value": "seoul-special",
+                "description": "South Korea · 0 approved dates · More dates need import"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:concert-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:concert-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:search",
+            "label": "Search Locations",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:home",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "setup": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Confirm Setup",
+        "description": "Chicago · United States\nSoldier Field\nTime zone: America/Chicago\n\n2027-06-18\n2027-06-19\n\nRoom: <#fixture-chicago> (suggested; change below if needed)\nPhotograph: Upload or reuse a photograph\nAutomatic daily updates: **On**\n\nReview the details, add your photograph, then preview. Nothing is published yet."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 8,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:setup-room",
+            "placeholder": "Confirm or change concert room",
+            "channel_types": [
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:photo",
+            "label": "Upload Photograph",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:details",
+            "label": "Edit Details",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:events",
+            "label": "Edit Dates",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:setup-auto",
+            "label": "Daily Updates: On",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:preview",
+            "label": "Preview Countdown",
+            "style": 1,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:creation-back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "setup-photo-saved": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Confirm Setup",
+        "description": "Chicago · United States\nSoldier Field\nTime zone: America/Chicago\n\n2027-06-18\n2027-06-19\n\nRoom: <#fixture-chicago> (suggested; change below if needed)\nPhotograph: Saved\nAutomatic daily updates: **On**\n\nReview the details, add your photograph, then preview. Nothing is published yet."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 8,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:setup-room",
+            "placeholder": "Confirm or change concert room",
+            "channel_types": [
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:photo",
+            "label": "Upload Photograph",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:photos",
+            "label": "Reuse Photograph",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:details",
+            "label": "Edit Details",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:events",
+            "label": "Edit Dates",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:setup-auto",
+            "label": "Daily Updates: On",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:preview",
+            "label": "Preview Countdown",
+            "style": 1,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:creation-back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "private-preview": {
+    "content": "",
+    "embeds": [],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:confirm-publish",
+            "label": "Approve & Publish",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:back",
+            "label": "Edit / Back",
+            "style": 2
+          }
+        ]
+      }
+    ],
+    "files": [
+      {
+        "attachment": "private-preview-0.png",
+        "name": "harmony-countdown-eae41b3b689e833f5a07bd4f261af75c78b7debcc2bed93eba3b88ddb24d97dd.png",
+        "description": "Chicago — Soldier Field\n2027-06-18: 206 days to go\n2027-06-19: 207 days to go"
+      }
+    ],
+    "allowedMentions": {
+      "parse": []
+    }
+  },
+  "published": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Countdown Published",
+        "description": "Your countdown is published and pinned. You can manage it at any time from Configured Countdowns."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:add",
+            "label": "Create Another Countdown",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:configured",
+            "label": "Configured Countdowns",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:home",
+            "label": "Back to Countdown Manager",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "configured": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Configured Countdowns",
+        "description": "1 configured concert room. Choose a countdown to manage its dates, photograph, publication and automatic updates."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:open",
+            "placeholder": "Choose a configured countdown",
+            "options": [
+              {
+                "label": "Chicago — Soldier Field",
+                "value": "fixture-chicago",
+                "description": "Published · Automatic updates on"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:add",
+            "label": "Add countdown",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:home",
+            "label": "Back",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:list-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:list-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          }
+        ]
+      }
+    ],
+    "attachments": []
+  },
+  "management": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Chicago concert countdown",
+        "description": "Soldier Field · United States\nRoom: <#fixture-chicago>\nTime zone: America/Chicago\n\n2027-06-18 — 206 days to go\n2027-06-19 — 207 days to go\n\n**Publication:** Published and managed\n**Automatic updates:** On\n**Photograph:** Saved\n**Last successful update:** Never\n**Status:** Ready"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:edit",
+            "label": "Edit details & dates",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:photo",
+            "label": "Upload photograph",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:photos",
+            "label": "Reuse photograph",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:permissions",
+            "label": "Check room access",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:preview",
+            "label": "Private preview",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:publish",
+            "label": "Publish / Repair",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:refresh",
+            "label": "Refresh Now",
+            "style": 2,
+            "disabled": false
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:toggle",
+            "label": "Disable automatic updates",
+            "style": 2,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:configured",
+            "label": "Configured Countdowns",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "discovery": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Search for New Concerts",
+        "description": "Check recent JYPE and Sony Japan announcements using Harmony's official-source readers. Searches cover the last seven days of available listings; image-only schedules may require manual date review. This does not import dates or send public messages.\n\nChoose Check Official Sources to search. Tour Reference & Audit is the saved reference, not a live search."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-run",
+            "label": "Check Official Sources",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-audit",
+            "label": "Tour Reference & Audit",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-upload",
+            "label": "Upload Confirmed Dates",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:home",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "discovery-results": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Search for New Concerts",
+        "description": "Check recent JYPE and Sony Japan announcements using Harmony's official-source readers. Searches cover the last seven days of available listings; image-only schedules may require manual date review. This does not import dates or send public messages.\n\nChecked 2026-11-24T12:00Z · 1 announcements to review\nJYPE notices: Checked\nSony Japan: Checked\n\nNo matching announcements is not proof there are no new concerts."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-item",
+            "placeholder": "Review an official announcement",
+            "options": [
+              {
+                "label": "FIXTURE: Stray Kids additional Chicago concert",
+                "value": "0",
+                "description": "Review concert dates before any calendar import"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-run",
+            "label": "Check Official Sources",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-audit",
+            "label": "Tour Reference & Audit",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-upload",
+            "label": "Upload Confirmed Dates",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:home",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "announcement": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Review Official Announcement",
+        "description": "FIXTURE: Stray Kids additional Chicago concert\n\nOffline test announcement: Soldier Field, June 20, 2027. Not a real tour announcement.\n\n[Read the original announcement](https://straykids.jype.com/notice/fixture)\n\nConfirm concert dates, not ticket-sale dates. Nothing will be imported until you review and approve the calendar changes."
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discovery-prepare",
+            "label": "Review Dates",
+            "style": 1
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:discover",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "import-review": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Review confirmed tour dates",
+        "description": "1 source-confirmed dates · checked 2026-11-24\n**Add:** 1 · **Reuse:** 0 · **Fix classification:** 0\n**Needs review:** 0 · **Canceled:** 0\n\nChicago · 2027-06-20 — **Add missing date**\n\nPage 1/1\n\nApproval writes only the existing calendar and tour metadata. Existing IDs, timing, reminders and countdowns are preserved. Ambiguous or canceled entries are skipped. No public messages are sent.\n\n[Official source 1](https://straykids.jype.com/notice/fixture)"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-approve",
+            "label": "Approve calendar import",
+            "style": 3,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-export",
+            "label": "Download full audit",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:3b9233c006190ae8:tour-return",
+            "label": "Back to concert dates",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  }
+}
