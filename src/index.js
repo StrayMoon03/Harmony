@@ -28,6 +28,8 @@ const memberCountsCommand = require("./commands/memberCounts");
 const eventScheduleCommand = require("./commands/eventSchedule");
 const calendarCandidateCommand = require("./commands/calendarCandidate");
 const radarCommand = require("./commands/radar");
+const countdownCommand = require("./commands/concertCountdown");
+const countdownService = require("./services/concertCountdownService");
 const { startRadar } = require("./services/radarService");
 const { handleRadarInteraction } = require("./services/radarDiscord");
 const shareStore = require("./stores/shareStore");
@@ -104,6 +106,7 @@ const commands = [
   eventScheduleCommand,
   calendarCandidateCommand,
   radarCommand,
+  countdownCommand,
 ];
 const commandsByName = new Map(
   commands.map((command) => [command.data.name, command])
@@ -206,6 +209,7 @@ client.once("clientReady", async () => {
   startBirthdayScheduler(client);
   startMemberCountScheduler(client);
   startEventScheduler(client);
+  countdownService.start(client);
   startCalendarDiscovery(client);
   startRadar(client);
 });
