@@ -1,0 +1,3030 @@
+Executed 2026-11-24 in isolated test databases; no live Discord calls.
+
+Focused: node --test test/concertCountdown*.test.js test/concertTourCalendar.test.js
+✔ graphical add flow selects a room and approved events, fills metadata and saves privately (55.181971ms)
+✔ unauthorized users, other users sessions, stale panels, wrong channels and expired sessions are rejected (1.158158ms)
+✔ event pagination, search and multi-page selections retain stable IDs and exclude Radar candidates (184.059448ms)
+✔ newly approved concert dates are selectable for an existing countdown (9.573467ms)
+✔ publish requires confirmation, changed configuration invalidates approval, preview remains private (1.337557ms)
+✔ toggle, refresh and repair controls use saved room configuration (3.023657ms)
+✔ photo modal uses actual Discord.js file-upload component and all manager payloads validate (4.209527ms)
+✔ legacy schema migration is idempotent and preserves published configuration (1.068463ms)
+✔ replacing a photograph downloads only a bounded Discord attachment, decodes it and persists it (206.385614ms)
+✔ canceled selections can be removed and replaced through Edit details & dates (9.639425ms)
+✔ external image hosts and oversized uploads are rejected before network access (1.086771ms)
+✔ location picker shows every confirmed stop with pagination, including missing Chicago dates (10.793107ms)
+✔ missing Chicago dates have an explicit private import review, then become selectable as a pair (17.584098ms)
+✔ tour imports reject unauthorized and stale sessions before any calendar writes (1.624328ms)
+✔ approval cannot silently adopt calendar changes while paging through a tour audit (22.346354ms)
+✔ tour JSON upload uses a file modal and never imports before the next approval (3.883798ms)
+✔ an out-of-catalog concert with a long venue still produces a valid location menu (2.153412ms)
+✔ advanced configure command shares the same confirmed-tour eligibility as the graphical picker (5.964441ms)
+✔ failed publication retains approval and offers a safe retry with unchanged dates and photograph (1.600843ms)
+✔ deferred rate-limit publication retains approval and retry controls (1.075765ms)
+✔ a real photograph change invalidates retained approval after a failed attempt (0.916014ms)
+✔ approval is scoped to its concert room even when another room has the same revision (0.622914ms)
+✔ canceling publication removes approval so a stale retry cannot publish (0.91319ms)
+✔ overlapping publication clicks cannot overwrite an in-flight result or start a second attempt (1.075494ms)
+✔ configuration changed during interaction acknowledgement is rejected before permission checks or publication (2.843257ms)
+✔ Check room access is private, read-only and does not consume pending publication approval (1.232289ms)
+✔ venue midnight and DST (20.276208ms)
+✔ states and invalid dates (0.502724ms)
+✔ approved selected guild events only, independent dates (2.119801ms)
+✔ single date, leap day and year boundary use calendar days (0.235834ms)
+✔ DST fall back does not repeat or skip a countdown day (0.811999ms)
+✔ timed concerts use venue-local dates; calendar reschedules and cancellations are authoritative (1.745479ms)
+✔ configuration validation requires valid selected events and venue details (1.36626ms)
+✔ reproduces cold bot-member cache failure with actual Discord.js; fresh resolution succeeds (20.226553ms)
+✔ refreshes stale bot roles, role grants and channel overrides before calculating access (1.462044ms)
+✔ Pin Messages remains a BigInt high bit and does not require Manage Messages (0.731057ms)
+✔ Manage Messages does not substitute for the missing Pin Messages permission (1.208203ms)
+✔ identifies each missing permission individually rather than reporting a generic list (5.518842ms)
+✔ inherited everyone permissions and role-level room allows are calculated by Discord.js (3.284789ms)
+✔ member-specific denies override role allows and identify their source (0.966521ms)
+✔ role-specific denies identify the role and everyone/member allows obey precedence (0.957567ms)
+✔ an allow from another inherited role overrides a role deny without using role hierarchy (0.675384ms)
+✔ Administrator is honored without requesting or granting that permission (0.740901ms)
+✔ category-synced overrides are respected and unsynced child overrides remain authoritative (1.008693ms)
+✔ unresolved bot membership is reported as an unavailable check, not five missing permissions (0.817427ms)
+✔ failures loading fresh permission data preserve rate-limit metadata (0.763306ms)
+✔ runtime pin refusals name the operation and distinguish allowed flags from actual API denial (0.774382ms)
+✔ permission drift after preflight reports the newly missing flag (0.827131ms)
+✔ legacy permission failures can be retried, while unknown legacy and real rate limits retain their delay (0.188953ms)
+✔ actual deterministic PNGs have balanced single, double and five-date layouts (705.390664ms)
+✔ single panel is centered, paired panels balanced, numbers have visible orange pixels (314.411465ms)
+✔ JPEG and PNG are fully decoded, normalized and cropped to a panorama without stretching (373.544761ms)
+✔ invalid, truncated, oversized and decompression-bomb photographs are rejected (732.221739ms)
+✔ long names, missing photograph, tomorrow, D-day and completed panels render successfully (138.858121ms)
+✔ image queue is bounded under concurrent requests (588.591898ms)
+✔ single-date cards omit DAY 1 and vertically center all remaining content for every concert state (1054.281273ms)
+✔ multiple-date cards retain every DAY label, including a centered third panel (415.743938ms)
+✔ the approved double-date graphic is byte-for-byte unchanged (75.187812ms)
+✔ single-date changes are confined to text inside the existing panel; card size and all other pixels stay identical (144.017565ms)
+✔ image-only presentation preserves every approved single/multi-date and concert-state preview byte-for-byte (430.994958ms)
+Concert countdown update failed 1463 Temporary edit failure
+Concert countdown update failed 1466 Rate limited
+Concert countdown update failed 1469 Interrupted version checkpoint
+Concert countdown update failed 1472 Countdown update already running
+✔ initial publication requires approval; private previews never call Discord (36.778673ms)
+✔ explicit publication pins one message and preserves ID across restart (6.475598ms)
+✔ refresh edits existing attachments and does not mention members (2.910027ms)
+✔ failed pin persists message and a later repair never sends a duplicate (2.913302ms)
+✔ crash between send and ID persistence recovers unpinned message beyond last 100 (5.662137ms)
+✔ failed send before delivery can be retried with the durable intent (4.737359ms)
+✔ deleted message is repaired once; unrelated pins are untouched (2.447874ms)
+✔ legacy/recovered pinned message is reused (0.924518ms)
+✔ concurrent updates share a lock and exactly one initial message (1.322274ms)
+✔ database lease protects against other processes; expired lease recovers (1.777928ms)
+✔ rate limits save status and honor retry delay without repeat Discord calls (1.480973ms)
+✔ missing permissions preserve draft and produce an actionable error (1.083286ms)
+✔ disabled countdowns are skipped by automatic jobs; manual refresh remains available (1.638099ms)
+✔ local-day changes, missed days and approved reschedules update the same message (4.462688ms)
+✔ health check repairs unpinning without an unnecessary attachment edit (1.82559ms)
+✔ stored photograph survives reopen and can be reused only within its server (4.236958ms)
+✔ configuration writes use optimistic revision and do not overwrite newer changes (0.587271ms)
+✔ paginated pin recovery uses the installed Discord.js response shape (1.725199ms)
+✔ legacy unpinned sends are recovered safely during schema upgrade (1.210156ms)
+✔ incomplete or unavailable recovery history never authorizes a second send (1.157137ms)
+✔ scheduler catches up immediately on startup and exposes a stop function (2.679431ms)
+✔ manual permission retry reloads access immediately and preserves saved dates and photograph (2.134744ms)
+✔ scheduled jobs honor permission backoff even after roles have been corrected (0.864378ms)
+✔ manual retries never bypass a persisted Discord rate limit, even after a photo/configuration change (1.861664ms)
+✔ fresh permission requests that are rate limited retain the cooldown through manual retries (1.06563ms)
+✔ retry after a live pin refusal reuses the saved message and keeps the same configuration revision (2.047152ms)
+✔ legacy generic permission failures can be retried without editing the configuration (1.084297ms)
+✔ publication rejects an actual configuration revision change before any Discord request (0.98631ms)
+✔ lost send response can be retried immediately without losing the durable delivery record or duplicating (1.624909ms)
+✔ renderer version alone changes the fingerprint without changing dates, photo or countdown numbers (0.647892ms)
+✔ published cards with automatic updates disabled are upgraded once in place with their saved data intact (4.812222ms)
+✔ unpublished configurations and pending initial send intents are never published by the version refresh (0.645518ms)
+✔ a failed automatic render refresh persists across restart and retries in place after backoff (4.541966ms)
+✔ version refreshes respect Discord rate limits even when force is requested (3.15828ms)
+✔ a restart after editing but before the version checkpoint only re-edits the original message (5.893724ms)
+✔ simultaneous version-refresh workers cannot create another message or overlap edits (2.196787ms)
+✔ adding second and third dates edits the existing published countdown without creating another message (7.615163ms)
+✔ automatic updates continue normally for enabled cards after their one-time renderer upgrade (2.65234ms)
+✔ additive renderer-version migration preserves legacy published data and does not pre-mark the refresh complete (1.281994ms)
+✔ preview, publication and edits contain only the image with accessible attachment metadata (2.02606ms)
+✔ installed Discord.js serializes empty content and attachment descriptions without visible companion fields (11.924965ms)
+✔ legacy disabled published cards lose all companion text once and preserve saved owner data and pins (5.331952ms)
+✔ image-only pinned countdown is recovered by attachment identity when its saved message ID is absent (3.614294ms)
+✔ lost image-only send response is recovered after restart using attachment metadata beyond 100 messages (3.732661ms)
+✔ attachment identification rejects another room and another author without modifying their pinned messages (2.106611ms)
+✔ a stored ID with unrelated attachment metadata fails closed instead of overwriting or duplicating (1.164277ms)
+✔ verified reference covers every announced city, all 53 performances and additional nights (36.693145ms)
+✔ read-only picker lists missing locations without creating any calendar records (30.883135ms)
+✔ approved import creates all confirmed dates in the existing canonical calendar, with no notifications (87.508973ms)
+✔ repeat and simultaneous stale imports never create duplicate calendar entries (4.170439ms)
+✔ existing canonical events are reused without changing IDs, timing, descriptions or links (3.578911ms)
+✔ legacy misclassification is visible and usable without silently rewriting the calendar (3.952431ms)
+✔ wrong-calendar concerts are audited and repaired only following approval, reusing their IDs (2.285419ms)
+✔ search supports city, country, venue, numeric dates, month names and local city aliases (93.212983ms)
+✔ venue-local dates are used for matching and date searches across UTC midnight (1.880382ms)
+✔ location groups collect multiple nights and keep distinct venues in the same city separate (200.816637ms)
+✔ presales, watch parties and unapproved Radar/Calendar Review candidates cannot become tour performances (3.140978ms)
+✔ ambiguous existing records are skipped and never duplicated (2.79858ms)
+✔ uncertain same-date legacy records and invalid-date tour records require review instead of another insert (0.928273ms)
+✔ canceled dates are never resurrected and reschedules retain the existing stable IDs (4.105691ms)
+✔ all countdown configuration, image, enabled state and message IDs survive import unchanged (17.446912ms)
+✔ import transaction rolls back all writes if any date fails (1.630717ms)
+✔ guild isolation applies to audit, imports, metadata and search (2.377788ms)
+✔ validated JSON supports future confirmed locations with no code change or redeployment (7.196889ms)
+✔ invalid dates, zones, duplicate physical dates, huge manifests and untrusted source URLs are rejected (1.668945ms)
+✔ read-only CLI audits existing records without opening migrations or changing the file (75.074332ms)
+✔ unlinked legacy reschedules are flagged instead of recreating their original dates (5.210019ms)
+✔ non-English city names and uppercase legacy classifications remain searchable (1.656536ms)
+✔ full date queries match calendar dates exactly rather than fragments of other dates (19.766883ms)
+ℹ tests 129
+ℹ suites 0
+ℹ pass 129
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5104.253657
+
+Full: HARMONY_DB_PATH=<temporary database> npm test -- --test-concurrency=1
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> harmony@1.0.0 test
+> node --test --test-concurrency=1
+
+✔ all supported platforms use the shared immediate-typing lifecycle (0.804477ms)
+✔ Facebook still reaches metadata and download after duplicate detection (0.254802ms)
+✔ private Facebook download errors still reach the shared reporter (0.153881ms)
+✔ all successful media-card branches preserve creator handoff before formatting (0.359439ms)
+✔ Facebook login-wall failures use a specific public message without changing other platforms (0.218538ms)
+✔ share deduplication is scoped to one Discord server (17.328894ms)
+✔ legacy share rows survive the one-time guild-scope migration (12.547018ms)
+✔ social health migration is additive and idempotent (14.798847ms)
+✔ social health migration preserves legacy state rows and adds verification metadata safely (14.253028ms)
+Facebook video cannot fit within Discord's upload limit; preserving the original Facebook player.
+✔ duplicate response deletes a link-only submission only after sending (2.147352ms)
+✔ duplicate response preserves a member comment (0.874402ms)
+✔ duplicate response failure leaves the submitted message untouched (0.512058ms)
+✔ oversized Facebook video preserves the original player without reporting a failure (1.432369ms)
+✔ Facebook upload failures unrelated to size are still reported (0.263516ms)
+✔ Facebook share aliases use the same key for sharing and forget (18.727512ms)
+✔ forgetting one share does not remove another share (0.56697ms)
+✔ Facebook shares allow the serialized exact-post browser queue to finish (0.999349ms)
+✔ Instagram fallback recovery receives a two-minute bounded lifecycle window (0.380591ms)
+✔ Threads shares get a window long enough for the exact-post browser fallback (0.318308ms)
+✔ X/Twitter shares get a window long enough for multi-video posts (0.254652ms)
+✔ other media keeps the existing lifecycle cutoff (0.140991ms)
+Threads text-only post shared as a text card.
+✔ text-only posts are shared as a card and recorded as a successful share (3.497839ms)
+Original preview suppression requested: { messageId: 'source-message-1' }
+Original preview suppression requested: { messageId: 'source-message-being-replaced' }
+✔ long YouTube streaming preview uses Harmony header, player, and details layout (22.416067ms)
+✔ intentionally deleted YouTube source does not associate its replacement card with the source (1.332499ms)
+✔ YouTube streaming layout removes partial output if a later send fails (0.578949ms)
+✔ cancelled Instagram browser work leaves the serialized queue usable (1.591949ms)
+✔ already-aborted browser work never enters the queue (0.32015ms)
+✔ platform hearts use configured Discord emoji IDs without inventing IDs (1.082314ms)
+✔ invalid status emoji IDs safely fall back to attachments (0.14657ms)
+✔ platform icons use all six configured Discord emoji IDs (0.53357ms)
+✔ missing or invalid platform icon IDs fall back to no emoji (0.165258ms)
+✔ recognizes Facebook share aliases handled directly by the browser (1.382154ms)
+✔ does not bypass normalization for canonical or unrelated URLs (0.601332ms)
+✔ the reported /share/p URL stays on the identity-bound browser path (0.627201ms)
+✔ retries a verified rendition after HTTP refusal or request failure (8.379555ms)
+✔ rejects HTML masquerading as a video and reports sanitized reasons (3.920763ms)
+✔ accepts a small verified MP4 instead of rejecting it by size alone (1.04666ms)
+✔ rejects a small video response without a complete MP4 container (0.894712ms)
+✔ accepts a small image with a valid container signature from an exact Facebook post attachment (2.269816ms)
+✔ small mislabeled Facebook image responses remain rejected without logging the URL or cookie (0.834632ms)
+✔ all successful media cards keep only platform identification above media (20.062645ms)
+✔ missing platform emoji falls back to the plain platform name (0.1602ms)
+✔ original creator remains visible without inventing a date (0.171007ms)
+✔ missing original creator degrades gracefully (0.253781ms)
+✔ member comment uses a bold quoted attribution without repeating the mention (0.36619ms)
+✔ TikTok link buttons remove oversized tracking parameters (0.360571ms)
+✔ no member comment produces no comment section (0.180811ms)
+✔ yt-dlp dates are normalized (0.423525ms)
+✔ Threads video thumbnail fallback adds a footer preview note without changing the header (0.463396ms)
+✔ removes earlier photos when a later carousel attachment fails (10.657197ms)
+✔ browser diagnostics strip private and nonboolean fields (1.627002ms)
+✔ malformed diagnostics never expose raw stderr (0.323275ms)
+✔ failed browser execution logs only sanitized stage booleans (9.692214ms)
+✔ exact reel URL validation (0.389475ms)
+✔ owned video with audio saved, redirects forbidden (4.181495ms)
+✔ identity mismatch rejected before fetch (0.921863ms)
+✔ foreign host rejected before fetch (0.892899ms)
+✔ HTML/login response rejected (1.270526ms)
+✔ HTTP failure rejected (1.735864ms)
+✔ empty response rejected (1.298999ms)
+✔ oversized response rejected (2.206551ms)
+✔ exact verified video is kept when Instagram exposes no audio stream (1.057517ms)
+✔ audio-only file rejected and deleted (1.217928ms)
+✔ signed URLs in request failure never propagated (0.903155ms)
+✔ exhausted incident reel methods reach reel recovery (710.33298ms)
+✔ photo recovery routing remains unchanged (709.838217ms)
+✔ Instagram timeout aborts yt-dlp before starting later fallback methods (4.006793ms)
+✔ audio-bearing rendition is preferred over an earlier silent video (2.613672ms)
+✔ first exact verified silent video is retained when no audio rendition exists (2.444118ms)
+✔ link-only messages are safe to delete and have no comment (1.42664ms)
+✔ comments before, after, and around the processed URL are preserved (1.221983ms)
+✔ only the processed URL is removed; other links and formatting remain (0.190296ms)
+✔ ambiguous reconstruction keeps the original message (0.134091ms)
+✔ typing starts immediately and quick retrieval shows no notice (17.293841ms)
+✔ Working notice is standalone and removed after retrieval (15.456133ms)
+✔ cutoff removes Working, reports timeout, and leaves original untouched (36.462199ms)
+✔ a cutoff timeout is recognized as already reported (0.416845ms)
+✔ timeout error reports its configured retrieval deadline (0.182144ms)
+✔ Instagram can cancel in-flight retrieval at its configured cutoff (25.157581ms)
+✔ retrieval remains non-cancelling for paths that do not opt in (0.440091ms)
+✔ configured custom status emoji replaces the fallback attachment (13.660094ms)
+✔ a normal failure removes Working and cannot later emit a timeout failure (32.609083ms)
+✔ original is deleted only after replacement and rolls replacement back on failure (0.754682ms)
+✔ an already-deleted original keeps the successful replacement (0.221112ms)
+✔ safe link-only or preserved-comment messages are deleted after replacement (0.240071ms)
+✔ ambiguous comment parsing preserves the original message (0.148423ms)
+✔ text card carries the post text, author, link, time, color, and footer (3.541294ms)
+✔ long text is cut to Discord's description limit with an ellipsis (0.632499ms)
+✔ missing optional details are simply left out (0.381663ms)
+✔ X uses its own color and footer (0.33296ms)
+✔ uses the exact post record video from the public crawler page before the Discord preview (19.123707ms)
+✔ ignores a crawler record for a different shortcode (3.726592ms)
+✔ retries the browser once without cookies when the session view had no media (10.154918ms)
+✔ does not retry without cookies when no session was used (2.094964ms)
+✔ falls back to the labeled thumbnail when the crawler page has only og:image (4.778601ms)
+Threads browser diagnostics: {
+  pageSignalsAvailable: true,
+  loginPromptVisible: true,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: true,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: true,
+  exactNestedSameCodeRecordSeen: true,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: true,
+  exactRecordTextOnly: true,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: true,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'authenticated_ui'
+}
+✔ diagnostic logging permits only exact boolean signals, never private payloads (1.561603ms)
+✔ new record diagnostics accept booleans only, never payload values (0.31989ms)
+✔ text-only record diagnostics pass through as booleans (0.290967ms)
+✔ missing or malformed diagnostic output is harmless and unconfirmed (0.370465ms)
+✔ authenticated UI evidence is labeled as evidence, not cookie validity (0.240911ms)
+✔ actual browser evaluation detects login, challenge and restriction signals without returning text (1.394393ms)
+✔ hidden login controls do not establish a visible prompt; logged-in controls are distinct (0.765268ms)
+✔ visible password form and login redirect are diagnostic evidence only (1.188083ms)
+Threads share redirect resolved: { finalPath: '/@chosen.4000/post/REAL123' }
+Threads share redirect resolved: { finalPath: '/@chosen.4000/post/REAL123' }
+Threads share redirect resolved: { finalPath: '/@chosen.4000/post/REAL123' }
+Threads share redirect resolved: { finalPath: '/@chosen.4000/post/REAL123' }
+✔ sends share aliases and exact posts directly to scoped browser inspection (1.048093ms)
+✔ accepts only exact Threads post permalinks (0.210315ms)
+✔ extracts every carousel item in order from the exact post record (1.304458ms)
+✔ uses quoted attachment media when the requested post has none (0.348743ms)
+✔ extracts an inline Instagram reel only from the requested Threads post (0.293981ms)
+✔ resolves a share alias from Threads' redirect Location (2.717798ms)
+✔ runs share alias resolution attempts concurrently (11.336901ms)
+✔ prefers matching og:video then og:image and rejects a different post (1.629465ms)
+✔ requires og:description to match known post text when both are available (0.584767ms)
+✔ decodes entity-encoded @ in og:url before matching the requested shortcode (0.640591ms)
+✔ matches a resolved post preview while rejecting foreign hosts and partial IDs (1.409005ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/REAL123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads using 1 media candidate(s) from Discord's exact-message embed.
+Threads download complete (1 file(s)).
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/REAL123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: null
+}
+Threads exact-post fallbacks found no media. { exactIdentity: true, crawlerMatched: false, textOnly: false }
+✔ an empty browser result uses the exact-message preview and still fails if absent (18.620852ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 1,
+  finalPath: '/@author/post/REAL123'
+}
+Threads download complete (1 file(s)).
+✔ accepts a small Threads image only after it decodes as real post media (4.906292ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@agnieszka.jordan/post/DfueqT_ghKZ'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 347,
+  matched: true,
+  hasVideo: true,
+  hasImage: true,
+  scopedMediaCount: 0,
+  finalPath: '/@agnieszka.jordan/post/DfueqT_ghKZ',
+  pageOgPath: '/@agnieszka.jordan/post/DfueqT_ghKZ'
+}
+Threads using exact-post crawler media (browser found none; video: true).
+Threads download complete (1 file(s)).
+✔ uses matching exact-post Open Graph fallback after browser and Discord preview find no media (4.73846ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@agnieszka.jordan/post/DfueqT_ghKZ'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 347,
+  matched: true,
+  hasVideo: true,
+  hasImage: true,
+  scopedMediaCount: 0,
+  finalPath: '/@agnieszka.jordan/post/DfueqT_ghKZ',
+  pageOgPath: '/@agnieszka.jordan/post/DfueqT_ghKZ'
+}
+Threads using exact-post crawler media (browser found none; video: true).
+Threads download complete (1 file(s)).
+✔ posts a labeled video thumbnail when only og:image is downloadable (3.34534ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/REAL123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 249,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: '/@other/post/NESTED999'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 249,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: '/@other/post/NESTED999'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 249,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: '/@other/post/NESTED999'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 249,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/REAL123',
+  pageOgPath: '/@other/post/NESTED999'
+}
+Threads exact-post fallbacks found no media. { exactIdentity: true, crawlerMatched: false, textOnly: false }
+✔ does not use Open Graph media from a nested or different post (2.744198ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: false,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: false,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: { cookieCount: 0, candidateCount: 0, finalPath: '/share/ALIAS/' }
+Threads exact-post fallbacks found no media. { exactIdentity: false, crawlerMatched: false, textOnly: false }
+✔ does not use Open Graph fallback for an unresolved share URL (3.367704ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: true,
+  exactRecordTextOnly: true,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/TEXT123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post fallbacks found no media. { exactIdentity: true, crawlerMatched: false, textOnly: true }
+✔ a text-only exact post fails with a plain text-only reason, not a media error (2.839741ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: true,
+  exactRecordTextOnly: true,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 1,
+  finalPath: '/@author/post/TEXT123'
+}
+Threads text-only post; sharing its text card.
+✔ a text-only exact post returns its verified text instead of failing (2.622616ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: true,
+  exactRecordTextOnly: true,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/TEXT123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post fallbacks found no media. { exactIdentity: true, crawlerMatched: false, textOnly: true }
+✔ text from a different author than the verified permalink is not used (2.635955ms)
+Threads page inspection starting.
+Threads scoped URL identified; using browser inspection directly.
+Threads page diagnostics: {
+  status: 0,
+  sourceHost: 'www.threads.com',
+  finalHost: 'www.threads.com',
+  characters: 0,
+  hasOgImage: false,
+  hasOgVideo: false,
+  hasImageVersions: false,
+  hasVideoVersions: false,
+  hasLoginPrompt: false,
+  cdnUrlCount: 0,
+  candidateCount: 0,
+  postScopedBrowserRequired: true
+}
+Threads browser fallback starting.
+Threads browser diagnostics: {
+  pageSignalsAvailable: false,
+  loginPromptVisible: false,
+  loginRoute: false,
+  checkpointRoute: false,
+  restrictionNoticeVisible: false,
+  unavailableNoticeVisible: false,
+  accountMenuVisible: false,
+  exactRecordSeen: true,
+  rootVideoDeclared: false,
+  attachedVideoDeclared: false,
+  exactRecordHasImageVersions: false,
+  exactNestedSameCodeRecordSeen: false,
+  exactRecordMediaTypeSeen: true,
+  exactRecordTextOnly: false,
+  authenticationEvidence: 'not_confirmed'
+}
+Threads browser fallback complete: {
+  cookieCount: 0,
+  candidateCount: 0,
+  finalPath: '/@author/post/TEXT123'
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.com',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'facebook',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post crawler attempt: {
+  host: 'www.threads.net',
+  agent: 'discord',
+  withCookies: false,
+  status: 200,
+  characters: 1913,
+  matched: false,
+  hasVideo: false,
+  hasImage: false,
+  scopedMediaCount: 0,
+  finalPath: '/@author/post/TEXT123',
+  pageOgPath: null
+}
+Threads exact-post fallbacks found no media. { exactIdentity: true, crawlerMatched: false, textOnly: false }
+✔ text is ignored unless the exact record is confirmed text-only (2.482966ms)
+✔ recognizes normalized TikTok live URLs (0.885329ms)
+✔ keeps extracting IDs from saved TikTok media (0.19348ms)
+✔ finds TikTok media and shortened links (1.221463ms)
+✔ ignores TikTok profiles and other non-media pages (0.337356ms)
+✔ keeps the original TikTok player when a video fallback has no audio (0.767982ms)
+✔ does not treat photo posts or videos with audio as streaming fallbacks (0.114352ms)
+✔ long TikTok videos retain the existing original-player fallback boundary (0.127621ms)
+✔ only normal TikTok videos opt into compatibility conversion and safe MP4 names (0.640391ms)
+✔ first upload batch is a standalone channel send (0.761343ms)
+✔ follow-up batches continue to use ordinary channel sends (0.139509ms)
+Upload size check: file=photo.jpg size=0.000 MB (16 bytes) limit=9.000 MB (9437184 bytes) underLimit=true
+Upload: 1 file(s) in 1 message(s)
+✔ successful structured post sends header, media, then footer/comment (11.520778ms)
+Upload size check: file=7703464447402102023 Minho is now purple hair!!.mov size=0.048 MB (50476 bytes) limit=9.000 MB (9437184 bytes) underLimit=true
+iPhone compatibility: converting 7703464447402102023 Minho is now purple hair!!.mov to H.264/AAC MP4
+Upload size check: file=7703464447402102023 Minho is now purple hair!!-iphone-compatible.mp4 size=0.046 MB (48217 bytes) limit=9.000 MB (9437184 bytes) underLimit=true
+Upload: 1 file(s) in 1 message(s)
+✔ incompatible TikTok video is normalized to playable H.264/AAC MP4 with a Harmony filename (381.627307ms)
+Upload size check: file=raw-platform-name.mp4 size=0.032 MB (33700 bytes) limit=9.000 MB (9437184 bytes) underLimit=true
+iPhone compatibility: already compatible (raw-platform-name.mp4)
+Upload size check: file=raw-platform-name.mp4 size=0.032 MB (33700 bytes) limit=9.000 MB (9437184 bytes) underLimit=true
+Upload: 1 file(s) in 1 message(s)
+✔ compatible MP4 bypasses conversion and receives a Harmony-generated MP4 filename (213.147077ms)
+Upload size check: file=small.mp4 size=0.001 MB (1024 bytes) limit=1.000 MB (1048576 bytes) underLimit=true
+✔ upload-size handling still leaves an under-limit video untouched (1.95966ms)
+Upload size check: file=large-source.mov size=0.048 MB (50476 bytes) limit=0.040 MB (42000 bytes) underLimit=false
+Compressing oversized video (0.0 MB, ~0.7s) through size tiers…
+Compression mode: with-audio (1280p, ~336k)
+Upload size check (compressed): file=large-source-discord-w1280-br336.mp4 size=0.046 MB (47722 bytes) limit=0.040 MB (42000 bytes) underLimit=false mode=with-audio
+Still too large after with-audio @ 1280p: 0.0 MB — trying next tier
+Compression mode: with-audio (960p, ~235k)
+Upload size check (compressed): file=large-source-discord-w960-br235.mp4 size=0.037 MB (38711 bytes) limit=0.040 MB (42000 bytes) underLimit=true mode=with-audio
+Size OK after with-audio: 0.0 MB (limit 0.0 MB)
+iPhone compatibility: already compatible (large-source-discord-w960-br235.mp4)
+Upload size check: file=large-source-discord-w960-br235.mp4 size=0.037 MB (38711 bytes) limit=0.040 MB (42000 bytes) underLimit=true
+Upload: 1 file(s) in 1 message(s)
+✔ oversized TikTok video still goes through Discord size compression before upload (722.78679ms)
+✔ gallery-dl KeyError JSON is a failed inspection, not a text-only post (1.029866ms)
+✔ empty gallery-dl JSON is inconclusive rather than text-only (0.116455ms)
+✔ a photo tweet is reported as having media (0.683846ms)
+✔ a tweet record with no photo, video, or GIF is text-only (0.15994ms)
+✔ only HTTPS twimg hosts are trusted for the FxTwitter fallback (0.177707ms)
+✔ FxTwitter fallback downloads trusted photos from a failed gallery-dl inspection (17.655624ms)
+✔ FxTwitter fallback ignores media from an untrusted host (1.933332ms)
+✔ FxTwitter fallback returns a text-only result when the post has words and no media (1.114742ms)
+✔ keeps an intentional long-video streaming preview without reporting an error (0.931368ms)
+✔ keeps an upcoming live-event preview without reporting an error (0.123895ms)
+✔ keeps the original YouTube player when download access is unavailable (0.124166ms)
+✔ does not treat a non-link-only result as an original-player fallback (0.132359ms)
+Harmony error alert webhook failed: request failed.
+✔ does nothing when the webhook URL or key is unset (0.877257ms)
+✔ sends a redacted JSON payload with the expected auth headers when configured (2.264358ms)
+✔ swallows network failures and timeouts without retrying (2.0525ms)
+✔ notifyErrorAlertWebhook never throws into the caller (0.944868ms)
+✔ payload uses the shared sanitizer and fingerprint helpers (0.397246ms)
+Harmony media error reported as HM-V9LXJN-DTY (instagram).
+Duplicate Harmony media error suppressed for message hook-msg-1.
+Harmony media error reported as HM-V9LXJW-0JG (instagram).
+✔ logMediaError posts to the webhook after a successful inbox send (9.639635ms)
+✔ logMediaError still reports to Discord when the webhook is unconfigured (1.502254ms)
+Harmony created private GitHub error report #1 (96fedefa70ab).
+Duplicate GitHub error report suppressed: 96fedefa70ab
+Harmony created private GitHub error report #2 (96fedefa70ab).
+Harmony could not create the private GitHub error report: GitHub error reporter returned HTTP 503.
+Harmony created private GitHub error report #3 (96fedefa70ab).
+Harmony created private GitHub error report #1 (629f90ff37a4).
+Harmony created private GitHub error report #10 (c1a43ae25ba1).
+Harmony created private GitHub error report #10 (dc5655a20fb0).
+✔ retains numbers on repeats and separates different links with identical errors (10.326125ms)
+✔ sanitizes session cookie values and signed attachment parameters before private reporting (1.169394ms)
+✔ Facebook login/checkpoint walls include a private-post reason in the issue body (1.146601ms)
+✔ Facebook login/checkpoint walls use the private-group channel message (1.440742ms)
+✔ other failures keep the generic channel message (0.281442ms)
+✔ Facebook login/checkpoint walls tell the inbox it may be a private post, with cookies as a fallback (0.541453ms)
+✔ Instagram and generic auth wording is unchanged (0.615273ms)
+✔ isFacebookLoginOrCheckpointWall is limited to Facebook login or checkpoint walls (0.190566ms)
+✔ member bias selections canonicalize singles, multiples, all-eight OT8, and legacy values (1.589074ms)
+✔ provider text is only auth evidence when it came from an authenticated request (1.71932ms)
+✔ media, CDN, size, extractor, rate-limit, and anti-bot errors never become session diagnoses (1.058308ms)
+✔ error inbox uses explicit classified evidence and never guesses from generic text (0.245659ms)
+✔ safeReason reports classified auth failures before audio, format, or verify wording (0.125278ms)
+✔ safeReason can mention cookies from a clear login or audience wall without recording health (0.289664ms)
+✔ authenticated Instagram audience walls and login redirects are session evidence, but a plain 429 is not (0.209735ms)
+✔ text-only Threads posts get a plain, non-cookie reason (0.128683ms)
+✔ getMediaInfo forwards an optional cancellation signal to yt-dlp (5.241766ms)
+✔ getMediaInfo honors a custom timeoutMs and defaults to 18s (2.900463ms)
+✔ UTC database timestamps become Discord-localized timestamps (0.87958ms)
+✔ ISO timestamps preserve their actual instant (0.190676ms)
+✔ invalid stored values remain visible instead of inventing a time (0.137026ms)
+Could not refresh private member counts in undefined: Error: The Admin Room must be private to display member counts.
+    at syncAdminRoom (/workspace/scratch/01797b5ba51c/Harmony/src/services/adminRoomService.js:1164:40)
+    at async /workspace/scratch/01797b5ba51c/Harmony/src/services/adminRoomService.js:1186:5
+    at async Promise.allSettled (index 0)
+    at async updateMemberCounts (/workspace/scratch/01797b5ba51c/Harmony/src/services/memberCountService.js:235:41)
+    at async runScheduledRefresh (/workspace/scratch/01797b5ba51c/Harmony/src/services/memberCountService.js:300:20)
+✔ Admin Room install, persistence, refresh, move, and off lifecycle (6.877237ms)
+✔ startup restores a missing panel message at its saved location (1.153618ms)
+✔ unauthorized Admin Room component interactions are rejected server-side (1.45465ms)
+✔ the persistent panel exposes direct non-schedule admin controls only (0.998997ms)
+✔ authorized controls open the existing Guard, moderation history, and community workflows (4.711201ms)
+✔ Greetings Manager exposes current settings and edits only the selected setting (1.088061ms)
+✔ Greetings Manager configures a new channel, edits both message fields, and On/Off preserves configuration (2.803782ms)
+✔ Greetings preview is private and non-pinging; Send Test keeps Administrator permission parity (1.239558ms)
+✔ Greetings controls reject stale Admin Controls sessions and leave slash command definition intact (2.583672ms)
+✔ Member Counts Manager reads Welcome Pass automatically and opens with no role picker or side effects (0.949002ms)
+✔ Member Counts configures and persists one Admin and Moderator role (19.540556ms)
+✔ Member Counts refresh gives setup guidance until both staff roles exist (1.206498ms)
+✔ Member Counts public setup uses Welcome Pass and refreshes existing voice channels in place (2.310443ms)
+✔ Member Counts public setup reuses intact untracked counters and shares concurrent setup (1.452156ms)
+✔ Member Counts public setup stops before creating channels when existing stats are ambiguous (0.819709ms)
+✔ Member Counts On/Off preserves setup and re-enables saved counters without recreation (1.010254ms)
+✔ Member Counts setup preserves the bot Manage Channels permission check and stale Admin panel protection (0.805407ms)
+✔ /harmony-member-counts slash command remains registered with its existing subcommands and permissions (1.143785ms)
+✔ Message Logs Manager opens read-only and displays configured status, channel, retention, and exclusions (0.783504ms)
+✔ Message Logs channel selector configures or changes the channel without touching exclusions (0.963173ms)
+✔ Message Logs can exclude and include only explicitly selected channels, never the current log channel (1.10807ms)
+✔ Message Logs Off preserves channel and exclusions, On reuses them, and existing log posts still expire (1.274139ms)
+✔ Message Logs screens reject interactions after the originating Admin Controls panel is replaced (0.446789ms)
+✔ /harmony-logs keeps setup/status/off/exclude/include and the three-day retention (1.595091ms)
+✔ Guard Manager exposes direct room, monitoring, rules, add/edit/remove, and history controls (0.357977ms)
+✔ Rules control displays configured rules using shared Guard formatting (0.6142ms)
+✔ Guard Review Room selector saves a same-guild text channel and preserves monitoring (0.684847ms)
+✔ Guard monitoring toggles from the manager and cannot turn on without a Review Room (0.688201ms)
+✔ Add Rule wizard uses existing Guard rule service and defaults to Admin Review (2.04831ms)
+✔ Edit Rule preserves identity and Remove Rule waits for confirmation (2.049652ms)
+✔ requested Guard Review Room is seeded only when no room exists and never overrides an admin selection (0.536934ms)
+✔ Welcome Pass controls update one setting at a time, toggle mode, and edit the template (9.126148ms)
+✔ Welcome Pass Member Bias Roles mapping is interactive, safe, and reconciles only by explicit action (3.611943ms)
+✔ Welcome Pass bias picker pages through all assignable role IDs regardless of membership or mapping (6.357388ms)
+✔ Welcome Pass can be set up through selectors without partially saving or clearing existing settings (2.163613ms)
+✔ legacy Welcome Pass settings are retained but show Setup needed when the newer approved-member destination is absent (0.63401ms)
+✔ legacy Welcome Pass installations keep using the existing Greetings entry channel until overridden (0.890995ms)
+✔ slash-style Welcome Pass setup updates preserve an existing entry-channel override (0.222143ms)
+✔ Welcome Pass unauthorized controls are rejected and unfinished setup can be discarded (0.990034ms)
+✔ Welcome Pass ephemeral navigation is rejected after its source Admin Controls panel moves (0.535433ms)
+✔ a moved or disabled panel cannot launch Admin Room workflows (0.478898ms)
+Could not refresh private member counts in undefined: Error: The Admin Room must be private to display member counts.
+    at syncAdminRoom (/workspace/scratch/01797b5ba51c/Harmony/src/services/adminRoomService.js:1164:40)
+    at async /workspace/scratch/01797b5ba51c/Harmony/src/services/adminRoomService.js:1186:5
+    at async Promise.allSettled (index 0)
+    at async updateMemberCounts (/workspace/scratch/01797b5ba51c/Harmony/src/services/memberCountService.js:235:41)
+    at async runScheduledRefresh (/workspace/scratch/01797b5ba51c/Harmony/src/services/memberCountService.js:300:20)
+✔ Status / Health control reuses the existing fresh status report (11.195389ms)
+✔ Guard history paginates removals and Admin Review safe decisions without message content (2.104954ms)
+✔ Guard history component requires admin authorization (0.293189ms)
+✔ existing Schedule Manager panel components remain available (0.606109ms)
+✔ live display is before the panel and reuses its persisted message across refresh and restart (7.743565ms)
+✔ live display updates on join, leave, and all three role grants and removals (10.060318ms)
+✔ private counts overlap STAY with staff and bots while public counters stay human-only (2.511715ms)
+✔ simultaneous manual and background member counts share one full request without public stats (2.503783ms)
+Harmony Admin Room live member count is unavailable: Discord accepted send before SQLite recorded the ID
+✔ rate limiting queues one retry, preserves the display and leaves, then applies the fresh counts (6.177419ms)
+✔ Refresh Now reports public and private failures separately (3.668999ms)
+✔ live display reports STAY when staff setup is incomplete (2.206627ms)
+✔ weekly activity uses Eastern Monday midnight and seeds only the owner-confirmed guild and weeks once (4.357882ms)
+✔ a confirmed deleted display gets one replacement below older messages and before the active controls (2.571714ms)
+✔ restart recovers a pending counter send even beyond the first page of Discord history (5.339112ms)
+✔ missing permissions do not trigger a replacement and public counters still refresh (2.229361ms)
+✔ moving the admin room retires the old display and off/on restores one in the active room (3.263451ms)
+✔ community manager exposes one private Birthdays control (1.708971ms)
+✔ Birthday Manager opens ephemerally and renders current settings (5.765631ms)
+✔ unauthorized Birthday Manager access is rejected privately (0.16048ms)
+✔ member selection routes Manage Birthday through the existing profile store (18.658544ms)
+✔ member bias can be managed without birthday opt-in or a birthday profile (1.728911ms)
+✔ member selection supports Customize, Preview, and Clear Custom (1.884234ms)
+✔ Birthday Manager settings use human-friendly channel, role, timezone, time, and weekday selectors (5.345912ms)
+✔ Connect One Welcome Pass Birthday remains reachable from matching maintenance (0.764256ms)
+✔ Welcome Pass matching and settings controls are nested and remain available (1.323905ms)
+✔ Upcoming birthdays use member-friendly Welcome Pass wording (0.81343ms)
+✔ Birthday Manager content reports the existing system rather than a second data source (0.255854ms)
+✔ Birthday Manager sections route to their existing operations and provide a clear way back (3.851242ms)
+✔ non-member birthdays have a separate admin flow and do not replace the Discord member picker (1.249673ms)
+✔ non-member birthdays can be edited and explicitly removed from their scoped admin list (1.142993ms)
+✔ birthday previews replace legacy Discord IDs with the member display name (0.650785ms)
+✔ Send Now previews and reposts a birthday already announced, once per confirmation (2.294479ms)
+✔ birthday admin permission matches Schedule Manager policy without changing member-facing commands (6.850878ms)
+✔ Birthday Manager and slash birthday matching use the same shared matching service behavior (1.090444ms)
+✔ non-Discord birthday storage needs no member or birth year and keeps annual MM-DD (4.538893ms)
+✔ custom non-member messages persist independently from date and timezone edits (0.456324ms)
+✔ Asia/Seoul non-member birthday becomes due at local midnight, regardless of guild hour (12.244702ms)
+✔ non-member birthday in another IANA timezone becomes due at that timezone's midnight (0.535673ms)
+✔ non-member catch-up later on the local birthday announces once despite guild hour and timezone (2.645395ms)
+✔ each non-member birthday uses its own custom announcement message (1.664906ms)
+✔ member birthday schedule remains tied to the configured guild announcement hour (0.163305ms)
+✔ annual non-Discord recurrence is deduplicated per local year (0.53414ms)
+✔ non-Discord announcement history is retained without a user ID or role timer (0.452748ms)
+✔ non-member reminders and previews use a display name while member birthdays retain mentions (1.529082ms)
+✔ non-member announcement copy uses the neutral preset regardless of the person's name or stale bias (0.623014ms)
+✔ birthday history migration preserves member rows and supports named non-member rows (15.774773ms)
+✔ member bias migration copies legacy scalar values without changing them (11.879874ms)
+[scheduler-reconciliation] configured-channel guild=candidate-submit-1795559238449 channel=reconciliation-candidate-submit-1795559238449 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-submit-1795559238449 channel=reconciliation-candidate-submit-1795559238449 resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=candidate-command-1795559238464 channel=reconciliation-candidate-command-1795559238464 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-command-1795559238464 channel=reconciliation-candidate-command-1795559238464 resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=candidate-command-1795559238464 channel=reconciliation-candidate-command-1795559238464 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-command-1795559238464 channel=reconciliation-candidate-command-1795559238464 resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=candidate-enrich-1795559238494 channel=reconciliation-candidate-enrich-1795559238494 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-enrich-1795559238494 channel=reconciliation-candidate-enrich-1795559238494 resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=candidate-prefill-1795559238496 channel=reconciliation-candidate-prefill-1795559238496 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-prefill-1795559238496 channel=reconciliation-candidate-prefill-1795559238496 resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=candidate-enrich-fail-1795559238501 channel=reconciliation-candidate-enrich-fail-1795559238501 guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=candidate-enrich-fail-1795559238501 channel=reconciliation-candidate-enrich-fail-1795559238501 resolved=true text-based=true
+✔ candidate submission normalizes and deduplicates source links without creating a calendar event (14.132501ms)
+✔ candidate deduplication recognizes an already-approved canonical source (0.794951ms)
+✔ member and admin use the same simple candidate submission command (1.702011ms)
+✔ candidate review Add to Calendar creates the canonical event only after explicit approval (25.439707ms)
+✔ candidate Link Existing is match-aware and atomic (2.89634ms)
+✔ submitted URL enrichment stores structured event metadata without creating calendar or announcements (1.766938ms)
+✔ candidate Add to Calendar prefills extracted local date, time, and timezone (3.773305ms)
+✔ candidate Add to Calendar leaves time blank without a trustworthy extracted timezone (1.198416ms)
+✔ enrichment failure saves a candidate and leaves unsupported date/time missing (1.03449ms)
+✔ metadata extraction does not invent a time from a date-only source (0.271236ms)
+✔ candidate matching requires supporting identity and does not match by date alone (2.026207ms)
+✔ production-like Fukuoka discovery matches the Japan event despite missing candidate time (1.156763ms)
+✔ same-date title matching keeps city identity and rejects unrelated events (0.755222ms)
+✔ legacy exact-title, URL, time, and 0.75 title-similarity matching remains intact (1.787168ms)
+✔ social title date range extracts the live Instagram dates and KST without inventing a time (1.177815ms)
+✔ candidate storage and private review preserve extracted date range and timezone (5.23495ms)
+✔ social parser supports Korean-style single dates and cross-year ranges (0.369594ms)
+✔ weekday disagreement degrades conservatively (0.180901ms)
+✔ JSON-LD date and endDate remain authoritative and preserve existing behavior (0.505678ms)
+✔ enrichment blocks private destinations and redirects to them (0.721561ms)
+✔ enrichment rejects IPv6 loopback, private, and link-local literals (0.532057ms)
+✔ enrichment rejects DNS names resolving to prohibited addresses (0.250416ms)
+✔ enrichment stops an oversized streamed response before loading it fully (0.368823ms)
+✔ discovered all-day candidate is compact, reviewed in-place, and preserves source metadata (4.538852ms)
+✔ normal timed candidate still uses ephemeral review and reports missing time (2.087879ms)
+✔ explicit discovered all-day modal has blank time and optional blank timezone (3.286726ms)
+✔ explicit discovered all-day blank submit preserves null event timezone and legacy fallback (3.411843ms)
+✔ explicit discovered all-day manually supplied named timezone is preserved (3.633035ms)
+✔ explicit discovered all-day invalid named timezone and numeric offset are rejected (2.577823ms)
+✔ explicit discovered all-day time entered manually still requires timezone (2.322521ms)
+✔ timed and non-explicit discovery metadata retain required timezone fallback (13.218742ms)
+✔ human and proposed named timezone candidates retain modal and submission behavior (22.562305ms)
+✔ discovered review hides raw metadata while retaining details, matches, source button and storage (2.374489ms)
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'd65aba93-3add-42e8-a585-b3ecac861155',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-14', endDate: '2027-02-11' },
+  fetched: 3,
+  categories: { SHOW: 1, RELEASE: 1, EVENT: 1 },
+  normalized: 3,
+  skipReasons: { 'outside-discovery-window': 1 },
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 2,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 1,
+  latencyMs: 2
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '2cd3a4d3-5ebd-49c5-a8a5-bdee08f09924',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-14', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'e78a460a-c571-4799-96e9-bdf92cc0543b',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 3,
+  categories: { SHOW: 1, RELEASE: 1, EVENT: 1 },
+  normalized: 3,
+  skipReasons: { 'outside-discovery-window': 1 },
+  adminDecisionPreserved: 0,
+  duplicateReasons: { 'same-discovery': 2 },
+  newCount: 0,
+  updated: 0,
+  duplicate: 2,
+  crossSourceMatches: 0,
+  skipped: 1,
+  latencyMs: 2
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'a6e1fc05-2338-461c-9c4a-f49b243a98f9',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery source changed after admin decision {
+  sourceKey: 'jype-straykids-schedule',
+  guildId: 'discovery-1795559238838',
+  discoveryKey: 'jype-straykids-schedule:10:201',
+  status: 'dismissed'
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '641aef84-ada1-490e-995a-f6cf6b148dd7',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 2,
+  categories: { SHOW: 1, RELEASE: 1 },
+  normalized: 2,
+  skipReasons: {},
+  adminDecisionPreserved: 1,
+  duplicateReasons: { 'same-discovery': 2 },
+  newCount: 0,
+  updated: 0,
+  duplicate: 2,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '5e61d082-f676-4f0d-9b97-a2312d52558b',
+  guildId: 'discovery-1795559238838',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '35e2bfc7-59a6-4c5d-9aab-22cd889c3f3a',
+  guildId: 'discovery-multisource-1795559238866',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  fetched: 3,
+  categories: { EVENT: 3 },
+  normalized: 3,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 3,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'dee03847-05f4-4531-a9f2-b8b120b5afd4',
+  guildId: 'discovery-multisource-1795559238866',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  fetched: 5,
+  categories: { EVENT: 5 },
+  normalized: 5,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: { other: 3 },
+  newCount: 2,
+  updated: 0,
+  duplicate: 3,
+  crossSourceMatches: 3,
+  skipped: 0,
+  latencyMs: 5
+}
+✔ JYP adapter includes only official event/show/release records and preserves date semantics (1.682171ms)
+✔ discovery window protects first run and uses correction lookback afterward (0.691857ms)
+✔ automatic discovery is idempotent, updates open candidates, and never reopens dismissal (12.473845ms)
+✔ source endpoint uses the official structured contract (0.450295ms)
+✔ current live JYP December response shape normalizes all three returned Stray Kids records (0.370425ms)
+✔ public Comeback Guide iCalendar feed shape preserves UID, URLs, local time, and multi-day date range (14.664418ms)
+✔ multi-source discovery deduplicates JYP and Comeback Guide coverage and retains provenance (7.203006ms)
+Calendar discovery failed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '55c9516e-3f39-4f2f-b405-85aa765f594b',
+  guildId: 'discovery-secondary-only-1795559238874',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  failureReason: 'upstream-http-error',
+  httpStatus: 503,
+  errorClass: 'Error',
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 757
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '73119584-37a3-4601-be43-0e3b17d8ce5c',
+  guildId: 'discovery-secondary-only-1795559238874',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  fetched: 5,
+  categories: { EVENT: 5 },
+  normalized: 5,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 5,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 4
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '606ccf04-4c0f-46c5-8f92-6b183f88c0c6',
+  guildId: 'discovery-failure-isolation-1795559239640',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+✔ secondary-source-only events are reviewable when JYP fails (761.811804ms)
+✔ source identity matching is conservative across dates, separate days, and ambiguous same-day events (2.645821ms)
+✔ three providers retain provenance on one candidate and decided candidates are never recreated or reopened (2.010817ms)
+Calendar discovery failed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'fc494388-ec0c-469e-a358-4494cdc3d52a',
+  guildId: 'discovery-failure-isolation-1795559239640',
+  window: { startDate: '2026-11-07', endDate: '2027-03-07' },
+  failureReason: 'upstream-http-error',
+  httpStatus: 503,
+  errorClass: 'Error',
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 752
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'b74c5b8d-4f23-417f-8cd2-134392249463',
+  guildId: 'discovery-jype-december-examples-1795559240394',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  fetched: 7,
+  categories: { SHOW: 1, EVENT: 6 },
+  normalized: 7,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 7,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 3
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '2c163340-229d-4c95-8bcb-d291d48c6eb0',
+  guildId: 'discovery-jype-december-examples-1795559240394',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '81201782-5832-4287-8466-681a795da9ed',
+  guildId: 'discovery-diagnostics-1795559240398',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  fetched: 4,
+  categories: { EVENT: 2, SHOW: 1, ANNIVERSARY: 1 },
+  normalized: 2,
+  skipReasons: {
+    'outside-discovery-window': 1,
+    'normalization:excluded-category': 1,
+    'normalization:missing-id': 1
+  },
+  adminDecisionPreserved: 0,
+  duplicateReasons: { 'same-discovery': 1 },
+  newCount: 0,
+  updated: 1,
+  duplicate: 1,
+  crossSourceMatches: 0,
+  skipped: 3,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '7601f612-39c6-47cf-a362-365e887f7877',
+  guildId: 'discovery-diagnostics-1795559240398',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '64d53c79-bcf7-4060-b3bc-d03cfe62c84b',
+  guildId: 'discovery-diagnostics-1795559240398',
+  window: { startDate: '2026-11-04', endDate: '2027-03-06' },
+  fetched: 1,
+  categories: { EVENT: 1 },
+  normalized: 1,
+  skipReasons: {},
+  adminDecisionPreserved: 1,
+  duplicateReasons: { 'same-discovery': 1 },
+  newCount: 0,
+  updated: 0,
+  duplicate: 1,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '21e22fac-5a76-456b-873b-53f92dbdea39',
+  guildId: 'discovery-diagnostics-1795559240398',
+  window: { startDate: '2026-11-04', endDate: '2027-03-06' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+✔ a source failure is isolated while successful source events are still processed (753.567211ms)
+✔ JYP-shaped fixture for reported December events reaches review candidates when returned by source (3.520163ms)
+✔ discovery diagnostics classify normalization, date-window skips, duplicates, and prior admin decisions (2.501564ms)
+✔ unrecognized JYP response envelope fails as a source-shape diagnostic, not an empty successful run (0.542725ms)
+Calendar discovery failed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'b8d102f1-11ef-4d2a-b4db-206829b057fd',
+  guildId: 'discovery-source-shape-error-1795559240401',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  failureReason: 'response-shape-unknown',
+  httpStatus: null,
+  errorClass: 'Error',
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 759
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '43b4a060-0b16-4a3d-9035-4b6c0e4c120e',
+  guildId: 'discovery-source-shape-error-1795559240401',
+  window: { startDate: '2026-11-06', endDate: '2027-03-06' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'fd90cc53-82f7-4bf3-9df6-2deb856f4835',
+  guildId: 'discovery-validators-1795559241162',
+  window: { startDate: '2026-10-14', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery not modified {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'e0ba9cc9-7791-4d9e-9c12-8ea86b770c3c',
+  guildId: 'discovery-validators-1795559241162',
+  window: { startDate: '2026-10-14', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 0
+}
+Calendar discovery not modified {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'dd22cb50-271d-4da0-942f-1e01ac88c50a',
+  guildId: 'discovery-validators-1795559241162',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 0
+}
+Calendar discovery not modified {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'bf8fd19f-c728-46d1-8fa7-698f444db401',
+  guildId: 'discovery-validators-1795559241162',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 0
+}
+Calendar discovery not modified {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'd7250d88-19dd-4c09-84fd-0104ed6b6d4b',
+  guildId: 'discovery-304-1795559241165',
+  window: { startDate: '2026-10-12', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 0
+}
+Calendar discovery not modified {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '65114a12-311b-422d-8cf2-aaa1dbb5059e',
+  guildId: 'discovery-304-1795559241165',
+  window: { startDate: '2026-10-14', endDate: '2027-02-11' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '60af6ca5-bcb4-4339-9e66-16d76ae10087',
+  guildId: 'discovery-toggle-1795559241167',
+  window: { startDate: '2026-11-24', endDate: '2027-03-24' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'f56d7d43-f1da-408a-a116-d6b23a26c180',
+  guildId: 'discovery-toggle-1795559241167',
+  window: { startDate: '2026-11-24', endDate: '2027-03-24' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '88e8812c-e5d7-459a-b156-3cac26795196',
+  guildId: 'discovery-toggle-1795559241167',
+  window: { startDate: '2026-11-22', endDate: '2027-03-24' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '38060443-96ad-43e3-86bc-5d6c3103698f',
+  guildId: 'discovery-toggle-1795559241167',
+  window: { startDate: '2026-11-22', endDate: '2027-03-24' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+✔ source-shape API failures produce safe actionable Check Now diagnostics (760.513072ms)
+✔ HTTP wrapper exposes upstream validators to source adapters (1.145679ms)
+✔ wrapped 200 persists validators and wrapped 304 preserves them (2.183016ms)
+✔ HTTP 304 preserves discovery state and never becomes an empty schedule (1.324528ms)
+✔ manual discover is admin-only and the command is ephemeral (0.681763ms)
+✔ automatic discovery defaults off, persists when enabled, and manual checks still run (1.681684ms)
+✔ production-sized YouTube description renders a bounded preview and approves through the real inbox path (53.725727ms)
+✔ timed approval preserves the exact candidate title, local time and uncommon canonical timezone (7.253155ms)
+✔ dismissal and approval remove only resolved candidates from the visibly refreshed pending count (1.716927ms)
+✔ opening non-English review has zero provider calls and no translation storage writes (4.095886ms)
+✔ a completed matching Radar translation is reused in calendar review without a provider request (8.96306ms)
+✔ explicit concurrent translation edits the same review, coalesces, and never changes calendar/Radar state (15.323617ms)
+✔ unauthorized translation and clearly English review never call the translator (8.322038ms)
+✔ cached Radar translation remains reusable for the exact candidate snapshot after the source observation changes (5.259043ms)
+✔ provider failure is compact, preserves original/source and canonical timing, and never creates a Radar discovery (4.842427ms)
+✔ markdown-heavy source content cannot overflow Discord limits or dominate the preview (5.61053ms)
+✔ linking an existing canonical event resolves review and refreshes the count without adding an event (1.546681ms)
+✔ a real Radar-sized 6,000-character handoff reuses its full-observation translation and lease identity (67.554941ms)
+✔ approval removes only its own actionable count and does not alter the Radar review queue (4.236047ms)
+✔ long-title preview matches the exact title prefilled by the existing approval modal (3.904439ms)
+✔ every registered Harmony application command serializes with a valid Discord schema (4.251951ms)
+✔ /harmony-guard preserves one required rule-add field for each mandatory value and unique edit conditions (0.659409ms)
+Community Guard has no usable review room; matched message continues through normal processing.
+Community Guard could not post a review alert; message continues through normal processing: send denied
+Community Guard matched a message but could not remove it; normal processing was stopped: Error: I couldn’t delete that message. Check my Manage Messages permission.
+    at /workspace/scratch/01797b5ba51c/Harmony/src/services/communityGuardService.js:394:11
+    at async removeMessage (/workspace/scratch/01797b5ba51c/Harmony/src/services/communityGuardService.js:393:3)
+    at async Object.handleGuardedMessage (/workspace/scratch/01797b5ba51c/Harmony/src/services/communityGuardService.js:465:7)
+    at async TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/communityGuard.test.js:226:16)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+  [cause]: Error: missing permission
+      at target.delete (/workspace/scratch/01797b5ba51c/Harmony/test/communityGuard.test.js:225:39)
+      at removeMessage (/workspace/scratch/01797b5ba51c/Harmony/src/services/communityGuardService.js:393:23)
+      at Object.handleGuardedMessage (/workspace/scratch/01797b5ba51c/Harmony/src/services/communityGuardService.js:465:13)
+      at TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/communityGuard.test.js:226:28)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+}
+✔ new phrase rules use whole-word matching while legacy rules retain substring behavior (18.745291ms)
+✔ additive Guard migration preserves existing rule rows and leaves their condition payload legacy-null (11.915311ms)
+✔ compound ALL and ANY conditions support Bubble text plus image without matching ordinary discussion (1.711749ms)
+✔ domain and URL conditions preserve domain boundary and URL-substring rules (0.51979ms)
+✔ rule editing changes rule configuration without replacing its ID (0.665418ms)
+✔ review card includes matched conditions, message text and attachment metadata; repeats update rather than duplicate (3.124269ms)
+✔ edited messages are screened; nonmatching edits close pending review and bot edits are ignored (1.846832ms)
+✔ missing Guard Review Room does not hold flagged messages or leave pending review state (1.661654ms)
+✔ failed review-room send does not leave a message pending (1.197206ms)
+✔ automatic removal deletes, privately messages, cleans Collection contribution and records history (1.230006ms)
+✔ delete failure does not DM or record a removal (1.069675ms)
+✔ Mark Safe stores the decision, removes controls, and is restricted to Manage Messages (11.839897ms)
+✔ manual right-click moderation remains available while Guard is off and reports missing log room honestly (1.437077ms)
+✔ right-click command still offers all six removal reasons privately (1.287933ms)
+✔ review-room visibility warns for @everyone or ordinary roles and reports when restricted (0.471698ms)
+✔ setup wording does not claim privacy was verified and rule defaults to review (0.364176ms)
+✔ Guard off pauses automatic rules; setup re-enables them without removing rules (1.160291ms)
+✔ slash rule add, view, edit and remove use the shared rule service and preserve the rule ID (1.44591ms)
+✔ graphical add flow selects a room and approved events, fills metadata and saves privately (68.430475ms)
+✔ unauthorized users, other users sessions, stale panels, wrong channels and expired sessions are rejected (1.600992ms)
+✔ event pagination, search and multi-page selections retain stable IDs and exclude Radar candidates (243.942817ms)
+✔ newly approved concert dates are selectable for an existing countdown (11.00102ms)
+✔ publish requires confirmation, changed configuration invalidates approval, preview remains private (2.017898ms)
+✔ toggle, refresh and repair controls use saved room configuration (5.19064ms)
+✔ photo modal uses actual Discord.js file-upload component and all manager payloads validate (5.31776ms)
+✔ legacy schema migration is idempotent and preserves published configuration (1.791658ms)
+✔ replacing a photograph downloads only a bounded Discord attachment, decodes it and persists it (234.111154ms)
+✔ canceled selections can be removed and replaced through Edit details & dates (9.254308ms)
+✔ external image hosts and oversized uploads are rejected before network access (0.819059ms)
+✔ location picker shows every confirmed stop with pagination, including missing Chicago dates (9.484474ms)
+✔ missing Chicago dates have an explicit private import review, then become selectable as a pair (13.026008ms)
+✔ tour imports reject unauthorized and stale sessions before any calendar writes (1.296636ms)
+✔ approval cannot silently adopt calendar changes while paging through a tour audit (13.458027ms)
+✔ tour JSON upload uses a file modal and never imports before the next approval (3.427374ms)
+✔ an out-of-catalog concert with a long venue still produces a valid location menu (4.30492ms)
+✔ advanced configure command shares the same confirmed-tour eligibility as the graphical picker (4.682326ms)
+✔ failed publication retains approval and offers a safe retry with unchanged dates and photograph (1.601864ms)
+✔ deferred rate-limit publication retains approval and retry controls (1.204708ms)
+✔ a real photograph change invalidates retained approval after a failed attempt (1.092069ms)
+✔ approval is scoped to its concert room even when another room has the same revision (0.579981ms)
+✔ canceling publication removes approval so a stale retry cannot publish (1.141853ms)
+✔ overlapping publication clicks cannot overwrite an in-flight result or start a second attempt (1.201423ms)
+✔ configuration changed during interaction acknowledgement is rejected before permission checks or publication (2.595576ms)
+✔ Check room access is private, read-only and does not consume pending publication approval (0.924267ms)
+✔ venue midnight and DST (14.431247ms)
+✔ states and invalid dates (0.321132ms)
+✔ approved selected guild events only, independent dates (1.537157ms)
+✔ single date, leap day and year boundary use calendar days (0.171137ms)
+✔ DST fall back does not repeat or skip a countdown day (0.53272ms)
+✔ timed concerts use venue-local dates; calendar reschedules and cancellations are authoritative (1.306441ms)
+✔ configuration validation requires valid selected events and venue details (1.076045ms)
+✔ reproduces cold bot-member cache failure with actual Discord.js; fresh resolution succeeds (16.033801ms)
+✔ refreshes stale bot roles, role grants and channel overrides before calculating access (1.120121ms)
+✔ Pin Messages remains a BigInt high bit and does not require Manage Messages (0.785058ms)
+✔ Manage Messages does not substitute for the missing Pin Messages permission (1.287623ms)
+✔ identifies each missing permission individually rather than reporting a generic list (4.293273ms)
+✔ inherited everyone permissions and role-level room allows are calculated by Discord.js (1.237728ms)
+✔ member-specific denies override role allows and identify their source (0.850636ms)
+✔ role-specific denies identify the role and everyone/member allows obey precedence (0.887783ms)
+✔ an allow from another inherited role overrides a role deny without using role hierarchy (0.624157ms)
+✔ Administrator is honored without requesting or granting that permission (0.67334ms)
+✔ category-synced overrides are respected and unsynced child overrides remain authoritative (0.967682ms)
+✔ unresolved bot membership is reported as an unavailable check, not five missing permissions (0.855584ms)
+✔ failures loading fresh permission data preserve rate-limit metadata (3.273392ms)
+✔ runtime pin refusals name the operation and distinguish allowed flags from actual API denial (0.777286ms)
+✔ permission drift after preflight reports the newly missing flag (0.61268ms)
+✔ legacy permission failures can be retried, while unknown legacy and real rate limits retain their delay (0.111217ms)
+✔ actual deterministic PNGs have balanced single, double and five-date layouts (609.024256ms)
+✔ single panel is centered, paired panels balanced, numbers have visible orange pixels (282.400678ms)
+✔ JPEG and PNG are fully decoded, normalized and cropped to a panorama without stretching (275.637558ms)
+✔ invalid, truncated, oversized and decompression-bomb photographs are rejected (646.860904ms)
+✔ long names, missing photograph, tomorrow, D-day and completed panels render successfully (130.444725ms)
+✔ image queue is bounded under concurrent requests (569.750527ms)
+✔ single-date cards omit DAY 1 and vertically center all remaining content for every concert state (1008.163042ms)
+✔ multiple-date cards retain every DAY label, including a centered third panel (434.980931ms)
+✔ the approved double-date graphic is byte-for-byte unchanged (89.563137ms)
+✔ single-date changes are confined to text inside the existing panel; card size and all other pixels stay identical (129.078479ms)
+✔ image-only presentation preserves every approved single/multi-date and concert-state preview byte-for-byte (422.205959ms)
+Concert countdown update failed 1463 Temporary edit failure
+Concert countdown update failed 1466 Rate limited
+Concert countdown update failed 1469 Interrupted version checkpoint
+Concert countdown update failed 1472 Countdown update already running
+✔ initial publication requires approval; private previews never call Discord (31.297761ms)
+✔ explicit publication pins one message and preserves ID across restart (4.862938ms)
+✔ refresh edits existing attachments and does not mention members (2.088114ms)
+✔ failed pin persists message and a later repair never sends a duplicate (2.4252ms)
+✔ crash between send and ID persistence recovers unpinned message beyond last 100 (5.458151ms)
+✔ failed send before delivery can be retried with the durable intent (2.036767ms)
+✔ deleted message is repaired once; unrelated pins are untouched (1.935664ms)
+✔ legacy/recovered pinned message is reused (0.880992ms)
+✔ concurrent updates share a lock and exactly one initial message (1.244818ms)
+✔ database lease protects against other processes; expired lease recovers (1.748364ms)
+✔ rate limits save status and honor retry delay without repeat Discord calls (1.474062ms)
+✔ missing permissions preserve draft and produce an actionable error (1.035184ms)
+✔ disabled countdowns are skipped by automatic jobs; manual refresh remains available (1.822926ms)
+✔ local-day changes, missed days and approved reschedules update the same message (3.512451ms)
+✔ health check repairs unpinning without an unnecessary attachment edit (1.633291ms)
+✔ stored photograph survives reopen and can be reused only within its server (3.329997ms)
+✔ configuration writes use optimistic revision and do not overwrite newer changes (0.538208ms)
+✔ paginated pin recovery uses the installed Discord.js response shape (1.046321ms)
+✔ legacy unpinned sends are recovered safely during schema upgrade (1.13934ms)
+✔ incomplete or unavailable recovery history never authorizes a second send (1.057477ms)
+✔ scheduler catches up immediately on startup and exposes a stop function (1.878429ms)
+✔ manual permission retry reloads access immediately and preserves saved dates and photograph (1.714734ms)
+✔ scheduled jobs honor permission backoff even after roles have been corrected (0.824848ms)
+✔ manual retries never bypass a persisted Discord rate limit, even after a photo/configuration change (1.711799ms)
+✔ fresh permission requests that are rate limited retain the cooldown through manual retries (0.95989ms)
+✔ retry after a live pin refusal reuses the saved message and keeps the same configuration revision (1.871488ms)
+✔ legacy generic permission failures can be retried without editing the configuration (1.302424ms)
+✔ publication rejects an actual configuration revision change before any Discord request (1.961434ms)
+✔ lost send response can be retried immediately without losing the durable delivery record or duplicating (2.809997ms)
+✔ renderer version alone changes the fingerprint without changing dates, photo or countdown numbers (1.284567ms)
+✔ published cards with automatic updates disabled are upgraded once in place with their saved data intact (6.200195ms)
+✔ unpublished configurations and pending initial send intents are never published by the version refresh (0.770235ms)
+✔ a failed automatic render refresh persists across restart and retries in place after backoff (10.893858ms)
+✔ version refreshes respect Discord rate limits even when force is requested (2.710888ms)
+✔ a restart after editing but before the version checkpoint only re-edits the original message (4.119342ms)
+✔ simultaneous version-refresh workers cannot create another message or overlap edits (1.722525ms)
+✔ adding second and third dates edits the existing published countdown without creating another message (2.960714ms)
+✔ automatic updates continue normally for enabled cards after their one-time renderer upgrade (2.337037ms)
+✔ additive renderer-version migration preserves legacy published data and does not pre-mark the refresh complete (0.988644ms)
+✔ preview, publication and edits contain only the image with accessible attachment metadata (1.87932ms)
+✔ installed Discord.js serializes empty content and attachment descriptions without visible companion fields (10.250614ms)
+✔ legacy disabled published cards lose all companion text once and preserve saved owner data and pins (3.823549ms)
+✔ image-only pinned countdown is recovered by attachment identity when its saved message ID is absent (3.022596ms)
+✔ lost image-only send response is recovered after restart using attachment metadata beyond 100 messages (3.387774ms)
+✔ attachment identification rejects another room and another author without modifying their pinned messages (1.85273ms)
+✔ a stored ID with unrelated attachment metadata fails closed instead of overwriting or duplicating (1.036526ms)
+✔ verified reference covers every announced city, all 53 performances and additional nights (31.183929ms)
+✔ read-only picker lists missing locations without creating any calendar records (26.545428ms)
+✔ approved import creates all confirmed dates in the existing canonical calendar, with no notifications (75.401318ms)
+✔ repeat and simultaneous stale imports never create duplicate calendar entries (3.675406ms)
+✔ existing canonical events are reused without changing IDs, timing, descriptions or links (3.036107ms)
+✔ legacy misclassification is visible and usable without silently rewriting the calendar (3.733022ms)
+✔ wrong-calendar concerts are audited and repaired only following approval, reusing their IDs (2.364899ms)
+✔ search supports city, country, venue, numeric dates, month names and local city aliases (72.159793ms)
+✔ venue-local dates are used for matching and date searches across UTC midnight (1.555775ms)
+✔ location groups collect multiple nights and keep distinct venues in the same city separate (204.734314ms)
+✔ presales, watch parties and unapproved Radar/Calendar Review candidates cannot become tour performances (2.987233ms)
+✔ ambiguous existing records are skipped and never duplicated (2.290507ms)
+✔ uncertain same-date legacy records and invalid-date tour records require review instead of another insert (0.793011ms)
+✔ canceled dates are never resurrected and reschedules retain the existing stable IDs (3.676938ms)
+✔ all countdown configuration, image, enabled state and message IDs survive import unchanged (17.846303ms)
+✔ import transaction rolls back all writes if any date fails (1.722545ms)
+✔ guild isolation applies to audit, imports, metadata and search (2.317037ms)
+✔ validated JSON supports future confirmed locations with no code change or redeployment (7.746856ms)
+✔ invalid dates, zones, duplicate physical dates, huge manifests and untrusted source URLs are rejected (1.590727ms)
+✔ read-only CLI audits existing records without opening migrations or changing the file (67.548182ms)
+✔ unlinked legacy reschedules are flagged instead of recreating their original dates (4.320003ms)
+✔ non-English city names and uppercase legacy classifications remain searchable (1.536225ms)
+✔ full date queries match calendar dates exactly rather than fragments of other dates (18.935528ms)
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: '9387d4e9-d186-443a-93f6-8dce103aa787',
+  guildId: 'inbox-c86a9430-8bf0-48e2-8904-e3781bf3ac38',
+  window: { startDate: '2026-11-01', endDate: '2027-03-01' },
+  fetched: 3,
+  categories: { SHOW: 3 },
+  normalized: 3,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 3,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 2
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: 'd19cab8d-3176-4303-a19a-06382c128c17',
+  guildId: 'inbox-c86a9430-8bf0-48e2-8904-e3781bf3ac38',
+  window: { startDate: '2026-11-01', endDate: '2027-03-01' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 1
+}
+Calendar discovery completed {
+  sourceKey: 'jype-straykids-schedule',
+  runId: 'b0ae1f66-f764-4d44-8900-3dc42baa74d6',
+  guildId: 'inbox-c86a9430-8bf0-48e2-8904-e3781bf3ac38',
+  window: { startDate: '2026-10-30', endDate: '2027-03-01' },
+  fetched: 3,
+  categories: { SHOW: 3 },
+  normalized: 3,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: { 'same-discovery': 3 },
+  newCount: 0,
+  updated: 0,
+  duplicate: 3,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 2
+}
+Calendar discovery completed {
+  sourceKey: 'stray-kids-comeback-guide-ics',
+  runId: '0ac37a98-5412-49b2-81cd-7317163b2573',
+  guildId: 'inbox-c86a9430-8bf0-48e2-8904-e3781bf3ac38',
+  window: { startDate: '2026-10-30', endDate: '2027-03-01' },
+  fetched: 0,
+  categories: {},
+  normalized: 0,
+  skipReasons: {},
+  adminDecisionPreserved: 0,
+  duplicateReasons: {},
+  newCount: 0,
+  updated: 0,
+  duplicate: 0,
+  crossSourceMatches: 0,
+  skipped: 0,
+  latencyMs: 0
+}
+✔ Review Discovered Events is restricted to the Stray Kids manager (6.025022ms)
+✔ one private browser reopens persisted candidates with deleted notices and navigates in place (35.081278ms)
+✔ review inbox and review card display all corroborating source names and evidence (3.357198ms)
+✔ empty inbox and stale selection recover without reposting or reopening candidates (1.222605ms)
+✔ inbox and candidate actions retain admin checks and guild isolation (0.869255ms)
+✔ Ignore updates detailed browser and Back reloads pending records (3.969287ms)
+✔ Add uses timezone selection and preserves blank/named all-day timezone behavior (11.23149ms)
+✔ timed discovered events require a selected valid timezone and persist Asia/Tokyo (7.718043ms)
+✔ Link Existing uses current review matching and preserves inbox context (6.79653ms)
+✔ multiple newly discovered and already-known records never create per-candidate messages (7.653255ms)
+✔ registers the guided Harmony scheduler command (1.947373ms)
+✔ /harmony-schedule update edits linked Discord time and rebuilds generated schedules without removing manual rows (20.728779ms)
+✔ /harmony-schedule cancel asks for confirmation before running shared cleanup (4.033203ms)
+✔ Discord one-off date/time edit updates Harmony local date and rebuilds generated schedules only (26.3201ms)
+✔ Schedule Manager one-off timed edit safely rebuilds generated announcements (10.230324ms)
+✔ Discord edit cancels recalculated reminders already in the past and preserves unknown custom rows (2.766792ms)
+✔ Harmony one-off cancellation performs local cleanup before attempting Discord and is idempotent (2.73172ms)
+✔ HARMONY EVENT CANCEL uses the shared one-off cancellation path (2.584178ms)
+Recurring native event window sync failed: TypeError: Cannot read properties of undefined (reading 'me')
+    at createNativeScheduledEvent (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1635:28)
+    at syncRecurringNativeEventWindow (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1213:29)
+    at async TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerPhase3A.test.js:163:3)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+Recurring native event window sync failed: TypeError: Cannot read properties of undefined (reading 'me')
+    at createNativeScheduledEvent (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1635:28)
+    at syncRecurringNativeEventWindow (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1213:29)
+    at async TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerPhase3A.test.js:163:3)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+Linked Discord event cancellation failed: Error: Discord edit unavailable
+    at Object.edit (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerPhase3A.test.js:248:61)
+    at cancelLinkedNativeEvents (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1277:20)
+    at async cancelHarmonyRecurringEvents (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:1261:3)
+    at async handleManagerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:4114:21)
+    at async handleEventSchedulerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:2739:7)
+    at async TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerPhase3A.test.js:253:3)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+[scheduler-reconciliation] configured-channel guild=phase3a-mode2-1795559250995 channel=none guild-resolved=false
+✔ slash recurring cancellation confirms scope and cancels only the selected occurrence (20.621749ms)
+✔ Discord cancellation of one Harmony-owned occurrence cancels only its pending work and preserves history (3.421084ms)
+✔ Discord deletion cancels one Harmony-owned occurrence, keeps its ID, and cannot create a replacement (4.049848ms)
+✔ Harmony this cancellation cleans the correct mode 1 rows and linked Discord events (9.716552ms)
+✔ Harmony future cancellation cleans the correct mode 1 rows and linked Discord events (7.095889ms)
+✔ Harmony series cancellation cleans the correct mode 1 rows and linked Discord events (8.224864ms)
+✔ Harmony recurring cancellation remains locally complete when Discord fetch/edit fails (3.610418ms)
+✔ Discord-native mode 2 cancellation behavior remains unchanged (1.969947ms)
+Schedule Manager refresh skipped: configured channel unavailable {
+  guildId: 'manager-startup-stale-1795559251361',
+  calendarType: 'stray_kids',
+  channelId: 'missing-channel',
+  messageId: 'missing-message'
+}
+Schedule Manager refresh failed {
+  guildId: 'manager-startup-failure-1795559251363',
+  calendarType: 'community',
+  channelId: 'startup-failure-control',
+  messageId: 'message-1',
+  error: 'edit denied'
+}
+[scheduler-announcements] timing-submit guild=youtiful-announcement-order-1795559251386 eventIds=72 selected=now,86400 channel=server-updates
+Immediate calendar announcement failed for event 72: Error: missing Send Messages
+    at Object.send (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:1230:103)
+    at sendImmediateCalendarAnnouncement (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:749:32)
+    at handleManagerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:3691:33)
+    at handleEventSchedulerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:2739:13)
+    at TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:1234:9)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+[scheduler-announcements] timing-immediate-result guild=youtiful-announcement-order-1795559251386 event=72 channel=server-updates posted=false
+[scheduler-announcements] timing-submit guild=youtiful-edit-announcements-1795559251408 eventIds=75 selected=now,604800,259200,86400,3600 channel=cinema
+[scheduler-announcements] immediate-sent event=75 channel=cinema message=cinema-announcement
+[scheduler-announcements] timing-immediate-result guild=youtiful-edit-announcements-1795559251408 event=75 channel=cinema posted=true
+[scheduler-announcements] timing-submit guild=announcement-series-ux-1795559251435 eventIds=88,89,90,91,92,93 selected=86400 channel=cinema
+Schedule Manager interaction failed: Error: simulated Discord update failure
+    at Object.update (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:543:56)
+    at handleManagerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:3466:23)
+    at handleEventSchedulerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:2739:13)
+    at TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:1576:9)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+[scheduler-reconciliation] create-received guild=native-race-1795559251472 event=native-race-event
+[scheduler-reconciliation] create-ignored guild=native-race-1795559251472 event=native-race-event reason=linked
+[scheduler-reconciliation] create-received guild=native-race-1795559251472 event=native-pending-event
+[scheduler-reconciliation] create-ignored guild=native-race-1795559251472 event=native-pending-event reason=pending-harmony-create
+[scheduler-reconciliation] create-received guild=native-first-1795559251474 event=discord-first-event
+[scheduler-reconciliation] payload-built guild=native-first-1795559251474 event=discord-first-event candidates=2
+[scheduler-reconciliation] configured-channel guild=native-first-1795559251474 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-first-1795559251474 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-first-1795559251474 event=discord-first-event channel=control
+[scheduler-reconciliation] send-succeeded guild=native-first-1795559251474 event=discord-first-event channel=control message=notice-1
+[scheduler-reconciliation] create-received guild=native-first-1795559251474 event=discord-first-event
+[scheduler-reconciliation] create-ignored guild=native-first-1795559251474 event=discord-first-event reason=already-reconciled
+[scheduler-reconciliation] listeners-registered create=guildScheduledEventCreate update=guildScheduledEventUpdate delete=guildScheduledEventDelete intents=unknown
+[scheduler-reconciliation] create-received guild=native-listener-1795559251477 event=manual-native
+[scheduler-reconciliation] payload-built guild=native-listener-1795559251477 event=manual-native candidates=0
+[scheduler-reconciliation] configured-channel guild=native-listener-1795559251477 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-listener-1795559251477 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-listener-1795559251477 event=manual-native channel=control
+[scheduler-reconciliation] send-succeeded guild=native-listener-1795559251477 event=manual-native channel=control message=notice-1
+[scheduler-reconciliation] create-received guild=native-listener-1795559251477 event=linked-native
+[scheduler-reconciliation] create-ignored guild=native-listener-1795559251477 event=linked-native reason=linked
+[scheduler-reconciliation] configured-channel guild=discord-recurring-cancel-out-of-scope-1795559251598 channel=none guild-resolved=false
+[scheduler-announcements] immediate-sent event=42 channel=cinema message=announcement
+Immediate calendar announcement failed for event 42: Error: missing Send Messages
+    at Object.send (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:2248:95)
+    at sendImmediateCalendarAnnouncement (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:749:32)
+    at TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:2249:22)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+[scheduler-announcements] immediate-unavailable event=42 channel=unresolved
+[scheduler-announcements] immediate-sent event=43 channel=target message=message-1
+[scheduler-announcements] immediate-unconfirmed event=43 expectedChannel=target returnedMessage=message-2 returnedChannel=other
+[scheduler-announcements] immediate-unconfirmed event=43 expectedChannel=target returnedMessage=none returnedChannel=unknown
+[scheduler-reconciliation] create-received guild=native-review-1795559251604 event=private-review-event
+[scheduler-reconciliation] payload-built guild=native-review-1795559251604 event=private-review-event candidates=1
+[scheduler-reconciliation] configured-channel guild=native-review-1795559251604 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-1795559251604 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-review-1795559251604 event=private-review-event channel=control
+[scheduler-reconciliation] send-succeeded guild=native-review-1795559251604 event=private-review-event channel=control message=review-notice
+[scheduler-reconciliation] configured-channel guild=native-review-1795559251604 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-1795559251604 channel=control resolved=true text-based=true
+[scheduler-reconciliation] create-received guild=native-review-actions-1795559251608 event=private-add-event
+[scheduler-reconciliation] payload-built guild=native-review-actions-1795559251608 event=private-add-event candidates=0
+[scheduler-reconciliation] configured-channel guild=native-review-actions-1795559251608 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-actions-1795559251608 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-review-actions-1795559251608 event=private-add-event channel=control
+[scheduler-reconciliation] send-succeeded guild=native-review-actions-1795559251608 event=private-add-event channel=control message=notice-1
+[scheduler-reconciliation] configured-channel guild=native-review-actions-1795559251608 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-actions-1795559251608 channel=control resolved=true text-based=true
+[scheduler-reconciliation] create-received guild=native-review-actions-1795559251608 event=private-ignore-event
+[scheduler-reconciliation] payload-built guild=native-review-actions-1795559251608 event=private-ignore-event candidates=0
+[scheduler-reconciliation] configured-channel guild=native-review-actions-1795559251608 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-actions-1795559251608 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-review-actions-1795559251608 event=private-ignore-event channel=control
+[scheduler-reconciliation] send-succeeded guild=native-review-actions-1795559251608 event=private-ignore-event channel=control message=notice-2
+[scheduler-reconciliation] configured-channel guild=native-review-actions-1795559251608 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-actions-1795559251608 channel=control resolved=true text-based=true
+[scheduler-reconciliation] create-received guild=native-add-announcements-1795559251611 event=native-add-announcements
+[scheduler-reconciliation] payload-built guild=native-add-announcements-1795559251611 event=native-add-announcements candidates=0
+[scheduler-reconciliation] configured-channel guild=native-add-announcements-1795559251611 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-add-announcements-1795559251611 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-add-announcements-1795559251611 event=native-add-announcements channel=control
+[scheduler-reconciliation] send-succeeded guild=native-add-announcements-1795559251611 event=native-add-announcements channel=control message=reconciliation-notice
+[scheduler-reconciliation] configured-channel guild=native-add-announcements-1795559251611 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-add-announcements-1795559251611 channel=control resolved=true text-based=true
+[scheduler-announcements] timing-submit guild=native-add-announcements-1795559251611 eventIds=133 selected=now,604800,259200,86400,3600 channel=cinema
+[scheduler-announcements] immediate-sent event=133 channel=null message=immediate-announcement
+[scheduler-announcements] timing-immediate-result guild=native-add-announcements-1795559251611 event=133 channel=cinema posted=true
+[scheduler-reconciliation] create-received guild=native-link-announcements-1795559251617 event=native-link-announcements
+[scheduler-reconciliation] payload-built guild=native-link-announcements-1795559251617 event=native-link-announcements candidates=1
+[scheduler-reconciliation] configured-channel guild=native-link-announcements-1795559251617 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-link-announcements-1795559251617 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-link-announcements-1795559251617 event=native-link-announcements channel=control
+[scheduler-reconciliation] send-succeeded guild=native-link-announcements-1795559251617 event=native-link-announcements channel=control message=reconciliation-notice
+[scheduler-reconciliation] configured-channel guild=native-link-announcements-1795559251617 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-link-announcements-1795559251617 channel=control resolved=true text-based=true
+[scheduler-announcements] timing-submit guild=native-link-announcements-1795559251617 eventIds=134 selected=now,604800,259200,86400,3600 channel=server-updates
+Immediate calendar announcement failed for event 134: Error: missing Send Messages
+    at Object.send (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:2425:96)
+    at sendImmediateCalendarAnnouncement (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:749:32)
+    at handleManagerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:3691:33)
+    at handleEventSchedulerInteraction (/workspace/scratch/01797b5ba51c/Harmony/src/services/eventSchedulerService.js:2739:13)
+    at TestContext.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/test/eventSchedulerService.test.js:2445:9)
+    at async Test.run (node:internal/test_runner/test:1409:7)
+    at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+[scheduler-announcements] timing-immediate-result guild=native-link-announcements-1795559251617 event=134 channel=server-updates posted=false
+[scheduler-reconciliation] create-received guild=native-review-multiple-1795559251622 event=multiple-review-event
+[scheduler-reconciliation] payload-built guild=native-review-multiple-1795559251622 event=multiple-review-event candidates=2
+[scheduler-reconciliation] configured-channel guild=native-review-multiple-1795559251622 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-multiple-1795559251622 channel=control resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-review-multiple-1795559251622 event=multiple-review-event channel=control
+[scheduler-reconciliation] send-succeeded guild=native-review-multiple-1795559251622 event=multiple-review-event channel=control message=multiple-review-notice
+[scheduler-reconciliation] configured-channel guild=native-review-multiple-1795559251622 channel=control guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-review-multiple-1795559251622 channel=control resolved=true text-based=true
+[scheduler-reconciliation] configured-channel guild=native-link-timezone-1795559251625 channel=none guild-resolved=true
+[scheduler-reconciliation] create-received guild=native-config-1795559251628 event=manual-config-event
+[scheduler-reconciliation] payload-built guild=native-config-1795559251628 event=manual-config-event candidates=0
+[scheduler-reconciliation] configured-channel guild=native-config-1795559251628 channel=none guild-resolved=true
+[scheduler-reconciliation] create-stopped guild=native-config-1795559251628 event=manual-config-event reason=channel-unavailable
+[scheduler-reconciliation] create-received guild=native-config-1795559251628 event=manual-config-event-1
+[scheduler-reconciliation] payload-built guild=native-config-1795559251628 event=manual-config-event-1 candidates=0
+[scheduler-reconciliation] configured-channel guild=native-config-1795559251628 channel=first guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-config-1795559251628 channel=first resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-config-1795559251628 event=manual-config-event-1 channel=first
+[scheduler-reconciliation] send-succeeded guild=native-config-1795559251628 event=manual-config-event-1 channel=first message=first-notice
+[scheduler-reconciliation] create-received guild=native-config-1795559251628 event=manual-config-event-2
+[scheduler-reconciliation] payload-built guild=native-config-1795559251628 event=manual-config-event-2 candidates=0
+[scheduler-reconciliation] configured-channel guild=native-config-1795559251628 channel=second guild-resolved=true
+[scheduler-reconciliation] channel-resolved guild=native-config-1795559251628 channel=second resolved=true text-based=true
+[scheduler-reconciliation] send-attempt guild=native-config-1795559251628 event=manual-config-event-2 channel=second
+[scheduler-reconciliation] send-succeeded guild=native-config-1795559251628 event=manual-config-event-2 channel=second message=second-notice
+[scheduler-reconciliation] configured-channel guild=native-add-1795559251632 channel=none guild-resolved=true
+[scheduler-reconciliation] configured-channel guild=native-description-1795559251634 channel=none guild-resolved=true
+[scheduler-reconciliation] configured-channel guild=native-adoption-scope-1795559251636 channel=none guild-resolved=true
+[scheduler-reconciliation] configured-channel guild=native-description-series-1795559251639 channel=none guild-resolved=true
+[scheduler-reconciliation] configured-channel guild=native-cutoff-dst-1795559251662 channel=none guild-resolved=true
+[scheduler-reconciliation] configured-channel guild=native-announcement-scope-1795559251676 channel=none guild-resolved=true
+[scheduler-announcements] timing-submit guild=native-announcement-scope-1795559251676 eventIds=158,159,160 selected=86400 channel=announcements
+[scheduler-announcements] immediate-sent event=1 channel=cinema message=msg
+✔ Youtiful Stays event types use the approved custom emoji set (2.24555ms)
+✔ Youtiful Stays calendar renders compact channel rows and native links (13.21369ms)
+✔ Youtiful birthday calendar entries are informational and never mention members (2.529256ms)
+✔ published Youtiful dates use the event instant in the local presentation timezone (2.042996ms)
+✔ published Youtiful month selection uses local dates without mutating event_at (5.567185ms)
+✔ Interested state uses Discord Scheduled Event subscriber capabilities (0.199159ms)
+✔ saved Youtiful Stays titles support add, rename, remove, defaults, and guild isolation (0.687282ms)
+✔ reminder selection persists and removal cancels it (0.691989ms)
+✔ Interested reminder selection supports multiple offsets without duplicates (0.965549ms)
+✔ parses several announcements for one event and one link (1.23256ms)
+✔ converts Eastern standard and daylight times correctly (0.448633ms)
+✔ rejects impossible local dates and malformed schedule lines (0.595664ms)
+✔ renders categorized timed and all-day events without fake midnight times (0.91294ms)
+✔ splits busy calendars below Discord's content limit (4.6512ms)
+✔ calendar cards keep title primary, optional metadata secondary, and add Shopping / Pop-Up (0.470836ms)
+✔ timed calendar cards use one localized date token and a time-only token (0.638809ms)
+✔ manager drafts support optional links and all-day events without midnight (0.468964ms)
+✔ Stray Kids uses explicit IANA timezone choices, optional location, and preserves all-day compatibility (0.525609ms)
+✔ calendar-only all-day events with blank location save without a timezone (0.397196ms)
+✔ manager drafts use explicit Youtiful timezones and separate description plus link (0.529165ms)
+✔ Youtiful timed drafts persist an explicit end time (0.627141ms)
+✔ explicit end time survives scheduled event storage (0.344918ms)
+✔ blank end time retains the safe one-hour native default (0.421072ms)
+✔ end times crossing midnight use the following local calendar date (0.716996ms)
+✔ an end time cannot be supplied for an all-day event (0.237887ms)
+✔ editing a linked event synchronizes its explicit native end time (0.294512ms)
+✔ adopted native description edits stay Harmony-only (0.523917ms)
+✔ native sync includes entity metadata for External scheduled events (0.198658ms)
+✔ native sync omits unsupported entity metadata for Voice scheduled events (0.205818ms)
+✔ manager drafts resolve common worldwide city and country locations deterministically (2.941374ms)
+✔ manager description input supports description-only, link-only, and legacy timezone events (0.691958ms)
+✔ manager panels stay scoped to their calendar (1.594653ms)
+✔ calendar discovery controls persist toggle state and report status (7.10327ms)
+✔ manager modals allow blank optional fields (0.575243ms)
+✔ outer scheduler routing accepts Birthday Manager user and role selectors (2.448975ms)
+✔ timed calendar dates preserve the entered year through storage and rendering (1.957798ms)
+✔ add event follows category-first interaction flow and saves without a second category step (2.468715ms)
+✔ Stray Kids member selection persists and renders exact Harmony emoji, while community stays undecorated (2.61882ms)
+✔ edit event keeps friendly category changes and editable links (9.181829ms)
+✔ preselected Stray Kids edit values can be kept through every selector (4.35766ms)
+✔ preselected Youtiful edit values can be kept without changing the event (3.833163ms)
+✔ expired Keep Current edit controls fail safely (0.382614ms)
+✔ both managers use one control channel, reuse panels, and recreate deleted panels (2.029907ms)
+✔ startup refresh updates only already-configured manager panels (1.164117ms)
+✔ startup refresh does not create panels for an unconfigured manager (0.185018ms)
+✔ startup refresh skips stale references without creating messages (1.062554ms)
+✔ startup refresh edit failures are nonfatal (0.596715ms)
+✔ published calendars still target public calendar channels (0.694372ms)
+✔ adding events refreshes the existing published calendar without duplicating it (4.815587ms)
+✔ manager Add Event refreshes publication and View Preview uses one acknowledged interaction (10.4018ms)
+✔ Youtiful create and edit modals use a timezone step instead of Location or End Time (2.354784ms)
+✔ Youtiful timezone choices store IANA zones and enforce timed/all-day rules (0.504868ms)
+✔ Youtiful recurrence rules generate bounded occurrences with DST-safe wall-clock times (1.538418ms)
+✔ Youtiful channel selection advances to native-event choice and remains acknowledged (1.900913ms)
+✔ Youtiful Add offers announcements exactly once, only after native-event choice (7.271804ms)
+✔ Youtiful edit panel persists details, timezone, type, and channel independently (13.674071ms)
+✔ past linked Discord occurrences are excluded from the normal Edit selector (0.706911ms)
+✔ Youtiful edit announcements enter the canonical timing flow and deliver Announce Now to Cinema (5.646364ms)
+✔ Youtiful Other / Custom remains a one-off title (1.732981ms)
+✔ Youtiful recurring Add Event stores a bounded series of occurrences (9.805786ms)
+✔ Youtiful recurring edits support this, future, and entire-series scopes (6.774737ms)
+✔ announcement setup carries the original recurring edit scope without a second scope prompt (3.115846ms)
+✔ recurring announcement UX offers only event/series scopes and uses separate paged occurrence fields (22.933276ms)
+✔ series announcements allow all individual messages without a generic fallback and reject uncovered dates (10.867009ms)
+✔ unexpected Schedule Manager interaction failures are logged and acknowledged (2.296857ms)
+✔ explicit Youtiful edit timezone cannot fall back to legacy data (0.324457ms)
+✔ legacy Youtiful location/timezone data remains editable without changing Stray Kids location behavior (0.770086ms)
+✔ Harmony-created native events are ignored by inbound reconciliation (1.678409ms)
+✔ Discord-first reconciliation is informative, deduplicated, and distinguishes repeated titles (2.789998ms)
+✔ registered Discord Scheduled Event listener reconciles manual events and suppresses linked events (1.512409ms)
+✔ Find Discord Event lists existing native events and opens the existing reconciliation review (1.376867ms)
+✔ Find Discord Event routes Add to Calendar into canonical announcements without replacing the native event (4.603278ms)
+✔ Find Discord Event keeps the already linked response for a genuine one-off event (1.035103ms)
+✔ Find Discord Event upgrades a linked legacy one-off into a native recurring series and repairs it idempotently (41.215213ms)
+✔ Find Discord Event repairs stale projected calendar rows and publishes visible K-Drama occurrences (50.593659ms)
+✔ Find Discord Event reports an error instead of success when Discord recurrence projects zero occurrences (1.196555ms)
+✔ native repair preserves a Harmony cutoff that still includes the Discord anchor (3.104419ms)
+✔ Find Discord Event repairs missing projections on an already linked native series (10.340068ms)
+✔ Find Discord Event reopens a previously reviewed but unlinked native event (0.909455ms)
+✔ Discord cancellation of a linked one-off cancels Harmony work and leaves unrelated reminders untouched (2.491289ms)
+✔ Discord deletion cancels a linked one-off idempotently without a notice or replacement (1.503026ms)
+✔ Harmony-originated cancellation keeps its linkage and produces no duplicate lifecycle behavior (1.452199ms)
+✔ one-off lifecycle cancellation does not affect Discord recurring series (1.307151ms)
+✔ current Schedule Manager cancellation stays private and suppresses its native deletion notice (2.180011ms)
+✔ announcement destination picker allows GuildVoice but not Stage, and immediate delivery reports failures (1.696436ms)
+✔ immediate announcement requires positive delivery evidence in the selected channel (0.308913ms)
+✔ Review Event keeps reconciliation controls private and stale reviewers are blocked (3.335065ms)
+✔ Review Event Add to Calendar and Ignore remain private and durable (3.742687ms)
+✔ reconciliation Add to Calendar enters the canonical announcement flow (5.875989ms)
+✔ reconciliation Link Existing enters the canonical flow and preserves future schedules on Announce Now failure (4.34417ms)
+✔ multiple Review Event matches open the private candidate selector only after Link Existing (3.853103ms)
+✔ linking an existing one-off Harmony event requires timezone confirmation (2.31228ms)
+✔ Discord-first reconciliation uses only the configured channel and fails closed when unset (1.263546ms)
+✔ Youtiful announcement schedules are independent, multi-selectable, and cancelled safely (1.166921ms)
+✔ legacy offset zero never becomes an automatic starting-now announcement and custom copy survives rebuild (1.498028ms)
+✔ Add to Calendar links the existing Discord event without creating another native event (2.392731ms)
+✔ Discord adoption starts with a blank Harmony-only description without editing Discord (2.028274ms)
+✔ recurring Discord adoption first offers only this event or entire series (2.255394ms)
+✔ recurring Discord adoption uses separate paged Harmony descriptions for each occurrence (15.335174ms)
+✔ native recurring import cutoff bounds projection and can be extended without duplicates (5.601746ms)
+✔ recurring import description pages stop at the selected Harmony cutoff (2.274884ms)
+✔ native recurring cutoff uses the local calendar date across the DST boundary (11.271085ms)
+✔ native cutoff comparisons use localized dates and preserve UTC instants (2.432821ms)
+✔ recurring native import hands the complete bounded series to announcements (16.890108ms)
+✔ native series announcements use only the bounded persisted recurrence timeline (4.985982ms)
+✔ native recurring evening occurrence keeps its Eastern local calendar date (1.895825ms)
+✔ native recurrence projection never regenerates a canceled occurrence (2.435325ms)
+✔ Choose an upcoming event excludes past linked occurrences but keeps current and future events (1.086611ms)
+✔ series announcement modal rebuilds occurrence fields from the persisted adopted series (2.188514ms)
+✔ native recurring labels use the community IANA timezone across the DST transition (1.234102ms)
+✔ fresh recurring adoption canonicalizes a stale series and hands only its bounded IDs to announcements (6.851372ms)
+✔ recurring adoption converts a prior adopted one-off instead of creating a duplicate anchor (25.368201ms)
+✔ monthly publication filters events to the requested month (1.218779ms)
+✔ editing recurring events updates existing rows and refreshes one published month (8.709811ms)
+✔ adopting a recurring occurrence already projected in Harmony reuses its series anchor (4.534024ms)
+✔ native adoption does not hijack an unrelated one-off event with the same title and time (1.091709ms)
+✔ all-day Stray Kids edit keeps the legacy timezone and reaches Shopping category (3.004458ms)
+✔ scheduled announcement countdown labels use the configured offset and preserve the announcement body (0.165799ms)
+✔ scheduled announcement offsets remain unchanged when countdown labels are generated (0.895875ms)
+✔ Discord recurrence rules expand into deterministic Harmony occurrences without native writes (0.142203ms)
+✔ Discord recurrence projection re-anchors arbitrary patterns to the selected occurrence (0.349254ms)
+✔ native recurring cutoff modal uses the approved series-end wording (1.021864ms)
+✔ independent native recurring intake workflows keep their own date timelines (8.676111ms)
+✔ adopted Discord recurring events project future calendar rows and reminders idempotently (7.638334ms)
+✔ Announce Now automatically sends exactly one real everyone mention (0.388363ms)
+✔ announcement timing keeps the event's non-midnight instant when subtracting offsets (0.133341ms)
+✔ calendar announcements include each event's localized timestamp (0.090156ms)
+✔ recurring occurrence message overrides survive projection and can return to the series default (6.399033ms)
+✔ occurrence override refreshes only pending reminder messages (0.861874ms)
+✔ adopted native presentation timezone persists across recurrence sync and series edits (5.537ms)
+✔ one-off adopted native event persists the selected presentation timezone without changing its instant (0.875685ms)
+✔ reconciliation channel setting persists independently from manager channel (4.535247ms)
+✔ calendar-only events do not require an announcement or link (1.655905ms)
+✔ recurring series cancellation can stop this-and-future without touching another series (1.188264ms)
+✔ /harmony-greetings preview remains private and blocks mention parsing (1.944358ms)
+✔ /harmony-greetings test still sends the entrance message and only pings the test user (1.419711ms)
+✔ /harmony-greetings off leaves the saved channel and messages intact (0.3731ms)
+✔ a cookie-authenticated Instagram result is preferred when a cookie file exists (6.934487ms)
+✔ non-Reel Instagram media keeps its existing public-first order (2.361474ms)
+Instagram yt-dlp cookie attempt failed.
+✔ Instagram falls back to public retrieval when the cookie attempt fails (353.507551ms)
+Instagram yt-dlp public fallback attempt failed.
+✔ Instagram does not attempt a cookie fallback when no cookie file is available (1.862235ms)
+✔ Instagram tries public retrieval after cookie output has no audio (353.068026ms)
+Instagram initial yt-dlp attempt produced video without verified audio; available formats: [{"id":"video-only","ext":"mp4","height":720,"video":"h264","audio":"none"}]
+Instagram download had no audio stream. Retrying with separate video and audio formats...
+Instagram audio retry failed during media processing.
+Instagram reel is usable as video, but no audio stream was verified.
+✔ Instagram keeps exact video when the IPv4 video+audio retry fails (443.063689ms)
+Instagram initial yt-dlp attempt produced video without verified audio; available formats: [{"id":"video-only","ext":"mp4","height":720,"video":"h264","audio":"none"}]
+Instagram download had no audio stream. Retrying with separate video and audio formats...
+Instagram audio retry failed during media processing.
+Instagram reel is usable as video, but no audio stream was verified.
+✔ Instagram /p/ posts keep the original video when a silent audio retry fails (354.445181ms)
+Instagram initial yt-dlp attempt produced video without verified audio; available formats: [{"id":"video-only","ext":"mp4","height":720,"video":"h264","audio":"none"}]
+Instagram download had no audio stream. Retrying with separate video and audio formats...
+Instagram separate-stream retry produced video without verified audio; available formats: [{"id":"retry-video","ext":"mp4","height":720,"video":"h264","audio":"none"}]
+Instagram audio retry produced a usable video without audio; keeping the video.
+Instagram reel is usable as video, but no audio stream was verified.
+✔ Instagram accepts a video-only output from the IPv4 video+audio retry (353.736787ms)
+Instagram yt-dlp merge failed; preserving a verified downloaded video for recovery.
+Instagram initial yt-dlp attempt produced video without verified audio; available formats: [{"id":"video","ext":"mp4","height":720,"video":"h264","audio":"none"}]
+Instagram download had no audio stream. Retrying with separate video and audio formats...
+Instagram audio retry failed during media processing.
+Instagram reel is usable as video, but no audio stream was verified.
+✔ Instagram keeps a verified retained video when yt-dlp merge fails (352.774056ms)
+✔ Instagram rejects yt-dlp output whose filename does not match the requested shortcode (1.254112ms)
+Instagram gallery-dl is continuing without cookies.
+✔ Instagram gallery-dl recovery also accepts a usable video without audio (304.778491ms)
+Instagram falling back to gallery-dl for the exact post.
+✔ Instagram uses gallery-dl video when yt-dlp has no usable video (717.100584ms)
+✔ yt-dlp format diagnostics expose only safe format fields, never media URLs (0.609605ms)
+Instagram falling back to gallery-dl for the exact post.
+✔ Instagram proceeds from silent yt-dlp and gallery results to exact browser audio recovery (704.598545ms)
+Instagram falling back to gallery-dl for the exact post.
+✔ Instagram returns the first verified silent video only after all audio recovery paths fail (703.868989ms)
+Instagram falling back to gallery-dl for the exact post.
+✔ Instagram reel login/audience walls keep socialAuthFailureKind after later fallbacks fail (719.454047ms)
+Instagram falling back to gallery-dl for the exact post.
+✔ Instagram reel rate limits alone do not become cookie auth failures (704.522882ms)
+✔ calendar slash interface exposes review and reconciliation without a manager panel (1.600553ms)
+✔ slash candidate review opens the same existing review actions (27.740089ms)
+✔ slash Discord-event reconciliation opens the existing link/add/ignore workflow (1.490016ms)
+✔ opening the manager is read-only and shows global inbox and monitor state without secrets (4.533896ms)
+✔ global inbox destination is displayed while off and On restores it without changing the destination (1.150237ms)
+✔ changing the inbox tests posting before save and failed tests preserve the old destination (4.210731ms)
+✔ Send Test uses the saved global error-inbox behavior (1.024488ms)
+✔ monitor toggle validates configuration, keeps reports private, and Off preserves settings semantics (2.012561ms)
+✔ Forget Shared Post modal uses the slash command resolver and removal behavior (2.931641ms)
+✔ Forget Shared Post resolver retains all six supported platforms (1.034373ms)
+✔ manager stale-session protection and Close work without changing global configuration (6.807358ms)
+✔ expired manager sessions are rejected after fifteen minutes (0.576705ms)
+✔ the three established slash commands remain registered and functional (1.822345ms)
+◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+[scheduler-reconciliation] listeners-registered create=guildScheduledEventCreate update=guildScheduledEventUpdate delete=guildScheduledEventDelete intents=98819
+Greeting join event received: Human in Test guild
+Greeting skipped: greetings are not configured or are off.
+Greeting join event received: Human in Test guild
+Greeting skipped: greetings are not configured or are off.
+Greeting join event received: Human in Test guild
+Greeting skipped: greetings are not configured or are off.
+Greeting join event received: Bot in Test guild
+Greeting skipped: joining account is a bot.
+✔ human join packets count before ready and every leave and rejoin counts for the same member (196.209268ms)
+✔ social health signals survive a database close and status-service reload (24.642892ms)
+✔ expired persisted success returns Unable to Verify after restart (6.916239ms)
+✔ legacy unclassified session failure is not presented as a cookie diagnosis (8.87552ms)
+✔ checkpoint state survives restart and ordinary success does not clear it (3.512912ms)
+✔ social health persistence stores only allowlisted state and normalized timestamps (0.742604ms)
+✔ fresh status reports healthy Discord and database checks independently (2.139681ms)
+✔ a failed check does not prevent other systems from rendering (1.85276ms)
+✔ unconfigured session is reported honestly and only structured auth evidence requests refresh (1.130516ms)
+✔ anonymous Instagram success cannot clear a stale cookie failure; authenticated evidence can (0.616976ms)
+✔ Facebook authenticated exact-post media delivery failures do not mark cookies bad; explicit auth failures do (3.925711ms)
+✔ session file presence never exposes its path or contents or claims authentication (0.762254ms)
+✔ explicit Facebook and Instagram verification persist verified healthy state across service reload (6.037781ms)
+✔ indeterminate verification stays unknown and does not infer cookie failure (0.884086ms)
+✔ live verification distinguishes rejected session from security checkpoint (5.877611ms)
+✔ verification cooldown prevents repeated provider checks and missing sessions remain unconfigured (0.644758ms)
+✔ secure refresh records an explicit verified checkpoint and legacy media success is not enough for cookie services (1.033411ms)
+✔ Manage Server admins can refresh credentials while owner diagnostics remain owner-only (0.585428ms)
+✔ owner capability refreshes guild metadata when the interaction guild lacks ownerId (0.309244ms)
+✔ harmony-status resolves a guild owner before rendering session-refresh guidance (3.455796ms)
+✔ Status / Health button uses the same refreshed guild-owner authorization (1.864118ms)
+✔ regular-admin Status shows each platform as simple dashboard lights while owner diagnostics stay detailed (15.510808ms)
+✔ authorized admins receive secure cookie controls for explicit expiry, ordinary members do not (1.063666ms)
+✔ cookie expiry wording is consistent across refreshable platforms and checkpoints stay distinct (0.627582ms)
+✔ disabled discovery and Guard are neutral while enabled faults remain attention states (1.317357ms)
+✔ owner diagnostics component rejects credential managers and regular admins server-side (0.400271ms)
+✔ Verify Social Sessions component rechecks admin permission server-side (0.288904ms)
+✔ authorized admin Verify button returns a safe unconfigured result without exposing paths or secrets (2.419281ms)
+✔ a replacement bypasses the old session cooldown and an inconclusive check supersedes its warning (4.395236ms)
+social_session_verify {"service":"youtube","decision":"AUTHENTICATED"}
+social_session_verify {"service":"instagram","decision":"AUTHENTICATED"}
+social_session_verify {"service":"threads","decision":"AUTHENTICATED"}
+✔ Verify and Refresh Status acknowledge first and check active provider sessions (329.006973ms)
+✔ Guard status includes monitoring, active rules, and Review Room visibility (0.794643ms)
+✔ status response is ephemeral and includes a fresh-check control without secrets (0.523045ms)
+✔ Status / Health is omitted from both separate Schedule Managers (0.507271ms)
+✔ status check audit stores actor and outcome without secret fields (2.009896ms)
+✔ Radar migration preserves populated Harmony settings, history and calendar records, idempotently (20.874137ms)
+✔ observation identity, edit detection and undated Unknown discoveries retain decisions (21.767577ms)
+✔ observations can exist without Radar discoveries for future member feeds (0.718278ms)
+✔ canonical primary video identity correlates sources; generic names do not (3.427924ms)
+✔ initialization captures seven days once, uses overlap after restart and isolates source failures (5.453784ms)
+✔ source failures preserve ignored records, boundaries and other source state (1.357287ms)
+✔ JYPE collapses desktop/mobile entries and preserves detail images and edits (13.84018ms)
+✔ YouTube uses verified channel/video IDs and reports finite feed coverage (9.218485ms)
+✔ Sony parses JSONP as data, keeps Japanese text and pages to the history boundary (13.047029ms)
+✔ HTTP safeguards block unexpected redirects and bound upstream bodies (3.733663ms)
+✔ delivery edits the same message, recovers a pending send and preserves decisions after restart (42.503838ms)
+✔ delivery permission failures retain data; moving channels and off/on use configured destinations (4.321926ms)
+✔ calendar handoff requires details and target admin access and never publishes automatically (4.016067ms)
+✔ review components authorize in the configured Harmony channel and persist Ignore/Watching (4.941896ms)
+✔ setup rejects unusable channels and saves three official sources only after authorization (0.856746ms)
+✔ canonical aliases deduplicate within a source without merging unrelated accounts (1.771889ms)
+✔ initialization failure retains its original seven-day boundary when retried after restart (3.130519ms)
+✔ simultaneous checks coalesce and a paused source does not poll (0.857717ms)
+✔ setup configures the Harmony channel, polls all three sources and emits review cards (13.906761ms)
+✔ ordinary members and stale destination components cannot change a Radar discovery (0.935474ms)
+✔ calendar target changes preserve the Radar pause state (0.280431ms)
+✔ handoff handles candidate:null and retains the existing published event's actual date (3.960063ms)
+✔ handoff retains canonical existing candidate details instead of the submitted conflicting date (1.665459ms)
+✔ concurrent/restarted handoff and changed target/details cannot rewrite the completed relationship (3.599662ms)
+✔ crash between calendar write and Radar save reuses the persisted target/input (3.985942ms)
+✔ stale/replayed modal and review buttons cannot reset a completed handoff (3.832672ms)
+✔ failed handoff does not resolve the discovery or fabricate missing dates (1.076966ms)
+✔ incidental, promotional and uncertain YouTube links never correlate article discoveries (1.868745ms)
+✔ packaging announcement linking an Ignored MV gets its own Needs Review discovery (1.278349ms)
+✔ changed primary video identity retires stale correlation and preserves old decisions/evidence (1.531709ms)
+✔ removing primary identity does not leave a correlation key or copy the old decision (1.558318ms)
+✔ shared primary identity retains a key while another active observation still proves it (1.690046ms)
+✔ old watched JYPE notice is revisited directly; normal traversal never widens into intervening history (12.668642ms)
+✔ JYPE budgets persist partial details and resume after restart without skipping backlog or new head (68.195123ms)
+✔ Sony pagination resumes beyond the old cap with a bounded per-cycle budget (131.393437ms)
+✔ a budgeted/slow first source cannot block a healthy source or pending Discord delivery (26.367461ms)
+✔ watched revisit failures do not discard healthy normal discovery and unsupported history is surfaced (2.181563ms)
+✔ HTTP work budget bounds redirect requests and exhausted work makes no network request (0.347832ms)
+✔ unchanged deleted card recovers on periodic existence check without requests on every pass (4.888736ms)
+✔ pending card recovery paginates and resumes history across restart without duplicate sends (8.207588ms)
+✔ deleted card replacement crash is recoverable and permission errors never trigger a blind replacement (7.459865ms)
+✔ Retry-After greater than 24 hours is honored and blocks early subsequent polling (0.656785ms)
+✔ HTTP Retry-After numeric and HTTP-date values survive parsing without a 24-hour clamp (0.517336ms)
+✔ unauthorized slash setup is rejected server-side before channel lookup, persistence or polling (0.279569ms)
+✔ resumed empty history followed by a send/save crash restarts recovery at the head (7.455469ms)
+✔ periodic existence checks force a Discord request instead of trusting a cached message (2.701664ms)
+✔ opening private calendar review does not resolve or create a candidate (3.938641ms)
+✔ Radar column upgrades preserve existing Radar records and work references (35.072785ms)
+✔ watched direct-detail rotation persists across restarts and reaches every old item (14.640871ms)
+✔ failed first source leaves a later healthy source and owner decisions intact (3.363418ms)
+✔ ignored article keeps its decision through alias changes, edits and extra supporting evidence (2.649616ms)
+✔ authorized non-owner admin can configure Radar through slash setup (2.43164ms)
+✔ existence-check budget is fair across many cards and never hides newly discovered cards (799.34959ms)
+✔ malformed Retry-After values do not overflow the clock or cause immediate retries (2.153932ms)
+✔ a long resumed traversal cannot advance coverage past its starting head snapshot (35.490392ms)
+✔ an exact former primary identity returning after an edit restores its own Ignored decision (2.01191ms)
+✔ Radar date-only handoff carries explicit existing all-day metadata with no invented time or timezone (11.408471ms)
+✔ Radar timed handoff preserves explicitly entered time/timezone and never infers missing timing (8.6425ms)
+✔ date-only Radar handoff cannot relabel an existing canonical timed candidate as all-day (1.413451ms)
+✔ calendar modal prefills only explicit unambiguous original timing and keeps date-only precision (3.443918ms)
+✔ unknown, multiple, incomplete and publication-only dates never invent modal timing (0.37282ms)
+✔ owner-corrected handoff reaches existing target Schedule Manager inbox without publication (9.693047ms)
+✔ already-persisted Radar candidate is visible without a new submission or notice (0.989996ms)
+✔ timed Radar candidate is visible in existing review with canonical time and timezone preserved (3.401224ms)
+✔ footer-free Radar controls recover delivery after a send/save crash without exposing internal IDs (5.194295ms)
+✔ legacy ID footers remain recoverable and normal reconciliation edits the existing card in place (2.036066ms)
+✔ youtube-uploads renders an announcement-first card with publisher, explanation and original link (36.989452ms)
+✔ jype-notice renders an announcement-first card with publisher, explanation and original link (2.658921ms)
+✔ sony-info renders an announcement-first card with publisher, explanation and original link (2.615415ms)
+✔ enormous source, evidence, image and markdown stay persisted but cannot inflate Discord output (43.337168ms)
+✔ official event timing is readable, retains meaning and does not invent time or timezone (11.137435ms)
+✔ publication stays publication, including a future publication timestamp (2.75215ms)
+✔ English has no translation action, foreign content has one, and rendering cannot invoke a provider (17.422296ms)
+✔ missing image text has a conservative explanation and safe source action (1.735865ms)
+✔ invalid or oversized source URLs cannot make the Discord payload invalid (3.348475ms)
+✔ decision preview leads with actual source title and useful text: I.N "NO RETURN" | [Stray Kids : SKZ-PLAYER] (1.953181ms)
+✔ decision preview leads with actual source title and useful text: 新曲リリースのお知らせ (2.107793ms)
+✔ decision preview leads with actual source title and useful text: 스트레이 키즈 신곡 공개 (2.287163ms)
+✔ known album release date and missing time are explicit, publication is secondary and date-only (3.366482ms)
+✔ already-published YouTube content never promotes publication into a calendar date (2.387973ms)
+✔ canonical date does not acquire a guessed meaning from category alone (4.014194ms)
+✔ date meaning uses its own source sentence and competing meanings stay unresolved (4.06474ms)
+✔ explicit translation changes only title/preview; its proposed dates cannot replace source timing (4.460004ms)
+✔ bare year, year-month and incomplete event_at cannot invent modal dates or times (13.079388ms)
+✔ complete canonical dates and exact instants still prefill, unknown time and timezone remain blank (3.416697ms)
+✔ source partial dates and publication dates leave unknown calendar timing explicit (10.591695ms)
+✔ past release and future concert statuses rely on source dates, not publication or category (5.760315ms)
+✔ date-only boundary-day timing is not declared upcoming or past using a guessed timezone (1.269125ms)
+✔ private review shows stored source, bounded longer preview, image, publisher and separate publication without requests or candidates (48.67613ms)
+✔ YouTube review derives only a trusted thumbnail and labels published content without prefilling its publication date (25.376824ms)
+✔ complete prefill is allowed, partial dates and unknown timezone/time stay blank (15.014813ms)
+✔ owner edits every field, type uses scheduler options, and refresh/reopening/source changes preserve the private draft (23.698927ms)
+✔ explicit cached/coalesced translation updates same review without overwriting manually entered calendar values (33.274437ms)
+✔ send enters existing review with exact owner title/notes/category/timing, requires approval, and replay cannot rewrite or duplicate it (31.065862ms)
+✔ missing date and timezone prevent final send, while a date-only entry remains date-only (17.679152ms)
+✔ actor, permissions, channel, modal revision and expiration are checked server-side; cancel creates nothing (20.509349ms)
+✔ an independently completed handoff shows actual canonical values rather than rewriting or claiming a stale draft (15.94488ms)
+✔ failed/ambiguous handoff preserves a frozen retry through existing durable handoff state (19.525272ms)
+✔ revoked admin access and forged translation control are rejected for the same private draft (5.125983ms)
+✔ Radar inbox is a compact inbox rather than a calendar form, with existing source/actions intact (3.069217ms)
+✔ review translation failure leaves the draft editable and preserves owner values without a candidate (13.102784ms)
+✔ long Sony article is fully persisted but its Discord card is concise and links to the original (75.32221ms)
+✔ JYPE and YouTube observations retain complete normalized text beyond the former 6000-character cutoff (13.20016ms)
+✔ preview removes repeated raw URLs and track-list boilerplate without altering persisted links/content (3.715997ms)
+✔ confirmed timing is distinct from compacted publication/discovery metadata without raw ISO timestamps (5.004059ms)
+✔ classification: Stray Kids POPUP STORE 開催決定 → Pop-up (0.370466ms)
+✔ classification: SKZOO ポップアップストアのお知らせ → Pop-up (0.109033ms)
+✔ classification: 스트레이 키즈 팝업스토어 오픈 → Pop-up (0.169895ms)
+✔ classification: HAN 新曲『Solo』配信リリース決定 → Release (0.177566ms)
+✔ classification: 승민 신곡 음원 발매 안내 → Release (0.17992ms)
+✔ classification: Stray Kids JAPAN NEW ALBUM 発売決定 → Release (0.184076ms)
+✔ classification: 新专辑发行公告 → Release (0.138678ms)
+✔ classification: Stray Kids Making Movie 公開 → New Content (0.118197ms)
+✔ classification: 뮤직비디오 비하인드 영상 공개 → New Content (0.070145ms)
+✔ classification: ミュージックビデオ メイキング公開 → New Content (0.057386ms)
+✔ classification: SKZ CODE new episode → New Content (0.055503ms)
+✔ classification: New album listening party announced → Event (0.049614ms)
+✔ classification: リスニングパーティー開催決定 → Event (0.048313ms)
+✔ classification: Stray Kids VR LIVE 開催決定 → Event (0.045508ms)
+✔ classification: LISTENING PARTY 参加申込受付開始 → Ticketing (0.045668ms)
+✔ classification: VIP ticket applications open → Ticketing (0.044847ms)
+✔ classification: 公演のチケット先行受付開始 → Ticketing (0.103335ms)
+✔ classification: 콘서트 예매 접수 안내 → Ticketing (0.123626ms)
+✔ classification: SKZOO グッズ予約販売のお知らせ → Merch / Sale (0.178659ms)
+✔ classification: グッズの予約受付開始 → Merch / Sale (0.143255ms)
+✔ classification: Official merchandise preorder opens → Merch / Sale (0.104297ms)
+✔ classification: 準備中 — stay tuned → Unknown (0.183426ms)
+✔ classification: 公開しました → Unknown (0.058318ms)
+✔ incidental ticketing body/translated wording cannot override an ambiguous primary source title (0.174542ms)
+✔ reclassification of unchanged observations preserves discovery identity and Ignore/Watching/Resolved relationships (23.612902ms)
+✔ offline detection recognizes Japanese, Korean, Chinese, English and a non-CJK language (14.424538ms)
+✔ ja source gets English presentation while original source data remains unchanged (20.022088ms)
+✔ ko source gets English presentation while original source data remains unchanged (4.065672ms)
+✔ zh-Hans source gets English presentation while original source data remains unchanged (2.936767ms)
+✔ English observation never invokes the external translator (2.842466ms)
+✔ unchanged translations persist across restarts; material edits refresh without changing identity or decisions (15.6924ms)
+✔ boilerplate-only edits reuse bounded translation input without paying to translate it again (3.684189ms)
+✔ long provider output is bounded in Discord and translation input excludes enormous boilerplate (11.790575ms)
+✔ translation status/errors cannot create cross-source correlation (3.988656ms)
+✔ missing provider configuration falls back without external calls (6.622108ms)
+✔ failed translation still delivers original-language cards and never persists raw provider errors (5.47021ms)
+✔ a hung translator does not block polling, other sources or original delivery (8.966647ms)
+✔ translation completion edits the existing card, preserving Ignored state and delivery identity (4.620284ms)
+✔ Azure v3 uses English only, plain text, autodetection and header-only key/optional region (3.965742ms)
+✔ Provider rate limits share a cooldown and failed content is not retried on every poll (4.166333ms)
+✔ translation cache migration is additive/idempotent and preserves original records and owner state (13.255643ms)
+✔ translation-cache failure cannot prevent original Discord delivery (2.140292ms)
+✔ pending enrichment is labeled pending and failure is labeled unavailable (1.664979ms)
+✔ one slow non-English translation cannot block a different non-English translation (33.713445ms)
+✔ external request budget is bounded and resumes after the minute without repeating successful content (35.117432ms)
+✔ incomplete provider output falls back instead of labeling an empty result translated (3.000553ms)
+✔ full observation retention does not expand the existing discovery/calendar-note payload bound (2.55243ms)
+✔ a newly constructed worker reuses persisted translations after restart (10.744415ms)
+✔ pending translation leases prevent duplicate requests and expired work recovers after restart (4.129687ms)
+✔ a late translation of old content cannot become the current presentation after a source edit (4.012922ms)
+✔ image-only announcements retain the stored image while the channel stays compact (2.404468ms)
+✔ Azure plain text preserves literal characters without HTML interpretation (0.508223ms)
+✔ valid legacy Azure translations survive the switch without relabeling, requests or row changes (3.715136ms)
+✔ changed source cannot use stale Azure cache and receives a separate Azure result with the same discovery (3.986663ms)
+✔ failed legacy Google entries do not block Azure and completed Azure cache takes precedence (2.343727ms)
+✔ Azure errors retain existing sanitized HTTP/backoff contract without persisting response secrets (3.454194ms)
+✔ Azure malformed/oversized responses fail safely instead of generating a false translated result (1.493651ms)
+✔ YouTube preview suppresses hashtags, streaming URLs, social prompts and a repeated title before translation (0.29292ms)
+✔ generic titles classify from retained Japanese/Korean lead context and explicit Sony category (0.240491ms)
+✔ body content does not override a specific primary subject or use discarded legal/track context (0.15991ms)
+✔ Radar label and English announcement lead without technical review metadata (1.362194ms)
+✔ foreign fallback is compact and distinguishes not configured, pending and failure (4.849879ms)
+✔ candidate timing preserves event/release/application/deadline meaning without guessing dates (0.353791ms)
+✔ informational body timing never writes calendar truth or changes identity, support, decisions or delivery (16.452241ms)
+✔ classification scans bounded cleaned source context beyond presentation-selected sentences (0.648243ms)
+✔ late track/legal/application boilerplate cannot supply classification evidence (0.187351ms)
+✔ classification context is bounded independently of Discord preview limits (0.417687ms)
+✔ owner click translates once, edits the same message and preserves original/state/calendar relationships (12.468682ms)
+✔ non-owner administrators and unauthorized users cannot request translation; wrong channel rejected (1.047723ms)
+✔ concurrent owner clicks coalesce and report in-progress while no duplicate card is sent (5.445633ms)
+✔ automatic discovery/poll/startup/restart/refresh and expired leases never request translation (11.713399ms)
+✔ source edit during owner translation cannot publish stale English (7.83578ms)
+✔ Azure free-quota exhaustion is distinct, persists across restart and never auto-retries or falls back (11.483173ms)
+✔ explicit provider failure leaves card/source/owner decision intact and English sources need no button (6.020785ms)
+✔ valid Google cache is reused under Azure without a Google or Azure request (1.535204ms)
+✔ bounded translation includes late timing evidence and translated timing never becomes calendar truth (7.732324ms)
+✔ Google configuration and credentials can never activate new translation requests (2.300192ms)
+✔ owner-requested card update is not starved by the existing twenty-card delivery budget (186.121551ms)
+✔ legacy English-skip detection cannot trap a mixed Japanese title behind an untranslated button (2.39272ms)
+✔ short Latin-language input remains uncertain and offers owner-triggered translation (1.662906ms)
+✔ informational timing distinguishes an event's application deadline from release/event dates (0.145458ms)
+✔ ambiguous event mentions and competing timing meanings are omitted (0.184167ms)
+✔ clear deadline wording retains its subject in English, Japanese and Korean (0.20649ms)
+✔ timing correction leaves existing translation request/cache identity byte-stable (0.569274ms)
+✔ cached translated card fixes labels without modifying originals, decisions, cache, delivery or calendar truth (5.990841ms)
+✔ legacy appended Event evidence remains displayable when original source corroborates its meaning (0.324507ms)
+✔ owner timing addendum retains release/content date precision and opening/deadline semantics (0.196095ms)
+✔ Railway provider writes only the selected cookie variable with deploys skipped (4.322987ms)
+✔ Railway provider rejects unsupported variables and hides provider error details (0.843255ms)
+✔ Verify diagnostics allow only bounded status and category data and do not change decisions (4.185691ms)
+✔ an invalid Instagram identity setting emits a safe reason before any provider request (0.420171ms)
+✔ services become available independently only when their HTTPS, OAuth, rotation, and runtime inputs exist (1.294753ms)
+✔ owner and authorized server admins can request; ordinary members cannot (20.526365ms)
+✔ legacy refresh requests migrate additively to cookie-refresh purpose (14.451698ms)
+✔ credential manager role is honored by the shared capability model (0.292028ms)
+✔ production refresh remains unavailable and does not issue or persist a token (1.335144ms)
+✔ request is service/guild/actor scoped, expires, and can only be consumed once (1.227973ms)
+✔ refresh requests are rate limited and audit records contain only safe metadata (1.424057ms)
+✔ forged refresh components are rejected server-side and never include a credential form (1.153551ms)
+✔ authorized refresh button issues an HTTPS-scoped page only for explicit expiry (4.576889ms)
+✔ status offers distinct cookie and account-verification maintenance to authorized admins only (3.712462ms)
+✔ Manage Server admin can launch account verification; regular members cannot (2.468044ms)
+✔ failed validation audit accepts no submitted session or raw error and cannot rotate a secret (0.618649ms)
+✔ origin validation canonicalizes equivalent HTTPS origins and rejects other origins (1.322164ms)
+✔ account-verification workflow page explains external platform steps without exposing secrets (33.575909ms)
+✔ Discord OAuth, state/CSRF, actor/guild/service scoping, and HTTPS form complete without retaining candidate (9.964995ms)
+✔ OAuth CSRF, actor mismatch, removed capability, expired request, and HTTP entry fail closed (9.363221ms)
+✔ OAuth redemption recognizes the guild owner when the cached guild lacks ownerId (4.779883ms)
+✔ OAuth redemption allows a Discord administrator without a Credential Manager role (3.342937ms)
+✔ OAuth redemption allows a Discord Administrator and reaches the form (3.613974ms)
+✔ OAuth redemption still rejects a regular member after live guild authorization (2.513403ms)
+✔ successful refresh validates, rotates, atomically activates, verifies, and keeps secrets out of SQLite/audit (19.902849ms)
+✔ post-activation verification rejects an activation that did not change the runtime file (0.85242ms)
+✔ verified authorized maintenance clears a persisted checkpoint only after activation verification (1.382144ms)
+✔ unresolved platform checkpoint rejects candidate without rotating or clearing health state (0.920852ms)
+✔ missing Facebook c_user or xs cookies is reported safely before rotation (0.274492ms)
+✔ Status offers cookie refresh only for explicit expiry and authorized Harmony admins (2.562595ms)
+▶ ambiguous validation and rotation failure preserve the existing credential
+  ✔ ambiguous validation (0.559279ms)
+  ✔ rotation failure (0.762744ms)
+  ✔ post-activation verification failure rolls back runtime and provider (0.811167ms)
+✔ ambiguous validation and rotation failure preserve the existing credential (2.73152ms)
+✔ Instagram identity mismatch is rejected before rotation and preserves existing session (0.615273ms)
+✔ missing Instagram expected username fails closed before validation or rotation (0.453882ms)
+✔ bias role sync adds selected roles, removes only old mapped roles, and preserves unrelated roles (2.325831ms)
+✔ unconfigured or unmanageable bias roles report issues without throwing (0.423285ms)
+✔ Still deciding is a valid no-role selection (0.837638ms)
+✔ explicit reconciliation backfills existing member profiles without Welcome Pass resubmission (0.704187ms)
+✔ missing bias-role mapping does not interrupt automatic STAY admission (2.581785ms)
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+✔ authenticated submission alerts review room before any approval or role/public welcome (38.785307ms)
+Harmony health server listening on port 0.
+✔ duplicate submission callback is idempotent and sends only one review alert (11.806869ms)
+Harmony health server listening on port 0.
+✔ unresolved Discord username still creates a useful staff alert without a mention (5.811912ms)
+Harmony health server listening on port 0.
+✔ submission endpoint rejects invalid authentication and malformed fields (7.920316ms)
+Harmony health server listening on port 0.
+✔ submission endpoint rejects oversized payloads (4.872983ms)
+Welcome Pass approval processed: YS-APPROVE1 assigned
+Harmony health server listening on port 0.
+✔ existing approval callback continues to link, grant STAY, and publish approval welcome (9.510432ms)
+Welcome Pass approval processed: YS-BIASOPT1 assigned
+Harmony health server listening on port 0.
+✔ Welcome Pass bias is stored for a member who declined birthday announcements (6.531892ms)
+Welcome Pass approval processed: YS-GLOBAL01 assigned
+Harmony health server listening on port 0.
+✔ approval can uniquely match Discord global name (6.301667ms)
+Welcome Pass approval processed: YS-DISPLY01 assigned
+Harmony health server listening on port 0.
+✔ approval can uniquely match Discord display name (5.241366ms)
+Welcome Pass approval processed: YS-RELEASE1 assigned
+Harmony health server listening on port 0.
+✔ release message without a member token gets a safe member greeting prepended (4.302196ms)
+Welcome Pass approval processed: YS-HADSTAY1 assigned
+Harmony health server listening on port 0.
+✔ staff confirmation distinguishes a member who already had STAY (4.402427ms)
+Welcome Pass approval processed: YS-PIPE0001 assigned
+Welcome Pass approval processed: YS-PIPE0001 already_assigned
+Harmony health server listening on port 0.
+✔ matched submission then explicit approval is recorded, grants role and acknowledges; retries never replay admission (7.122279ms)
+Welcome Pass approval processed: YS-CORRECT1 assigned
+Harmony health server listening on port 0.
+✔ admin selection validates current membership without approving; corrected explicit approval uses member ID (6.143179ms)
+Harmony health server listening on port 0.
+✔ leaving before correction/save or approval fails safely; bots and conflicting active/completed passes rejected (5.43086ms)
+Harmony health server listening on port 0.
+✔ member endpoints require bridge authentication; roster pagination excludes bots/STAY without exposing other member data (5.789379ms)
+Harmony health server listening on port 0.
+✔ normal picker excludes each configured STAY/Admin/Moderator role and every combination, not names or pass status (7.341939ms)
+Harmony health server listening on port 0.
+✔ a fully filtered page retains the raw Discord cursor so eligible members on the next page remain reachable (4.741886ms)
+Welcome Pass approval endpoint error: Error: welcome_pass_approved_role_unavailable
+    at listMembers (/workspace/scratch/01797b5ba51c/Harmony/src/services/welcomePassMemberService.js:29:58)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Server.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/src/services/welcomePassServer.js:109:48)
+Harmony health server listening on port 0.
+✔ missing/deleted Approved Role fails closed rather than returning an unfiltered roster (3.149707ms)
+Welcome Pass approval endpoint error: Error: Discord unavailable
+    at env.member.roles.add (/workspace/scratch/01797b5ba51c/Harmony/test/welcomePassServer.test.js:420:80)
+    at assignApprovedWelcomePassInternal (/workspace/scratch/01797b5ba51c/Harmony/src/services/welcomePassService.js:308:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Server.<anonymous> (/workspace/scratch/01797b5ba51c/Harmony/src/services/welcomePassServer.js:223:24)
+Welcome Pass approval processed: YS-RETRY001 assigned
+Welcome Pass approval processed: YS-RETRY001 already_assigned
+Harmony health server listening on port 0.
+✔ role failure does not return success and retry grants once; concurrent callbacks cannot duplicate role operations (5.701707ms)
+Welcome Pass approval processed: YS-MISSING1 role_missing
+Harmony health server listening on port 0.
+✔ missing configured role returns a real private failure, not approval success (3.070067ms)
+Harmony health server listening on port 0.
+✔ invalid bias cannot persist approval before validation (2.23887ms)
+Welcome Pass approval processed: YS-NOMATCH1 waiting_for_link
+Harmony health server listening on port 0.
+✔ unmatched alert gives the approved admin-correction instructions and self-service fallback (2.593201ms)
+✔ harmony-pass confirmation-code fallback still links and admits a previously unmatched approved pass (2.529035ms)
+Welcome Pass approval processed: YS-OLDHIST1 assigned
+Welcome Pass approval processed: YS-NEWHIST1 assigned
+Harmony health server listening on port 0.
+✔ departure archives a completed link without role/messages; returning new code admits without restoring history (7.955329ms)
+Harmony health server listening on port 0.
+✔ archived pending and never-linked passes cannot be linked/granted on startup or late callbacks (2.38536ms)
+Welcome Pass approval processed: YS-STRICT01 assigned
+Welcome Pass approval processed: YS-STRICT01 already_assigned
+Harmony health server listening on port 0.
+✔ strict exact-ID staff admission/recovery remains available while normal roster excludes the target (14.889735ms)
+Harmony health server listening on port 0.
+✔ strict manual-mode or invalid selected admission never acknowledges or records a new approval (4.962998ms)
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+✔ submission preserves and acknowledges uniquely normalized immutable identity without admitting (15.67216ms)
+Welcome Pass approval processed: YS-STABLE01 assigned
+Harmony health server listening on port 0.
+✔ persisted identity survives restart/name changes and drives existing automatic approval without rematching (11.914801ms)
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+✔ normalized alias ambiguity, punctuation differences and bots never auto-associate (5.619183ms)
+Harmony health server listening on port 0.
+Harmony health server listening on port 0.
+✔ automatic submission association cannot steal another active pass or replace an existing code identity (4.400574ms)
+Welcome Pass approval processed: YS-ADMIT001 assigned
+Welcome Pass approval processed: YS-ADMIT001 already_assigned
+Harmony health server listening on port 0.
+✔ selected-ID Approve & Admit retains its acknowledged admission contract after automatic submission linking (5.907415ms)
+Welcome Pass approval processed: YS-NORMAL01 assigned
+Harmony health server listening on port 0.
+Welcome Pass approval processed: YS-NORMAL01 waiting_for_link
+Harmony health server listening on port 0.
+✔ name-only approval uses the same conservative normalization and never admits an ambiguous member (10.923944ms)
+Could not deliver a Welcome Pass submission alert to the configured review room.
+✔ notification failure retains identity and retry returns it without replaying an uncertain send (4.163809ms)
+✔ startup/configuration reconciliation grants pending roles without replaying member or staff welcomes (2.558509ms)
+✔ configuration edits reconcile eligible approvals without member or staff messages (0.801432ms)
+✔ a fresh automatic approval sends its public and staff messages once (2.241243ms)
+✔ automatic release resolves configured staff names and only allows explicit user mentions (2.142605ms)
+✔ an ambiguous Discord send result is not retried into a duplicate welcome (1.361693ms)
+✔ manual role completion requires a pending approved link and records it before announcing (0.858758ms)
+✔ manual release uses the same safe configured staff mention behavior (0.637767ms)
+✔ manual STAY-role changes without a pending Welcome Pass approval do not announce (0.414622ms)
+✔ concurrent assignment requests share the same operation instead of granting roles twice (5.032192ms)
+✔ departure archive and populated approval/link history survive idempotent database reinitialization (4.907615ms)
+ℹ tests 987
+ℹ suites 0
+ℹ pass 987
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 37169.435424

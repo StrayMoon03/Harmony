@@ -1,8 +1,8 @@
 "use strict";
 const { spawn } = require("node:child_process");
 const path = require("node:path");
-// Bump for every renderer change that must refresh already-published cards.
-const RENDER_VERSION = "countdown-card-v2-single-date-centered";
+// Bump for graphic or message-presentation changes that must refresh published cards.
+const RENDER_VERSION = "countdown-card-v3-image-only";
 let tail = Promise.resolve(),
   queued = 0;
 function worker(payload) {

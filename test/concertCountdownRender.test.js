@@ -234,3 +234,11 @@ test("single-date changes are confined to text inside the existing panel; card s
   assert.equal(p.status, 0, p.stderr);
   assert.match(p.stdout, /ok/);
 });
+test("image-only presentation preserves every approved single/multi-date and concert-state preview byte-for-byte", async () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const dir = path.join(__dirname, "../docs/countdown-single-date-fix");
+  const { examples } = JSON.parse(fs.readFileSync(path.join(dir, "render-inputs.json"), "utf8"));
+  for (const [name, m] of Object.entries(examples)) {
+    assert.deepEqual(await render(m), fs.readFileSync(path.join(dir, name + ".png")), name);
+  }
+});
