@@ -60,12 +60,18 @@ function fixture() {
       id: String(++seq),
       channelId: c,
       content,
+      attachments: new Collection(),
       author: { id: author },
       pinned: false,
       edit: async (p) => {
         calls.edit++;
         if (f.editError) throw f.editError;
         m.content = p.content;
+        m.attachments = new Collection(
+          p.files.map((file, i) => [String(i), {
+            id: String(i), name: file.name, description: file.description,
+          }]),
+        );
         m.lastEdit = p;
         return m;
       },
@@ -120,6 +126,11 @@ function fixture() {
       if (f.sendError === "before")
         throw Error("Connection failed before send");
       const m = message(p.content);
+      m.attachments = new Collection(
+        p.files.map((file, i) => [String(i), {
+          id: String(i), name: file.name, description: file.description,
+        }]),
+      );
       m.sent = p;
       if (f.sendError === "after") throw Error("Connection failed after send");
       return m;
@@ -153,7 +164,8 @@ test("initial publication requires approval; private previews never call Discord
   assert.equal(f.calls.send, 0);
   const before = f.row();
   const p = await service.preview(before);
-  assert.equal(p.files[0].name, "countdown.png");
+  assert.match(p.files[0].name, /^harmony-countdown-[a-f0-9]{64}\.png$/);
+  assert.equal(p.content, "");
   assert.deepEqual(f.row(), before);
   assert.equal(f.calls.fetch, 0);
 });
@@ -304,14 +316,14 @@ test("local-day changes, missed days and approved reschedules update the same me
   await f.refresh({ publish: true });
   store.update(f.g, f.c, { enabled: 1 });
   await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
-  assert.match(f.messages.get(f.row().message_id).content, /TOMORROW!/);
+  assert.match(f.messages.get(f.row().message_id).attachments.first().description, /TOMORROW!/);
   calendar.updateEvent(f.g, f.event, { event_date: "2027-06-20" });
   await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
-  assert.match(f.messages.get(f.row().message_id).content, /3 days to go/);
+  assert.match(f.messages.get(f.row().message_id).attachments.first().description, /3 days to go/);
   calendar.cancelEvent(f.g, f.event, "admin");
   await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
   assert.match(
-    f.messages.get(f.row().message_id).content,
+    f.messages.get(f.row().message_id).attachments.first().description,
     /No active concert dates/,
   );
   assert.equal(f.calls.send, 1);
@@ -815,4 +827,137 @@ test("additive renderer-version migration preserves legacy published data and do
   migrateCountdowns(d);
   assert.deepEqual(d.prepare("SELECT * FROM concert_countdowns").get(), after);
   d.close();
+});
+
+function assertImageOnly(payload) {
+  assert.equal(payload.content, "");
+  assert.deepEqual(payload.embeds, []);
+  assert.deepEqual(payload.components, []);
+  assert.equal(payload.files.length, 1);
+  assert.match(payload.files[0].name, /^harmony-countdown-[a-f0-9]{64}\.png$/);
+  assert.match(payload.files[0].description, /Chicago — Soldier Field/);
+  assert.match(payload.files[0].description, /2027-06-18: \d+ days to go/);
+  assert.ok(payload.files[0].description.length <= 1024);
+  assert.deepEqual(payload.allowedMentions, { parse: [] });
+}
+test("preview, publication and edits contain only the image with accessible attachment metadata", async () => {
+  const f = fixture();
+  const preview = await service.preview(f.row());
+  assertImageOnly(preview);
+  await f.refresh({ publish: true });
+  const m = f.messages.get(f.row().message_id);
+  assertImageOnly(m.sent);
+  const name = m.sent.files[0].name;
+  assert.ok(m.sent.nonce);
+  assert.equal(m.sent.enforceNonce, true);
+  await f.refresh({ force: true });
+  assertImageOnly(m.lastEdit);
+  assert.equal(m.lastEdit.files[0].name, name);
+  assert.equal(preview.files[0].name, name);
+  assert.equal(m.content, "");
+  assert.equal(f.calls.send, 1);
+});
+test("installed Discord.js serializes empty content and attachment descriptions without visible companion fields", async () => {
+  const { Client, MessagePayload } = require("discord.js");
+  const f = fixture(), client = new Client({ intents: [] });
+  const p = await service.preview(f.row());
+  const serialized = MessagePayload.create({ client }, {
+    ...p, attachments: [],
+  }).resolveBody();
+  await serialized.resolveFiles();
+  assert.equal(serialized.body.content, "");
+  assert.deepEqual(serialized.body.embeds, []);
+  assert.deepEqual(serialized.body.components, []);
+  assert.equal(serialized.body.attachments.length, 1);
+  assert.equal(serialized.body.attachments[0].description, p.files[0].description);
+  assert.equal(serialized.files[0].name, p.files[0].name);
+  assert.deepEqual(serialized.files[0].data, p.files[0].attachment);
+});
+test("legacy disabled published cards lose all companion text once and preserve saved owner data and pins", async () => {
+  isolateRenderingWork();
+  const f = fixture();
+  store.photo(f.g, f.c, Buffer.from("owner stadium photograph"), "jpeg");
+  const m = f.message("Chicago — Soldier Field\n2027-06-18: 168 days to go\nYoutiful STAY • World Tour Countdown");
+  m.pinned = true;
+  store.update(f.g, f.c, {
+    message_id: m.id, published_at: "2026-11-24T12:00Z",
+    render_version: "countdown-card-v2-single-date-centered",
+    // Even a matching image fingerprint cannot bypass a pending presentation upgrade.
+    fingerprint: service.fingerprint(service.model(f.row(), upgradeTime()), f.row()),
+    checked_at: upgradeTime().toISOString(),
+  });
+  const before = f.row();
+  const result = await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(result.updated, 1);
+  assertImageOnly(m.lastEdit);
+  assert.equal(m.content, "");
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.calls.pin, 0);
+  assert.equal(m.pinned, true);
+  for (const key of ["message_id", "enabled", "config", "photo", "photo_type", "revision", "published_at"])
+    assert.deepEqual(f.row()[key], before[key], key);
+  assert.equal(f.row().render_version, images.RENDER_VERSION);
+  db.closeDb();
+  const calls = { ...f.calls };
+  await service.runUpdates(f.client, { now: new Date("2027-01-02T12:00Z") });
+  assert.deepEqual(f.calls, calls);
+});
+test("image-only pinned countdown is recovered by attachment identity when its saved message ID is absent", async () => {
+  isolateRenderingWork();
+  const f = fixture();
+  await f.refresh({ publish: true });
+  const id = f.row().message_id, m = f.messages.get(id);
+  assert.equal(m.content, "");
+  store.update(f.g, f.c, { message_id: null, render_version: null });
+  db.closeDb();
+  await service.runUpdates(f.client, { now: upgradeTime() });
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.calls.edit, 1);
+  assert.equal(m.pinned, true);
+  assert.equal(m.content, "");
+});
+test("lost image-only send response is recovered after restart using attachment metadata beyond 100 messages", async () => {
+  const f = fixture();
+  f.sendError = "after";
+  await assert.rejects(f.refresh({ publish: true }), /after send/);
+  const m = f.messages.first(), id = m.id;
+  assert.equal(m.content, "");
+  assert.ok(m.attachments.first().name);
+  for (let i = 0; i < 250; i++) f.message("chat", "member");
+  db.closeDb();
+  f.sendError = null;
+  f.retry();
+  await f.refresh({ publish: true });
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.calls.send, 1);
+  assert.equal(m.pinned, true);
+  assert.equal(f.row().delivery, null);
+});
+test("attachment identification rejects another room and another author without modifying their pinned messages", async () => {
+  const f = fixture(), other = fixture();
+  const filename = (await service.preview(f.row())).files[0].name;
+  const otherFilename = (await service.preview(other.row())).files[0].name;
+  assert.notEqual(filename, otherFilename);
+  const foreign = f.message(""), copied = f.message("", "member");
+  foreign.attachments.set("1", { name: otherFilename });
+  copied.attachments.set("1", { name: filename });
+  foreign.pinned = copied.pinned = true;
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 1);
+  assert.notEqual(f.row().message_id, foreign.id);
+  assert.notEqual(f.row().message_id, copied.id);
+  for (const m of [foreign, copied]) {
+    assert.equal(m.lastEdit, undefined);
+    assert.equal(m.pinned, true);
+  }
+});
+test("a stored ID with unrelated attachment metadata fails closed instead of overwriting or duplicating", async () => {
+  const f = fixture(), m = f.message("");
+  m.attachments.set("1", { name: "countdown.png" });
+  store.update(f.g, f.c, { message_id: m.id, published_at: "2026-11-24T12:00Z" });
+  await assert.rejects(f.refresh({ force: true }), /ownership mismatch/);
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.calls.edit, 0);
+  assert.equal(f.row().message_id, m.id);
 });

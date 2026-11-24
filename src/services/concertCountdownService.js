@@ -47,14 +47,16 @@ function fingerprint(m, row, renderVersion = images.RENDER_VERSION) {
 }
 async function payload(row, m) {
   return {
-    content: text(m),
+    content: "",
+    embeds: [],
+    components: [],
     files: [
       {
         attachment: await images.render(
           m,
           row.photo ? { type: row.photo_type, bytes: row.photo } : null,
         ),
-        name: "countdown.png",
+        name: attachmentName(row.guild_id, row.channel_id),
         description: text(m).slice(0, 1024),
       },
     ],
@@ -64,21 +66,32 @@ async function payload(row, m) {
 async function preview(row) {
   return payload(row, model(row));
 }
-function managed(message, client, marker) {
+// Stable room-scoped metadata survives edits, lost send responses and restarts.
+// It is an attachment filename, never a visible message footer or hidden text.
+function attachmentName(guildId, channelId) {
+  const identity = createHash("sha256")
+    .update(JSON.stringify([guildId, channelId]))
+    .digest("hex");
+  return "harmony-countdown-" + identity + ".png";
+}
+function managed(message, client, marker, filename) {
   return (
     message.author?.id === client.user.id &&
-    (message.content?.endsWith(marker) ||
+    ((filename && message.attachments?.some((a) => a.name === filename)) ||
+      message.content?.endsWith(marker) ||
       message.content?.endsWith(marker + " [" + message.channelId + "]"))
   );
 }
-async function findPinned(channel, client, marker) {
+async function findPinned(channel, client, marker, filename) {
   let before;
   for (let page = 0; page < 100; page++) {
     const pins = await channel.messages.fetchPins({
       limit: 50,
       ...(before ? { before } : {}),
     });
-    const match = pins.items.find((p) => managed(p.message, client, marker));
+    const match = pins.items.find((p) =>
+      managed(p.message, client, marker, filename),
+    );
     if (match) return match.message;
     if (!pins.hasMore) return null;
     const next = pins.items.at(-1)?.pinnedAt;
@@ -88,7 +101,7 @@ async function findPinned(channel, client, marker) {
   }
   throw Error("Too many pinned messages to recover safely");
 }
-async function recoverDelivery(channel, client, marker, delivery) {
+async function recoverDelivery(channel, client, marker, delivery, filename) {
   // Walk the complete interval, not merely the last 100 messages. A bounded failure never sends.
   let before;
   for (let page = 0; page < 100; page++) {
@@ -99,7 +112,7 @@ async function recoverDelivery(channel, client, marker, delivery) {
     });
     const messages = [...batch.values()];
     for (const message of messages)
-      if (managed(message, client, marker)) return message;
+      if (managed(message, client, marker, filename)) return message;
     if (
       messages.length < 100 ||
       messages.some((m) => BigInt(m.id) <= BigInt(delivery.after))
@@ -192,6 +205,7 @@ async function refresh(
       await access.inspect(client, g, c),
     );
     const marker = "Youtiful STAY • World Tour Countdown";
+    const filename = attachmentName(g, c);
     let message;
     if (row.message_id) {
       try {
@@ -205,7 +219,7 @@ async function refresh(
       }
     }
     stage = "read pinned countdown messages";
-    if (!message) message = await findPinned(channel, client, marker);
+    if (!message) message = await findPinned(channel, client, marker, filename);
     if (!message && row.delivery) {
       stage = "recover a previous countdown delivery";
       message = await recoverDelivery(
@@ -213,13 +227,20 @@ async function refresh(
         client,
         marker,
         JSON.parse(row.delivery),
+        filename,
       );
     }
     if (!message && row.legacy_recovery) {
       stage = "recover a previous countdown delivery";
-      message = await recoverDelivery(channel, client, marker, { after: "0" });
+      message = await recoverDelivery(
+        channel,
+        client,
+        marker,
+        { after: "0" },
+        filename,
+      );
     }
-    if (message && !managed(message, client, marker))
+    if (message && !managed(message, client, marker, filename))
       throw Error("Managed message ownership mismatch");
     const needsImage =
       force ||
@@ -242,7 +263,6 @@ async function refresh(
         stage = "edit the countdown image";
         await message.edit({
           ...outgoing,
-          content: outgoing.content + "\n" + marker,
           attachments: [],
         });
       }
@@ -261,7 +281,6 @@ async function refresh(
       stage = "send the countdown image";
       message = await channel.send({
         ...outgoing,
-        content: outgoing.content + "\n" + marker,
         nonce: delivery.nonce,
         enforceNonce: true,
       });
