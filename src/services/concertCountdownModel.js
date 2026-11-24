@@ -1,4 +1,5 @@
 "use strict";
+const { isCountdownConcert } = require("./concertTourIdentity");
 function localDate(now, timezone) {
   if (typeof timezone !== "string" || !timezone.trim())
     throw Error("Enter a valid venue time zone");
@@ -57,9 +58,7 @@ function validateConfig(config, events) {
         (e) =>
           String(e.id) === String(id) &&
           String(e.guild_id) === String(config.guildId) &&
-          e.calendar_type === "stray_kids" &&
-          e.category === "concert" &&
-          !e.cancelled_at,
+          isCountdownConcert(e),
       )
     )
       throw Error(
@@ -75,9 +74,7 @@ function buildCountdown(config, events, now = new Date()) {
     (e) =>
       ids.has(String(e.id)) &&
       String(e.guild_id) === String(config.guildId) &&
-      e.calendar_type === "stray_kids" &&
-      e.category === "concert" &&
-      !e.cancelled_at,
+      isCountdownConcert(e),
   );
   const dates = [
     ...new Set(

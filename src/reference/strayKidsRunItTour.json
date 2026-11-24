@@ -1,0 +1,852 @@
+{
+  "tourId": "run-it-2026-2027",
+  "verifiedAt": "2026-11-24",
+  "locations": [
+    {
+      "key": "seoul-kspo",
+      "city": "Seoul",
+      "country": "South Korea",
+      "venue": "KSPO Dome",
+      "timezone": "Asia/Seoul",
+      "aliases": [
+        "서울",
+        "Korea",
+        "KR"
+      ],
+      "venueAliases": [
+        "Olympic Gymnastics Arena",
+        "올림픽체조경기장"
+      ],
+      "dates": [
+        {
+          "date": "2026-07-25",
+          "sourceUrl": "https://app.fans/community/StrayKids/media/6vzo5j6v1x"
+        },
+        {
+          "date": "2026-07-26",
+          "sourceUrl": "https://app.fans/community/StrayKids/media/6vzo5j6v1x"
+        },
+        {
+          "date": "2026-07-29",
+          "sourceUrl": "https://app.fans/community/StrayKids/media/6vzo5j6v1x"
+        },
+        {
+          "date": "2026-08-01",
+          "sourceUrl": "https://app.fans/community/StrayKids/media/6vzo5j6v1x"
+        },
+        {
+          "date": "2026-08-02",
+          "sourceUrl": "https://app.fans/community/StrayKids/media/6vzo5j6v1x"
+        }
+      ],
+      "cityAliases": [
+        "서울"
+      ]
+    },
+    {
+      "key": "tokyo-mufg",
+      "city": "Tokyo",
+      "country": "Japan",
+      "venue": "MUFG Stadium",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "東京",
+        "JP"
+      ],
+      "venueAliases": [
+        "Japan National Stadium",
+        "National Stadium",
+        "国立競技場"
+      ],
+      "dates": [
+        {
+          "date": "2026-08-29",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        },
+        {
+          "date": "2026-08-30",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        }
+      ],
+      "cityAliases": [
+        "東京"
+      ]
+    },
+    {
+      "key": "nagoya",
+      "city": "Nagoya",
+      "country": "Japan",
+      "venue": "Vantelin Dome Nagoya",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "名古屋",
+        "JP"
+      ],
+      "venueAliases": [
+        "バンテリンドーム ナゴヤ"
+      ],
+      "dates": [
+        {
+          "date": "2026-09-05",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        },
+        {
+          "date": "2026-09-06",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        }
+      ],
+      "cityAliases": [
+        "名古屋"
+      ]
+    },
+    {
+      "key": "osaka-kyocera",
+      "city": "Osaka",
+      "country": "Japan",
+      "venue": "Kyocera Dome Osaka",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "大阪",
+        "JP"
+      ],
+      "venueAliases": [
+        "京セラドーム大阪"
+      ],
+      "dates": [
+        {
+          "date": "2026-09-19",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        },
+        {
+          "date": "2026-09-20",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        }
+      ],
+      "cityAliases": [
+        "大阪"
+      ]
+    },
+    {
+      "key": "fukuoka",
+      "city": "Fukuoka",
+      "country": "Japan",
+      "venue": "Mizuho PayPay Dome Fukuoka",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "福岡",
+        "JP"
+      ],
+      "venueAliases": [
+        "PayPay Dome",
+        "みずほPayPayドーム福岡"
+      ],
+      "dates": [
+        {
+          "date": "2026-10-24",
+          "sourceUrl": "https://skz-stayjapan.com/s/n104/news/detail/13099"
+        }
+      ],
+      "cityAliases": [
+        "福岡"
+      ]
+    },
+    {
+      "key": "tokyo-dome",
+      "city": "Tokyo",
+      "country": "Japan",
+      "venue": "Tokyo Dome",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "東京",
+        "JP"
+      ],
+      "venueAliases": [
+        "東京ドーム"
+      ],
+      "dates": [
+        {
+          "date": "2026-11-06",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/586376"
+        },
+        {
+          "date": "2026-11-07",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/586376"
+        },
+        {
+          "date": "2026-11-08",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/586376"
+        }
+      ],
+      "cityAliases": [
+        "東京"
+      ]
+    },
+    {
+      "key": "hong-kong",
+      "city": "Hong Kong",
+      "country": "Hong Kong",
+      "venue": "Kai Tak Stadium",
+      "timezone": "Asia/Hong_Kong",
+      "aliases": [
+        "香港",
+        "HK",
+        "China"
+      ],
+      "venueAliases": [
+        "啟德主場館"
+      ],
+      "dates": [
+        {
+          "date": "2026-12-05",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        }
+      ],
+      "cityAliases": [
+        "香港"
+      ]
+    },
+    {
+      "key": "taipei",
+      "city": "Taipei",
+      "country": "Taiwan",
+      "venue": "Taipei Dome",
+      "timezone": "Asia/Taipei",
+      "aliases": [
+        "台北",
+        "TW"
+      ],
+      "venueAliases": [
+        "臺北大巨蛋",
+        "台北大巨蛋"
+      ],
+      "dates": [
+        {
+          "date": "2026-12-12",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        }
+      ],
+      "cityAliases": [
+        "台北",
+        "臺北"
+      ]
+    },
+    {
+      "key": "seoul-special",
+      "city": "Seoul",
+      "country": "South Korea",
+      "venue": "Gocheok Sky Dome",
+      "timezone": "Asia/Seoul",
+      "aliases": [
+        "서울",
+        "Korea",
+        "KR"
+      ],
+      "venueAliases": [
+        "Gocheok SkyDome",
+        "고척스카이돔"
+      ],
+      "dates": [
+        {
+          "date": "2027-01-01",
+          "sourceUrl": "https://straykids.jype.com/notice/b6bj5grg"
+        },
+        {
+          "date": "2027-01-02",
+          "sourceUrl": "https://straykids.jype.com/notice/b6bj5grg"
+        }
+      ],
+      "cityAliases": [
+        "서울"
+      ]
+    },
+    {
+      "key": "bangkok",
+      "city": "Bangkok",
+      "country": "Thailand",
+      "venue": "Impact Arena",
+      "timezone": "Asia/Bangkok",
+      "aliases": [
+        "TH",
+        "กรุงเทพ"
+      ],
+      "venueAliases": [
+        "Impact Arena Muang Thong Thani"
+      ],
+      "dates": [
+        {
+          "date": "2027-01-16",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        },
+        {
+          "date": "2027-01-17",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        }
+      ],
+      "cityAliases": [
+        "กรุงเทพ"
+      ]
+    },
+    {
+      "key": "singapore",
+      "city": "Singapore",
+      "country": "Singapore",
+      "venue": "Singapore Indoor Stadium",
+      "timezone": "Asia/Singapore",
+      "aliases": [
+        "SG"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-03-06",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        },
+        {
+          "date": "2027-03-07",
+          "sourceUrl": "https://www.livenation.asia/stray-kids-tickets-adp1182958"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "yokohama",
+      "city": "Yokohama",
+      "country": "Japan",
+      "venue": "Nissan Stadium",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "横浜",
+        "JP"
+      ],
+      "venueAliases": [
+        "日産スタジアム"
+      ],
+      "dates": [
+        {
+          "date": "2027-04-24",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/588400"
+        },
+        {
+          "date": "2027-04-25",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/588400"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "osaka-yanmar",
+      "city": "Osaka",
+      "country": "Japan",
+      "venue": "Yanmar Stadium Nagai",
+      "timezone": "Asia/Tokyo",
+      "aliases": [
+        "大阪",
+        "JP"
+      ],
+      "venueAliases": [
+        "ヤンマースタジアム長居"
+      ],
+      "dates": [
+        {
+          "date": "2027-05-04",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/588400"
+        },
+        {
+          "date": "2027-05-05",
+          "sourceUrl": "https://www.sonymusic.co.jp/artist/StrayKids/info/588400"
+        }
+      ],
+      "cityAliases": [
+        "大阪"
+      ]
+    },
+    {
+      "key": "seattle",
+      "city": "Seattle",
+      "country": "United States",
+      "venue": "Lumen Field",
+      "timezone": "America/Los_Angeles",
+      "aliases": [
+        "USA",
+        "US",
+        "WA",
+        "Washington"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-05-16",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "vancouver",
+      "city": "Vancouver",
+      "country": "Canada",
+      "venue": "BC Place",
+      "timezone": "America/Vancouver",
+      "aliases": [
+        "CA",
+        "BC",
+        "British Columbia"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-05-19",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "santa-clara",
+      "city": "Santa Clara",
+      "country": "United States",
+      "venue": "Levi’s Stadium",
+      "timezone": "America/Los_Angeles",
+      "aliases": [
+        "USA",
+        "US",
+        "CA",
+        "California",
+        "San Francisco"
+      ],
+      "venueAliases": [
+        "Levis Stadium",
+        "Levi's Stadium"
+      ],
+      "dates": [
+        {
+          "date": "2027-05-22",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "san-diego",
+      "city": "San Diego",
+      "country": "United States",
+      "venue": "PETCO Park",
+      "timezone": "America/Los_Angeles",
+      "aliases": [
+        "USA",
+        "US",
+        "CA",
+        "California"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-05-25",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "los-angeles",
+      "city": "Los Angeles",
+      "country": "United States",
+      "venue": "SoFi Stadium",
+      "timezone": "America/Los_Angeles",
+      "aliases": [
+        "USA",
+        "US",
+        "CA",
+        "California",
+        "Inglewood",
+        "LA"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-05-29",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": [
+        "Inglewood"
+      ]
+    },
+    {
+      "key": "arlington",
+      "city": "Arlington",
+      "country": "United States",
+      "venue": "AT&T Stadium",
+      "timezone": "America/Chicago",
+      "aliases": [
+        "USA",
+        "US",
+        "TX",
+        "Texas",
+        "Dallas"
+      ],
+      "venueAliases": [
+        "ATT Stadium"
+      ],
+      "dates": [
+        {
+          "date": "2027-06-03",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "houston",
+      "city": "Houston",
+      "country": "United States",
+      "venue": "Reliant Stadium",
+      "timezone": "America/Chicago",
+      "aliases": [
+        "USA",
+        "US",
+        "TX",
+        "Texas"
+      ],
+      "venueAliases": [
+        "NRG Stadium"
+      ],
+      "dates": [
+        {
+          "date": "2027-06-05",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "atlanta",
+      "city": "Atlanta",
+      "country": "United States",
+      "venue": "Mercedes-Benz Stadium",
+      "timezone": "America/New_York",
+      "aliases": [
+        "USA",
+        "US",
+        "GA",
+        "Georgia"
+      ],
+      "venueAliases": [
+        "Mercedes Benz Stadium"
+      ],
+      "dates": [
+        {
+          "date": "2027-06-08",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "miami",
+      "city": "Miami",
+      "country": "United States",
+      "venue": "Hard Rock Stadium",
+      "timezone": "America/New_York",
+      "aliases": [
+        "USA",
+        "US",
+        "FL",
+        "Florida",
+        "Miami Gardens"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-06-11",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "orlando",
+      "city": "Orlando",
+      "country": "United States",
+      "venue": "Camping World Stadium",
+      "timezone": "America/New_York",
+      "aliases": [
+        "USA",
+        "US",
+        "FL",
+        "Florida"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-06-14",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "chicago",
+      "city": "Chicago",
+      "country": "United States",
+      "venue": "Soldier Field",
+      "timezone": "America/Chicago",
+      "aliases": [
+        "USA",
+        "US",
+        "IL",
+        "Illinois"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-06-18",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        },
+        {
+          "date": "2027-06-19",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "baltimore",
+      "city": "Baltimore",
+      "country": "United States",
+      "venue": "M&T Bank Stadium",
+      "timezone": "America/New_York",
+      "aliases": [
+        "USA",
+        "US",
+        "MD",
+        "Maryland"
+      ],
+      "venueAliases": [
+        "MT Bank Stadium"
+      ],
+      "dates": [
+        {
+          "date": "2027-06-22",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "toronto",
+      "city": "Toronto",
+      "country": "Canada",
+      "venue": "Rogers Stadium",
+      "timezone": "America/Toronto",
+      "aliases": [
+        "CA",
+        "ON",
+        "Ontario"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-06-25",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "east-rutherford",
+      "city": "East Rutherford",
+      "country": "United States",
+      "venue": "MetLife Stadium",
+      "timezone": "America/New_York",
+      "aliases": [
+        "USA",
+        "US",
+        "NJ",
+        "New Jersey",
+        "New York",
+        "NYC"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-06-29",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": [
+        "New York",
+        "NYC"
+      ]
+    },
+    {
+      "key": "paris",
+      "city": "Paris",
+      "country": "France",
+      "venue": "Plenitude Arena",
+      "timezone": "Europe/Paris",
+      "aliases": [
+        "FR",
+        "Nanterre"
+      ],
+      "venueAliases": [
+        "Paris La Défense Arena",
+        "Paris La Defense Arena"
+      ],
+      "dates": [
+        {
+          "date": "2027-07-09",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        },
+        {
+          "date": "2027-07-10",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        }
+      ],
+      "cityAliases": [
+        "Nanterre"
+      ]
+    },
+    {
+      "key": "london",
+      "city": "London",
+      "country": "United Kingdom",
+      "venue": "Tottenham Hotspur Stadium",
+      "timezone": "Europe/London",
+      "aliases": [
+        "UK",
+        "GB",
+        "England"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-07-13",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        },
+        {
+          "date": "2027-07-14",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "munich",
+      "city": "Munich",
+      "country": "Germany",
+      "venue": "Allianz Arena",
+      "timezone": "Europe/Berlin",
+      "aliases": [
+        "DE",
+        "München",
+        "Munchen"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-07-17",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        },
+        {
+          "date": "2027-07-18",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        }
+      ],
+      "cityAliases": [
+        "München",
+        "Munchen"
+      ]
+    },
+    {
+      "key": "vienna",
+      "city": "Vienna",
+      "country": "Austria",
+      "venue": "Ernst-Happel-Stadion",
+      "timezone": "Europe/Vienna",
+      "aliases": [
+        "AT",
+        "Wien"
+      ],
+      "venueAliases": [
+        "Ernst Happel Stadion"
+      ],
+      "dates": [
+        {
+          "date": "2027-07-21",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": [
+        "Wien"
+      ]
+    },
+    {
+      "key": "barcelona",
+      "city": "Barcelona",
+      "country": "Spain",
+      "venue": "Estadi Olímpic Lluís Companys",
+      "timezone": "Europe/Madrid",
+      "aliases": [
+        "ES"
+      ],
+      "venueAliases": [
+        "Estadi Olimpic Lluis Companys"
+      ],
+      "dates": [
+        {
+          "date": "2027-07-24",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "arnhem",
+      "city": "Arnhem",
+      "country": "Netherlands",
+      "venue": "GelreDome",
+      "timezone": "Europe/Amsterdam",
+      "aliases": [
+        "NL",
+        "Holland"
+      ],
+      "venueAliases": [],
+      "dates": [
+        {
+          "date": "2027-07-27",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        },
+        {
+          "date": "2027-07-28",
+          "sourceUrl": "https://web-a.origin.livenation.com/artist/K8vZ9179Vpf/stray-kids-events"
+        }
+      ],
+      "cityAliases": []
+    },
+    {
+      "key": "milan",
+      "city": "Milan",
+      "country": "Italy",
+      "venue": "San Siro Stadium",
+      "timezone": "Europe/Rome",
+      "aliases": [
+        "IT",
+        "Milano"
+      ],
+      "venueAliases": [
+        "Stadio San Siro",
+        "Stadio Giuseppe Meazza"
+      ],
+      "dates": [
+        {
+          "date": "2027-07-31",
+          "sourceUrl": "https://news.livenationentertainment.com/news/stray-kids-announce-2027-world-tour-run-it-across-north-america-europe-and-the-uk"
+        }
+      ],
+      "cityAliases": [
+        "Milano"
+      ]
+    }
+  ]
+}

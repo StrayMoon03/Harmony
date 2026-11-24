@@ -6,7 +6,13 @@ function migrateCountdowns(db) {
     fingerprint TEXT, last_success TEXT, last_error TEXT, PRIMARY KEY(guild_id,channel_id));
     CREATE TABLE IF NOT EXISTS concert_countdown_photos (
     guild_id TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, bytes BLOB NOT NULL,
-    type TEXT NOT NULL, PRIMARY KEY(guild_id,id));`);
+    type TEXT NOT NULL, PRIMARY KEY(guild_id,id));
+    CREATE TABLE IF NOT EXISTS concert_tour_events (
+      guild_id TEXT NOT NULL, stop_key TEXT NOT NULL, event_id INTEGER NOT NULL,
+      location_key TEXT NOT NULL, city TEXT NOT NULL, country TEXT NOT NULL,
+      venue TEXT NOT NULL, timezone TEXT NOT NULL, search_aliases TEXT NOT NULL DEFAULT '[]',
+      source_url TEXT NOT NULL, verified_at TEXT NOT NULL, approved_by TEXT NOT NULL, linked_at TEXT NOT NULL,
+      PRIMARY KEY(guild_id,stop_key), UNIQUE(guild_id,event_id));`);
   const columns = new Set(
     db
       .prepare("PRAGMA table_info(concert_countdowns)")

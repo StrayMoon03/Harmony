@@ -34,6 +34,7 @@ function fixture() {
     message: { id: "panel" },
   };
   const s = manager.createSession(base);
+  s.locationKey = "chicago";
   function i(action, more = {}) {
     const x = {
       ...base,
@@ -393,4 +394,163 @@ test("external image hosts and oversized uploads are rejected before network acc
   } finally {
     global.fetch = original;
   }
+});
+test("location picker shows every confirmed stop with pagination, including missing Chicago dates", async () => {
+  const f = fixture();
+  f.s.room = f.c;
+  f.s.locationKey = null;
+  let i = f.i("events");
+  await manager.handle(i);
+  assert.match(serialize(i.response), /Choose concert location/);
+  assert.equal(f.s.offeredLocations.length, 25);
+  assert.ok(f.s.offeredLocations.includes("chicago"));
+  const first = serialize(i.response);
+  assert.match(first, /missing from calendar/);
+  i = f.i("location-next");
+  await manager.handle(i);
+  assert.ok(f.s.offeredLocations.includes("yokohama"));
+  assert.equal(f.s.offeredLocations.length, 9);
+  await manager.handle(
+    f.i("search-save", {
+      fields: { getTextInputValue: () => "United States Chicago" },
+    }),
+  );
+  assert.equal(f.s.locationKey, "chicago");
+  assert.match(serialize(f.s.draft), /eventIds/);
+});
+test("missing Chicago dates have an explicit private import review, then become selectable as a pair", async () => {
+  const f = fixture();
+  f.s.room = f.c;
+  f.s.locationKey = "chicago";
+  const before = getDb()
+    .prepare("SELECT count(*) n FROM scheduled_events WHERE guild_id=?")
+    .get(f.g).n;
+  let i = f.i("tour-review");
+  await manager.handle(i);
+  assert.match(serialize(i.response), /Approve calendar import/);
+  assert.equal(
+    getDb()
+      .prepare("SELECT count(*) n FROM scheduled_events WHERE guild_id=?")
+      .get(f.g).n,
+    before,
+  );
+  i = f.i("tour-approve");
+  await manager.handle(i);
+  assert.match(i.response.content, /2 added/);
+  assert.equal(f.s.offered.length, 2);
+  await manager.handle(f.i("select-location-all"));
+  assert.equal(f.s.draft.eventIds.length, 2);
+  assert.equal(f.s.draft.city, "Chicago");
+  assert.equal(f.s.draft.country, "United States");
+  assert.equal(f.s.draft.timezone, "America/Chicago");
+  assert.equal(store.get(f.g, f.c), undefined);
+});
+test("tour imports reject unauthorized and stale sessions before any calendar writes", async () => {
+  const f = fixture();
+  await manager.handle(f.i("tour-audit"));
+  const i = f.i("tour-approve", { user: { id: "intruder" } });
+  await manager.handle(i);
+  assert.match(i.response.content, /authorized/);
+  assert.equal(store.concerts(f.g).length, 0);
+  rooms.savePanel({
+    guildId: f.g,
+    channelId: "private",
+    messageId: "new-panel",
+  });
+  const stale = f.i("tour-approve");
+  await manager.handle(stale);
+  assert.match(stale.response.content, /current Control Center/);
+  assert.equal(store.concerts(f.g).length, 0);
+});
+test("approval cannot silently adopt calendar changes while paging through a tour audit", async () => {
+  const f = fixture();
+  await manager.handle(f.i("tour-audit"));
+  const fingerprint = f.s.importReview.fingerprint;
+  f.event();
+  await manager.handle(f.i("tour-next"));
+  assert.equal(f.s.importReview.fingerprint, fingerprint);
+  const i = f.i("tour-approve");
+  await manager.handle(i);
+  assert.match(i.response.content, /changed/);
+  assert.equal(store.concerts(f.g).length, 1);
+});
+test("tour JSON upload uses a file modal and never imports before the next approval", async () => {
+  const f = fixture();
+  let i = f.i("tour-upload");
+  await manager.handle(i);
+  assert.equal(i.modal.toJSON().components[0].component.type, 19);
+  const original = global.fetch,
+    bytes = Buffer.from(
+      JSON.stringify(
+        require("../src/services/concertTourCalendar").scopedManifest(
+          "chicago",
+        ),
+      ),
+    );
+  try {
+    global.fetch = async () => ({
+      ok: true,
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(bytes);
+          c.close();
+        },
+      }),
+    });
+    i = f.i("tour-upload-save", {
+      fields: {
+        getUploadedFiles: () =>
+          new Collection([
+            [
+              "1",
+              {
+                url: "https://cdn.discordapp.com/attachments/fixture/tour.json",
+                size: bytes.length,
+              },
+            ],
+          ]),
+      },
+    });
+    await manager.handle(i);
+    assert.match(serialize(i.response), /Approve calendar import/);
+    assert.equal(store.concerts(f.g).length, 0);
+    await manager.handle(f.i("tour-approve"));
+    assert.equal(store.concerts(f.g).length, 2);
+  } finally {
+    global.fetch = original;
+  }
+});
+test("an out-of-catalog concert with a long venue still produces a valid location menu", async () => {
+  const f = fixture();
+  f.event("2029-01-01", {
+    title: "A concert at a future site",
+    eventLocation: "A very long venue name ".repeat(10),
+  });
+  f.s.locationKey = null;
+  const payload = manager.eventPage(f.s);
+  for (const row of payload.components) assert.ok(row.toJSON());
+});
+test("advanced configure command shares the same confirmed-tour eligibility as the graphical picker", async () => {
+  const f = fixture(),
+    event = f.event("2027-06-18", {
+      title: "RUN IT Chicago",
+      category: "other",
+    });
+  const values = {
+    city: "Chicago",
+    country: "United States",
+    venue: "Soldier Field",
+    timezone: "America/Chicago",
+    events: String(event),
+  };
+  const i = f.i("unused", {
+    options: {
+      getSubcommand: () => "configure",
+      getChannel: () => ({ id: f.c }),
+      getString: (key) => values[key],
+    },
+  });
+  await require("../src/commands/concertCountdown").execute(i);
+  assert.match(i.response, /Saved/);
+  assert.deepEqual(JSON.parse(store.get(f.g, f.c).config).eventIds, [event]);
 });
