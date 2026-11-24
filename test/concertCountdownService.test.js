@@ -1,0 +1,400 @@
+const test = require("node:test"),
+  assert = require("node:assert/strict"),
+  fs = require("node:fs"),
+  os = require("node:os"),
+  path = require("node:path");
+process.env.HARMONY_DB_PATH = path.join(
+  fs.mkdtempSync(path.join(os.tmpdir(), "countdown-service-")),
+  "test.sqlite",
+);
+const { Collection, ChannelType } = require("discord.js");
+const store = require("../src/stores/concertCountdownStore"),
+  calendar = require("../src/stores/eventSchedulerStore"),
+  db = require("../src/db/sqlite");
+const images = require("../src/services/concertCountdownRender"),
+  service = require("../src/services/concertCountdownService");
+images.render = async () => Buffer.from("rendered PNG");
+let seq = 1000;
+function fixture() {
+  const g = "g" + ++seq,
+    c = String(++seq),
+    messages = new Collection(),
+    calls = { fetch: 0, pins: 0, send: 0, pin: 0, edit: 0 };
+  const event = calendar.createCalendarEvent({
+    guildId: g,
+    calendarChannelId: "cal",
+    title: "Chicago concert",
+    timezone: "America/Chicago",
+    eventDate: "2027-06-18",
+    eventLocation: "Soldier Field",
+    calendarType: "stray_kids",
+    category: "concert",
+    allDay: true,
+    createdBy: "admin",
+  });
+  store.save(g, c, {
+    guildId: g,
+    city: "Chicago",
+    country: "USA",
+    venue: "Soldier Field",
+    timezone: "America/Chicago",
+    eventIds: [event],
+  });
+  const f = {
+    g,
+    c,
+    event,
+    messages,
+    calls,
+    allow: true,
+    pinError: false,
+    sendError: null,
+    editError: null,
+  };
+  function message(content = "", author = "bot") {
+    const m = {
+      id: String(++seq),
+      channelId: c,
+      content,
+      author: { id: author },
+      pinned: false,
+      edit: async (p) => {
+        calls.edit++;
+        if (f.editError) throw f.editError;
+        m.content = p.content;
+        m.lastEdit = p;
+        return m;
+      },
+      pin: async () => {
+        calls.pin++;
+        if (f.pinError) throw Error("Cannot pin");
+        m.pinned = true;
+      },
+    };
+    messages.set(m.id, m);
+    return m;
+  }
+  f.message = message;
+  const channel = {
+    guildId: g,
+    type: ChannelType.GuildText,
+    permissionsFor: () => ({ has: () => f.allow }),
+    messages: {
+      fetch: async (options) => {
+        calls.fetch++;
+        if (options.message) {
+          if (!messages.has(options.message))
+            throw Object.assign(Error("Unknown Message"), { code: 10008 });
+          return messages.get(options.message);
+        }
+        return new Collection(
+          [...messages.values()]
+            .filter(
+              (m) => !options.before || BigInt(m.id) < BigInt(options.before),
+            )
+            .sort((a, b) => Number(BigInt(b.id) - BigInt(a.id)))
+            .slice(0, options.limit)
+            .map((m) => [m.id, m]),
+        );
+      },
+      fetchPins: async () => {
+        calls.pins++;
+        return {
+          items: [...messages.values()]
+            .filter((m) => m.pinned)
+            .map((m) => ({ message: m, pinnedAt: new Date() })),
+          hasMore: false,
+        };
+      },
+    },
+    send: async (p) => {
+      calls.send++;
+      if (f.sendError === "before")
+        throw Error("Connection failed before send");
+      const m = message(p.content);
+      m.sent = p;
+      if (f.sendError === "after") throw Error("Connection failed after send");
+      return m;
+    },
+  };
+  f.client = { user: { id: "bot" }, channels: { fetch: async () => channel } };
+  f.channel = channel;
+  f.row = () => store.get(g, c);
+  f.refresh = (opts) =>
+    service.refresh(f.client, g, c, {
+      now: new Date("2027-01-01T12:00Z"),
+      ...opts,
+    });
+  f.retry = () => store.update(g, c, { retry_at: null });
+  return f;
+}
+test("initial publication requires approval; private previews never call Discord", async () => {
+  const f = fixture();
+  await assert.rejects(f.refresh(), /requires approval/);
+  assert.equal(f.calls.send, 0);
+  const before = f.row();
+  const p = await service.preview(before);
+  assert.equal(p.files[0].name, "countdown.png");
+  assert.deepEqual(f.row(), before);
+  assert.equal(f.calls.fetch, 0);
+});
+test("explicit publication pins one message and preserves ID across restart", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.calls.pin, 1);
+  assert.equal(f.row().enabled, 0);
+  assert.ok(f.row().published_at);
+  const id = f.row().message_id;
+  db.closeDb();
+  assert.equal(f.row().message_id, id);
+  const calls = { ...f.calls };
+  await f.refresh();
+  assert.deepEqual(f.calls, calls);
+  assert.equal(f.calls.send, 1);
+});
+test("refresh edits existing attachments and does not mention members", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  await f.refresh({ force: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.calls.edit, 1);
+  const m = f.messages.get(f.row().message_id);
+  assert.deepEqual(m.lastEdit.attachments, []);
+  assert.deepEqual(m.lastEdit.allowedMentions, { parse: [] });
+  assert.ok(m.lastEdit.files[0].description);
+});
+test("failed pin persists message and a later repair never sends a duplicate", async () => {
+  const f = fixture();
+  f.pinError = true;
+  await assert.rejects(f.refresh({ publish: true }), /Cannot pin/);
+  const id = f.row().message_id;
+  assert.ok(id);
+  assert.equal(f.calls.send, 1);
+  f.pinError = false;
+  f.retry();
+  await f.refresh({ publish: true });
+  assert.equal(f.row().message_id, id);
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().last_error, null);
+});
+test("crash between send and ID persistence recovers unpinned message beyond last 100", async () => {
+  const f = fixture();
+  f.sendError = "after";
+  await assert.rejects(f.refresh({ publish: true }), /after send/);
+  assert.ok(f.row().delivery);
+  assert.equal(f.row().message_id, null);
+  for (let n = 0; n < 250; n++) f.message("chat", "member");
+  f.sendError = null;
+  f.retry();
+  db.closeDb();
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 1);
+  assert.equal(f.row().delivery, null);
+  assert.ok(f.row().message_id);
+  assert.ok(f.row().last_success);
+});
+test("failed send before delivery can be retried with the durable intent", async () => {
+  const f = fixture();
+  f.sendError = "before";
+  await assert.rejects(f.refresh({ publish: true }), /before send/);
+  assert.ok(f.row().delivery);
+  assert.equal(f.messages.size, 0);
+  f.sendError = null;
+  f.retry();
+  await f.refresh({ publish: true });
+  assert.equal(f.messages.size, 1);
+});
+test("deleted message is repaired once; unrelated pins are untouched", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  f.messages.delete(f.row().message_id);
+  const other = f.message("unrelated", "member");
+  other.pinned = true;
+  await f.refresh({ force: true });
+  assert.equal(f.calls.send, 2);
+  assert.equal(other.pinned, true);
+  assert.equal(f.messages.size, 2);
+});
+test("legacy/recovered pinned message is reused", async () => {
+  const f = fixture();
+  const m = f.message(
+    "Old card\nYoutiful STAY • World Tour Countdown [" + f.c + "]",
+  );
+  m.pinned = true;
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.row().message_id, m.id);
+});
+test("concurrent updates share a lock and exactly one initial message", async () => {
+  const f = fixture();
+  const outcomes = await Promise.allSettled([
+    f.refresh({ publish: true }),
+    f.refresh({ publish: true }),
+  ]);
+  assert.equal(outcomes.filter((x) => x.status === "fulfilled").length, 1);
+  assert.equal(f.calls.send, 1);
+});
+test("database lease protects against other processes; expired lease recovers", async () => {
+  const f = fixture(),
+    token = store.acquire(f.g, f.c);
+  await assert.rejects(f.refresh({ publish: true }), /already running/);
+  assert.equal(f.calls.send, 0);
+  db.getDb()
+    .prepare("UPDATE concert_countdowns SET lease_until=0 WHERE guild_id=?")
+    .run(f.g);
+  f.retry();
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 1);
+  store.release(f.g, f.c, token);
+});
+test("rate limits save status and honor retry delay without repeat Discord calls", async () => {
+  const f = fixture();
+  f.channel.send = async () => {
+    f.calls.send++;
+    throw Object.assign(Error("Rate limited"), {
+      status: 429,
+      retry_after: 90,
+    });
+  };
+  await assert.rejects(f.refresh({ publish: true }), /Rate limited/);
+  const calls = { ...f.calls };
+  assert.equal((await f.refresh({ publish: true })).deferred, true);
+  assert.deepEqual(f.calls, calls);
+  assert.match(f.row().last_error, /Rate limited/);
+});
+test("missing permissions preserve draft and produce an actionable error", async () => {
+  const f = fixture();
+  f.allow = false;
+  await assert.rejects(f.refresh({ publish: true }), /Pin Messages/);
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.row().message_id, null);
+});
+test("disabled countdowns are skipped by automatic jobs; manual refresh remains available", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  assert.deepEqual(await f.refresh({ scheduled: true, force: true }), {
+    skipped: true,
+  });
+  assert.equal(f.calls.edit, 0);
+  await f.refresh({ force: true });
+  assert.equal(f.calls.edit, 1);
+});
+test("local-day changes, missed days and approved reschedules update the same message", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  store.update(f.g, f.c, { enabled: 1 });
+  await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
+  assert.match(f.messages.get(f.row().message_id).content, /TOMORROW!/);
+  calendar.updateEvent(f.g, f.event, { event_date: "2027-06-20" });
+  await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
+  assert.match(f.messages.get(f.row().message_id).content, /3 days to go/);
+  calendar.cancelEvent(f.g, f.event, "admin");
+  await f.refresh({ scheduled: true, now: new Date("2027-06-17T12:00Z") });
+  assert.match(
+    f.messages.get(f.row().message_id).content,
+    /No active concert dates/,
+  );
+  assert.equal(f.calls.send, 1);
+});
+test("health check repairs unpinning without an unnecessary attachment edit", async () => {
+  const f = fixture();
+  await f.refresh({ publish: true });
+  f.messages.get(f.row().message_id).pinned = false;
+  await f.refresh({ now: new Date("2027-01-01T19:00Z") });
+  assert.equal(f.calls.edit, 0);
+  assert.equal(f.calls.pin, 2);
+});
+test("stored photograph survives reopen and can be reused only within its server", () => {
+  const f = fixture();
+  store.photo(f.g, f.c, Buffer.from("photo"), "jpeg");
+  const id = store.photos(f.g)[0].id;
+  db.closeDb();
+  assert.equal(Buffer.from(f.row().photo).toString(), "photo");
+  const other = fixture();
+  assert.throws(
+    () => store.reusePhoto(other.g, other.c, id),
+    /no longer available/,
+  );
+  const c2 = String(++seq);
+  store.save(f.g, c2, JSON.parse(f.row().config));
+  store.reusePhoto(f.g, c2, id);
+  assert.equal(Buffer.from(store.get(f.g, c2).photo).toString(), "photo");
+});
+test("configuration writes use optimistic revision and do not overwrite newer changes", () => {
+  const f = fixture(),
+    c = JSON.parse(f.row().config),
+    revision = f.row().revision;
+  store.save(f.g, f.c, { ...c, city: "New city" }, revision);
+  assert.throws(() => store.save(f.g, f.c, c, revision), /changed/);
+  assert.equal(JSON.parse(f.row().config).city, "New city");
+});
+test("paginated pin recovery uses the installed Discord.js response shape", async () => {
+  const f = fixture(),
+    m = f.message("card\nYoutiful STAY • World Tour Countdown [" + f.c + "]");
+  let n = 0;
+  f.channel.messages.fetchPins = async (options) => {
+    n++;
+    if (n === 1)
+      return {
+        items: [
+          { message: f.message("other"), pinnedAt: new Date("2026-01-01") },
+        ],
+        hasMore: true,
+      };
+    assert.ok(options.before);
+    return { items: [{ message: m }], hasMore: false };
+  };
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 0);
+  assert.equal(n, 2);
+});
+test("legacy unpinned sends are recovered safely during schema upgrade", async () => {
+  const f = fixture();
+  const m = f.message(
+    "Legacy card\nYoutiful STAY • World Tour Countdown [" + f.c + "]",
+  );
+  store.update(f.g, f.c, { legacy_recovery: 1 });
+  for (let n = 0; n < 120; n++) f.message("chat", "member");
+  await f.refresh({ publish: true });
+  assert.equal(f.calls.send, 0);
+  assert.equal(f.row().message_id, m.id);
+  assert.equal(f.row().legacy_recovery, 0);
+});
+test("incomplete or unavailable recovery history never authorizes a second send", async () => {
+  const f = fixture();
+  store.update(f.g, f.c, {
+    delivery: JSON.stringify({ after: "0", nonce: "fixture" }),
+  });
+  f.channel.messages.fetch = async () => {
+    throw Object.assign(Error("History unavailable"), { code: 50013 });
+  };
+  await assert.rejects(f.refresh({ publish: true }), /History unavailable/);
+  assert.equal(f.calls.send, 0);
+  assert.ok(f.row().delivery);
+});
+test("scheduler catches up immediately on startup and exposes a stop function", async () => {
+  db.getDb().prepare("UPDATE concert_countdowns SET enabled=0").run();
+  const f = fixture();
+  await f.refresh({ publish: true });
+  store.update(f.g, f.c, { enabled: 1, fingerprint: null });
+  let resolveEdit;
+  const edited = new Promise((resolve) => {
+    resolveEdit = resolve;
+  });
+  const m = f.messages.get(f.row().message_id),
+    original = m.edit;
+  m.edit = async (p) => {
+    const result = await original(p);
+    resolveEdit();
+    return result;
+  };
+  const stop = service.start(f.client);
+  try {
+    await edited;
+    assert.equal(f.calls.edit, 1);
+    assert.equal(f.calls.send, 1);
+  } finally {
+    stop();
+  }
+});

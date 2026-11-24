@@ -62,6 +62,7 @@ const ADMIN_CONTROLS = [
   ["collections", "Collections", ButtonStyle.Secondary],
   ["status", "Status / Health", ButtonStyle.Primary],
   ["media", "Media & Errors", ButtonStyle.Secondary],
+  ["countdown", "Concert Countdowns", ButtonStyle.Secondary],
 ];
 
 function buildHomeComponents() {
@@ -82,7 +83,7 @@ async function buildHomePayload() {
     .setDescription("Use these controls for Harmony’s community, system, and media tools. The Stray Kids and Youtiful Stays Schedule Manager panels in this channel remain your calendar controls.")
     .addFields(
       { name: "COMMUNITY", value: "Guard · Moderation History · Welcome Pass · Greetings · Member Counts", inline: false },
-      { name: "OTHER ADMIN TOOLS", value: "Collections · Status / Health · Media & Errors", inline: false },
+      { name: "OTHER ADMIN TOOLS", value: "Collections · Status / Health · Media & Errors · Concert Countdowns", inline: false },
     );
   return { embeds: [embed], components: buildHomeComponents(), allowedMentions: { parse: [] } };
 }
@@ -1346,7 +1347,7 @@ async function handleAdminRoomInteraction(interaction) {
     return true;
   }
   const [, action, parameter, panelId] = interaction.customId.split(":");
-  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "status", "media"]);
+  const panelActions = new Set(["guard", "guard-history-open", "welcome", "greetings", "members", "collections", "logs", "status", "media", "countdown"]);
   if (panelActions.has(action) && !(["guard", "welcome"].includes(action) && parameter === "ephemeral")) {
     if (!isActiveRoomPanel(interaction, interaction.message?.id)) {
       await interaction.reply({ content: "This Admin Room panel is no longer active. Use the current panel or ask an admin to install it.", flags: MessageFlags.Ephemeral });
@@ -1383,6 +1384,10 @@ async function handleAdminRoomInteraction(interaction) {
       const current = roomStore.getPanel(interaction.guildId);
       if (current?.enabled) await syncAdminRoom(interaction.guild, current);
     });
+    return true;
+  }
+  if (action === "countdown") {
+    await require("./concertCountdownManager").open(interaction);
     return true;
   }
   if (action === "status") {

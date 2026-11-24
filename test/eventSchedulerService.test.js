@@ -1032,8 +1032,10 @@ test("adding events refreshes the existing published calendar without duplicatin
   assert.match(afterTimed.payload.embeds[0].description, /Timed event/);
 });
 
-test("manager Add Event refreshes publication and View Preview uses one acknowledged interaction", async () => {
+test("manager Add Event refreshes publication and View Preview uses one acknowledged interaction", async (t) => {
+  // These fixtures describe early November; keep their visibility independent of the wall clock.
   const guildId = `manager-live-flow-${Date.now()}`;
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-01T12:00:00Z") });
   const control = fakeChannel("control-live-flow");
   const strayKids = fakeChannel("calendar-live-flow-stray-kids");
   const community = fakeChannel("calendar-live-flow-community");
@@ -1853,8 +1855,10 @@ test("Find Discord Event upgrades a linked legacy one-off into a native recurrin
   assert.equal(discordCreates, 0);
 });
 
-test("Find Discord Event repairs stale projected calendar rows and publishes visible K-Drama occurrences", async () => {
+test("Find Discord Event repairs stale projected calendar rows and publishes visible K-Drama occurrences", async (t) => {
+  // These fixtures describe early November; keep their visibility independent of the wall clock.
   const guildId = `find-native-calendar-visible-${Date.now()}`;
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-01T12:00:00Z") });
   const nativeId = "kdrama-saturday-discord-series";
   const native = {
     guildId,
