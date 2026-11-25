@@ -114,8 +114,18 @@ async function deliver(client, id, { now = new Date() } = {}) {
     await guild.roles.fetch();
     const access = room.permissionsFor(member);
     if (!access?.has(P.ViewChannel) || ([ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(room.type) && !access.has(P.Connect))) throw Object.assign(Error("This member cannot access the event room; no permissions were changed."), { blocked: true });
-    const latest = await dm.messages.fetch({ limit: 1, cache: false });
-    store.update(id, token, { dm_channel_id: dm.id, after_id: latest.first()?.id || "0", room_id: room.id });
+    let after;
+    try {
+      const latest = await dm.messages.fetch({ limit: 1, cache: false });
+      after = latest.first()?.id || "0";
+    } catch (error) {
+      // A first DM must not depend on permission to read an empty conversation.
+      // Save a conservative time boundary before sending. Unknown outcomes STILL
+      // require full history recovery above; unavailable recovery never resends.
+      if (![10003, 50001, 50013].includes(Number(error.code))) throw error;
+      after = ((BigInt(now.getTime() - 60000) - 1420070400000n) << 22n).toString();
+    }
+    store.update(id, token, { dm_channel_id: dm.id, after_id: after, room_id: room.id });
     job = store.get(id);
     if (lost || !store.renew(id, token, leaseNow())) throw Error("Delivery lock was lost; retry recovery before sending.");
     const current = events.getEvent(job.guild_id, job.event_id);
@@ -128,6 +138,7 @@ async function deliver(client, id, { now = new Date() } = {}) {
     store.update(id, token, { status: "sent", message_id: sent.id, sent_at: now.toISOString(), last_error: null, retry_at: null });
     return { sent: true };
   } catch (error) {
+    console.error("[event-room-links] delivery_failed", JSON.stringify({ deliveryId: id, code: error.code || error.status || null, reason: String(error.message).replace(/https?:\/\/\S+/g, "[url]").slice(0, 200) }));
     if (token) {
       const blocked = error.blocked || [50007, 10013].includes(Number(error.code));
       const unsafe = error.unsafeRecovery;
@@ -149,6 +160,9 @@ async function process(client, { now = new Date() } = {}) {
   return results;
 }
 function start(client) {
+  // Read-only startup evidence for failures saved before diagnostics existed.
+  console.info("[event-room-links] saved_status", JSON.stringify(store.diagnostics()));
+  for (const row of store.recentFailures()) console.warn("[event-room-links] saved_failure", JSON.stringify({ deliveryId: row.id, status: row.status, reason: row.last_error.replace(/https?:\/\/\S+/g, "[url]").slice(0, 200) }));
   let busy = false;
   const run = async () => {
     if (busy) return;

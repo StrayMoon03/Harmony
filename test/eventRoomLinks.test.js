@@ -165,7 +165,7 @@ function ui(f) {
   const s = manager.create(base, "community"); s.event = f.eventId;
   const interaction = (action, extra = {}) => {
     const i = { ...base, customId: `harmony-room-links:${s.token}:${action}`, values: [], ...extra,
-      reply: async p => { i.response = p; }, update: async p => { i.response = p; }, editReply: async p => { i.response = p; }, showModal: async p => { i.modal = p; }, deferUpdate: async () => { i.deferred = true; },
+      deferReply: async p => { i.deferred = true; i.replyFlags = p.flags; }, reply: async p => { i.response = p; }, update: async p => { i.response = p; }, editReply: async p => { i.response = p; }, showModal: async p => { i.modal = p; }, deferUpdate: async () => { i.deferred = true; },
     }; return i;
   };
   return { s, i: interaction };
@@ -174,7 +174,7 @@ test("private manager selects members without RSVP, schedules event-day messages
   const f = fixture(), { s, i } = ui(f);
   const open = i("home", { customId: `harmony-room-links:event:${f.eventId}` });
   await scheduler.handleEventSchedulerInteraction(open);
-  assert.equal(open.response.flags, 64);
+  assert.equal(open.replyFlags, 64);
   const add = i("add", { values: [f.userId] }); await manager.handle(add);
   assert.equal(store.members(f.guildId, f.eventId).length, 1);
   assert.equal(f.calls.send, 0);
@@ -211,7 +211,7 @@ test("authorized event staff can open this feature without broadening other Sche
   const f = fixture(), { i } = ui(f);
   const staff = i("open", { user: { id: "staff" }, memberPermissions: { has: flag => flag === require("discord.js").PermissionFlagsBits.ManageEvents }, customId: "harmony-room-links:open:community" });
   await scheduler.handleEventSchedulerInteraction(staff);
-  assert.equal(staff.response.flags, 64);
+  assert.equal(staff.replyFlags, 64);
   assert.match(staff.response.content, /SEND EVENT ROOM LINKS/);
 });
 test("manager room correction, removal and scheduling do not alter the calendar event or private reminder preferences", async () => {
@@ -336,4 +336,56 @@ test("an event rescheduled to a different day while the schedule form is open re
   await manager.handle(save);
   assert.match(save.response.content, /settings changed/);
   assert.equal(store.members(f.guildId, f.eventId)[0].scheduled, 0);
+});
+test("a first DM can send when reading the empty conversation is denied, but an unknown outcome still cannot resend without history", async () => {
+  for (const lost of [false, true]) {
+    const f = fixture(), id = f.enqueue();
+    f.dm.messages.fetch = async () => { throw Object.assign(Error("Missing Access"), { code: 50001 }); };
+    if (lost) f.sendError = "after";
+    await service.deliver(f.client, id, { now });
+    assert.equal(f.calls.send, 1);
+    assert.ok(store.get(id).after_id);
+    if (!lost) assert.equal(store.get(id).status, "sent");
+    else {
+      f.sendError = null;
+      await service.deliver(f.client, id, { now: new Date(now.getTime() + 301000) });
+      assert.equal(f.calls.send, 1);
+      assert.equal(store.get(id).status, "pending");
+    }
+  }
+});
+test("Send Now immediately displays Sending and provides a separate private delivered receipt", async () => {
+  const f = fixture(), { s, i } = ui(f); f.add();
+  const sendId = manager.page(s).components[3].toJSON().components[0].custom_id;
+  const original = service.deliver;
+  let release;
+  service.deliver = async () => {
+    await new Promise(resolve => { release = resolve; });
+    const id = store.deliveries(f.guildId, f.eventId).find(j => j.kind === "manual").id;
+    const token = store.claim(id, new Date());
+    store.update(id, token, { status: "sent", sent_at: new Date().toISOString(), message_id: "confirmed" });
+    store.release(id, token);
+    return { sent: true };
+  };
+  try {
+    const receipts = [], send = i("send", { customId: sendId, followUp: async p => { receipts.push(p); } });
+    const task = manager.handle(send);
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    assert.match(send.response.content, /Sending room links/);
+    release(); await task;
+    assert.match(send.response.content, /Delivered: 1 · Not delivered: 0/);
+    assert.equal(receipts[0].flags, 64);
+    assert.match(receipts[0].content, /Delivered: 1/);
+    assert.equal(f.calls.send, 0);
+  } finally { service.deliver = original; if (release) release(); }
+});
+test("a failed direct message produces an explicit private failure receipt without falsely reporting success", async () => {
+  const f = fixture(), { s, i } = ui(f); f.add();
+  f.sendError = Object.assign(Error("Cannot send messages"), { code: 50007 });
+  const sendId = manager.page(s).components[3].toJSON().components[0].custom_id;
+  const receipts = [], send = i("send", { customId: sendId, followUp: async p => { receipts.push(p); } });
+  await manager.handle(send);
+  assert.match(receipts[0].content, /Delivered: 0 · Not delivered: 1/);
+  assert.match(receipts[0].content, /DMs are unavailable/);
+  assert.equal(receipts[0].flags, 64);
 });

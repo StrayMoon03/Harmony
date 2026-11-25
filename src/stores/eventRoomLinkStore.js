@@ -69,4 +69,11 @@ function retry(g, e) {
   // Known refusals may be retried. Unknown send outcomes still recover first.
   getDb().prepare("UPDATE event_room_link_deliveries SET status='pending' WHERE guild_id=? AND event_id=? AND status IN ('blocked','failed')").run(g, e);
 }
-module.exports = { settings, members, deliveries, get, configure, add, remove, schedule, enqueue, scheduledMembers, reconcile, due, claim, renew, update, release, retry };
+function recentFailures() {
+  return getDb().prepare("SELECT id,status,last_error FROM event_room_link_deliveries WHERE last_error IS NOT NULL ORDER BY id DESC LIMIT 20").all();
+}
+function diagnostics() {
+  const counts = getDb().prepare("SELECT COUNT(*) enrolled,COALESCE(SUM(scheduled),0) scheduled FROM event_room_link_members WHERE active=1").get();
+  return { ...counts, jobs: getDb().prepare("SELECT status,COUNT(*) count FROM event_room_link_deliveries GROUP BY status").all() };
+}
+module.exports = { diagnostics, recentFailures, settings, members, deliveries, get, configure, add, remove, schedule, enqueue, scheduledMembers, reconcile, due, claim, renew, update, release, retry };
