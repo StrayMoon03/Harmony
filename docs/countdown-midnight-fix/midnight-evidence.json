@@ -1,0 +1,69 @@
+{
+  "mode": "Offline integration, not live Discord",
+  "node": "v24.22.3",
+  "tzdata": "2026e",
+  "evidence": [
+    {
+      "city": "Toronto",
+      "timezone": "America/Toronto",
+      "before": {
+        "utc": "2027-06-24T03:59:59.999Z",
+        "localDate": "2027-06-23",
+        "days": [
+          2
+        ]
+      },
+      "after": {
+        "utc": "2027-06-24T04:00:00.000Z",
+        "localDate": "2027-06-24",
+        "days": [
+          1
+        ],
+        "lastSuccess": "2027-06-24T04:00:00.000Z"
+      },
+      "result": {
+        "updated": 1,
+        "skipped": 0,
+        "deferred": 0,
+        "failed": 0
+      },
+      "messageId": "saved-toronto",
+      "sends": 1,
+      "edits": 1,
+      "pins": 1,
+      "pinned": true,
+      "nextUpdate": "2027-06-25T04:00:00.000Z"
+    },
+    {
+      "city": "Vancouver",
+      "timezone": "America/Vancouver",
+      "before": {
+        "utc": "2027-05-18T06:59:59.999Z",
+        "localDate": "2027-05-17",
+        "days": [
+          2
+        ]
+      },
+      "after": {
+        "utc": "2027-05-18T07:00:00.000Z",
+        "localDate": "2027-05-18",
+        "days": [
+          1
+        ],
+        "lastSuccess": "2027-05-18T07:00:00.000Z"
+      },
+      "result": {
+        "updated": 1,
+        "skipped": 0,
+        "deferred": 0,
+        "failed": 0
+      },
+      "messageId": "saved-vancouver",
+      "sends": 1,
+      "edits": 1,
+      "pins": 1,
+      "pinned": true,
+      "nextUpdate": "2027-05-19T07:00:00.000Z"
+    }
+  ]
+}

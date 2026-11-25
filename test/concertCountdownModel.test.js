@@ -149,3 +149,21 @@ test("configuration validation requires valid selected events and venue details"
     /Invalid concert date/,
   );
 });
+
+test('next midnight follows IANA local boundaries across DST and international zones', () => {
+  const { nextMidnight } = require('../src/services/concertCountdownModel');
+  for (const [tz, start, expected, hours] of [
+    ['America/Toronto', '2027-03-14T05:00:00Z', '2027-03-15T04:00:00.000Z', 23],
+    ['America/Toronto', '2027-11-07T04:00:00Z', '2027-11-08T05:00:00.000Z', 25],
+    ['America/Vancouver', '2027-03-14T07:00:00Z', '2027-03-15T07:00:00.000Z', 24],
+    ['America/Vancouver', '2027-11-07T07:00:00Z', '2027-11-08T07:00:00.000Z', 24],
+    ['Asia/Tokyo', '2027-06-18T15:00:00Z', '2027-06-19T15:00:00.000Z', 24],
+    ['Europe/London', '2027-03-28T00:00:00Z', '2027-03-28T23:00:00.000Z', 23],
+  ]) {
+    const at = new Date(start), next = nextMidnight(at, tz);
+    assert.equal(next.toISOString(), expected, tz);
+    assert.equal((next - at) / 3600000, hours, tz);
+    assert.notEqual(localDate(new Date(next - 1), tz), localDate(next, tz));
+  }
+  assert.equal(nextMidnight(new Date('2027-06-19T03:59:59.999Z'), 'America/Toronto').toISOString(), '2027-06-19T04:00:00.000Z');
+});

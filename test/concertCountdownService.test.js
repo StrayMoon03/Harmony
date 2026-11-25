@@ -961,3 +961,139 @@ test("a stored ID with unrelated attachment metadata fails closed instead of ove
   assert.equal(f.calls.edit, 0);
   assert.equal(f.row().message_id, m.id);
 });
+
+async function dailyFixture(zone = 'America/Chicago', at = '2027-06-17T05:00:00Z') {
+  isolateRenderingWork();
+  const f = fixture(), config = JSON.parse(f.row().config); config.timezone = zone;
+  store.save(f.g, f.c, config); store.photo(f.g, f.c, Buffer.from('preserved stadium photo'), 'jpeg');
+  await f.refresh({ publish: true, now: new Date(at) }); store.update(f.g, f.c, { enabled: 1 });
+  return f;
+}
+test('enabled published countdowns edit in place at venue midnight once, retaining photo, config, ID, pin and settings', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z');
+  const before = f.row(), m = f.messages.get(before.message_id);
+  assert.equal(service.model(before, new Date('2027-06-16T23:00Z')).panels[0].days, 2);
+  const calls = { ...f.calls };
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T03:59:59.999Z') }); assert.deepEqual(f.calls, calls);
+  const midnight = new Date('2027-06-17T04:00:00.000Z');
+  const result = await service.runUpdates(f.client, { now: midnight });
+  assert.equal(result.updated, 1); assert.equal(f.calls.edit, 1); assert.match(m.lastEdit.files[0].description, /TOMORROW/);
+  assert.equal(service.model(f.row(), midnight).panels[0].days, 1);
+  for (const k of ['message_id', 'photo', 'photo_type', 'config', 'revision', 'enabled', 'published_at']) assert.deepEqual(f.row()[k], before[k], k);
+  assert.equal(m.pinned, true); assert.equal(f.calls.pin, 1); assert.equal(f.calls.send, 1);
+  assert.equal(f.row().last_success, midnight.toISOString());
+  assert.equal(service.nextUpdate(f.row(), midnight).toISOString(), '2027-06-18T04:00:00.000Z');
+  await service.runUpdates(f.client, { now: midnight }); assert.equal(f.calls.edit, 1);
+});
+test('independent venue midnights, multi-date panels and D-day/completed states advance from actual dates', async () => {
+  const f = await dailyFixture('America/Vancouver', '2027-06-16T07:00Z');
+  const second = calendar.createCalendarEvent({ guildId: f.g, calendarChannelId: 'cal', title: 'Chicago concert night 2', timezone: 'America/Vancouver', eventDate: '2027-06-19', calendarType: 'stray_kids', category: 'concert', allDay: true, createdBy: 'admin' });
+  const config = JSON.parse(f.row().config); config.eventIds.push(second); store.save(f.g, f.c, config);
+  await f.refresh({ force: true, now: new Date('2027-06-16T07:00Z') });
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T04:00Z') }); assert.equal(f.calls.edit, 1); // Toronto midnight isn't Vancouver midnight.
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T07:00Z') });
+  assert.deepEqual(service.model(f.row(), new Date(f.row().last_success)).panels.map(p => p.days), [1, 2]);
+  await service.runUpdates(f.client, { now: new Date('2027-06-18T07:00Z') });
+  assert.deepEqual(service.model(f.row(), new Date(f.row().last_success)).panels.map(p => p.state), ['today', 'tomorrow']);
+  await service.runUpdates(f.client, { now: new Date('2027-06-19T07:00Z') });
+  assert.deepEqual(service.model(f.row(), new Date(f.row().last_success)).panels.map(p => p.state), ['completed', 'today']);
+  assert.equal(f.calls.send, 1);
+});
+test('restart catches up several missed days rather than subtracting just one', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-10T04:00Z'), id = f.row().message_id;
+  assert.equal(service.model(f.row(), new Date('2027-06-10T04:00Z')).panels[0].days, 8);
+  db.closeDb(); const resumed = new Date('2027-06-15T15:00Z');
+  await service.runUpdates(f.client, { now: resumed });
+  assert.equal(service.model(f.row(), resumed).panels[0].days, 3); assert.equal(f.calls.edit, 1); assert.equal(f.row().message_id, id);
+  assert.equal(f.row().last_success, resumed.toISOString());
+});
+test('midnight failure respects persisted retry delay after restart and preserves the original message', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z'), id = f.row().message_id;
+  f.editError = Object.assign(Error('Rate limited'), { retry_after: 90, status: 429 });
+  const midnight = new Date('2027-06-17T04:00Z');
+  assert.equal((await service.runUpdates(f.client, { now: midnight })).failed, 1);
+  assert.equal(service.nextUpdate(f.row(), midnight).toISOString(), '2027-06-17T04:01:30.000Z');
+  db.closeDb(); f.editError = null;
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T04:01:29Z') }); assert.equal(f.calls.edit, 1);
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T04:01:30Z') }); assert.equal(f.calls.edit, 2);
+  assert.equal(f.row().message_id, id); assert.equal(f.calls.send, 1); assert.equal(f.row().retry_at, null);
+});
+test('completed fingerprints still checkpoint each midnight without spinning inside the six-hour health window', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-19T23:00Z'), now = new Date('2027-06-20T04:00Z');
+  assert.equal((await service.runUpdates(f.client, { now })).updated, 1);
+  assert.equal(f.row().last_success, now.toISOString());
+  assert.equal(service.nextUpdate(f.row(), now).toISOString(), '2027-06-21T04:00:00.000Z');
+  assert.equal(f.calls.edit, 0); assert.equal(f.calls.send, 1);
+});
+test('daily scheduling excludes disabled cards and private drafts, and Refresh Now still works', async () => {
+  const f = await dailyFixture(); store.update(f.g, f.c, { enabled: 0 });
+  const before = f.row(), calls = { ...f.calls };
+  await service.runUpdates(f.client, { now: new Date('2027-06-18T05:00Z') }); assert.deepEqual(f.calls, calls);
+  assert.equal(service.nextUpdate(f.row()), null);
+  const draft = fixture(); store.update(draft.g, draft.c, { enabled: 1 });
+  assert.equal(store.renderingWork(images.RENDER_VERSION).some(r => r.guild_id === draft.g), false);
+  await f.refresh({ force: true, now: new Date('2027-06-18T05:00Z') });
+  assert.equal(f.calls.edit, 1); assert.equal(f.row().enabled, before.enabled);
+});
+test('scheduler arms one midnight timer, wakes on settings changes and stops without a minute poll', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z');
+  let now = new Date('2027-06-16T12:00Z'); const pending = new Map(); let seq = 0;
+  const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.size, 1); assert.equal([...pending.values()][0].ms, 16 * 3600000);
+  const task = [...pending.values()][0]; pending.clear(); now = new Date('2027-06-17T04:00Z'); await task.fn();
+  assert.equal(f.calls.edit, 1); assert.equal([...pending.values()][0].ms, 24 * 3600000);
+  store.update(f.g, f.c, { enabled: 0 }); assert.equal(pending.size, 0);
+  store.update(f.g, f.c, { enabled: 1 }); assert.equal(pending.size, 1);
+  stop(); assert.equal(pending.size, 0);
+  store.update(f.g, f.c, { enabled: 0 }); assert.equal(pending.size, 0);
+});
+test('invalid saved zone retries with backoff; a surviving lease delays recovery safely', async () => {
+  const f = await dailyFixture(), now = new Date('2027-06-17T06:00Z');
+  const config = JSON.parse(f.row().config); config.timezone = 'Mars/Chicago'; store.save(f.g, f.c, config);
+  // A valid fingerprint exercises zone validation while planning the next local day.
+  store.update(f.g, f.c, { fingerprint: 'old' });
+  assert.equal((await service.runUpdates(f.client, { now })).failed, 1);
+  assert.equal(service.nextUpdate(f.row(), now).toISOString(), '2027-06-17T06:05:00.000Z');
+  const due = { ...f.row(), lease_until: now.getTime() + 600000 };
+  assert.equal(service.nextUpdate(due, now).getTime(), due.lease_until + 1);
+  assert.equal(f.calls.send, 1);
+});
+test('the running midnight timer arms the exact rate-limit retry and recovers without a second send', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z');
+  let now = new Date('2027-06-17T03:00Z'); const pending = new Map(); let seq = 0;
+  const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    const midnight = [...pending.values()][0]; pending.clear(); now = new Date('2027-06-17T04:00Z');
+    f.editError = Object.assign(Error('Rate limited'), { status: 429, retry_after: 90 }); await midnight.fn();
+    assert.equal(pending.size, 1); const retry = [...pending.values()][0]; assert.equal(retry.ms, 90000);
+    pending.clear(); now = new Date('2027-06-17T04:01:30Z'); f.editError = null; await retry.fn();
+    assert.equal(f.calls.send, 1); assert.equal(f.calls.edit, 2); assert.equal(f.row().last_error, null);
+    assert.equal([...pending.values()][0].ms, 24 * 3600000 - 90000);
+  } finally { stop(); }
+});
+test('a same-day failed manual refresh clears its error on scheduled retry instead of taking the unchanged-image shortcut', async () => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z');
+  f.editError = Error('Temporary forced-edit failure');
+  await assert.rejects(f.refresh({ force: true, now: new Date('2027-06-16T04:01Z') }), /Temporary/);
+  f.editError = null;
+  const due = new Date(f.row().retry_at); assert.equal(due.toISOString(), '2027-06-16T04:06:00.000Z');
+  await service.runUpdates(f.client, { now: due });
+  assert.equal(f.row().last_error, null); assert.equal(f.row().retry_at, null);
+  assert.equal(service.nextUpdate(f.row(), due).toISOString(), '2027-06-17T04:00:00.000Z');
+  assert.equal(f.calls.send, 1);
+});
+test('a manual failure releases its lease and rearms the saved retry without waiting for lease expiry', async t => {
+  const f = await dailyFixture('America/Toronto', '2027-06-16T04:00Z');
+  let now = new Date('2027-06-16T04:01Z'); const pending = new Map(); let seq = 0;
+  t.mock.method(Date, 'now', () => now.getTime());
+  const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    f.editError = Object.assign(Error('Rate limited'), { status: 429, retry_after: 90 });
+    await assert.rejects(f.refresh({ force: true, now }), /Rate limited/);
+    assert.equal(pending.size, 1); assert.equal([...pending.values()][0].ms, 90000);
+    assert.equal(f.row().lease_until, null);
+  } finally { stop(); }
+});
