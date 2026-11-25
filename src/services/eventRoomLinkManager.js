@@ -11,8 +11,8 @@ const safe = { allowedMentions: { parse: [] } };
 const permitted = i => Boolean(i.guildId && (isAdminRoomAuthorized(i) || i.memberPermissions?.has?.(P.ManageEvents)));
 const id = (s, action, extra = "") => `harmony-room-links:${s.token}:${action}${extra ? ":" + extra : ""}`;
 const button = (s, action, text, style = Style.Secondary, extra = "") => new Button().setCustomId(id(s, action, extra)).setLabel(text).setStyle(style);
-function entry(calendarType) { return new Button().setCustomId(`harmony-room-links:open:${calendarType}`).setLabel("Send Room Links").setStyle(Style.Secondary); }
-function eventEntry(event) { return new Button().setCustomId(`harmony-room-links:event:${event.id}`).setLabel("Send Room Links").setStyle(Style.Primary); }
+function entry(calendarType) { return new Button().setCustomId(`harmony-room-links:open:${calendarType}`).setLabel("Send Room Links by DM").setStyle(Style.Secondary); }
+function eventEntry(event) { return new Button().setCustomId(`harmony-room-links:event:${event.id}`).setLabel("Send Room Links by DM").setStyle(Style.Primary); }
 function create(i, calendarType) {
   for (const [key, s] of sessions) if (s.expires <= Date.now()) sessions.delete(key);
   if (sessions.size >= 500) sessions.delete(sessions.keys().next().value);
@@ -27,7 +27,7 @@ function list(s) {
   const components = [];
   if (slice.length) components.push(new Row().addComponents(new Select().setCustomId(id(s, "select")).setPlaceholder("Choose the event to help members find").addOptions(slice.map(e => ({ label: e.title.slice(0, 100), description: `${service.timing(e).day} · ${service.timing(e).timezone}`.slice(0, 100), value: String(e.id) })))));
   components.push(new Row().addComponents(button(s, "prev", "Previous").setDisabled(s.page === 0), button(s, "next", "Next").setDisabled((s.page + 1) * 25 >= rows.length), button(s, "close", "Back")));
-  return { ...safe, content: `**SEND EVENT ROOM LINKS**\nChoose an event. You can send selected members a private message with one button to open its room, now or on the event day. They do not need to mark themselves interested.\n\n${rows.length} upcoming events · Page ${s.page + 1}`, components };
+  return { ...safe, content: `**SEND ROOM LINKS BY DM**\nChoose an event. You can send selected members a private message with one button to open its room, now or on the event day. They do not need to mark themselves interested.\n\n${rows.length} upcoming events · Page ${s.page + 1}`, components };
 }
 function scheduleContext(s, event) {
   const timing = service.timing(event);
@@ -38,7 +38,7 @@ function receipt(ids) {
   const sent = rows.filter(r => r.status === "sent").length;
   const failed = rows.filter(r => ["blocked", "failed", "cancelled"].includes(r.status) || (r.status !== "sent" && r.last_error));
   const waiting = rows.filter(r => ["pending", "sending"].includes(r.status) && !r.last_error).length;
-  return ["**Room message result**", `Delivered: ${sent} · Not delivered: ${failed.length} · Waiting: ${waiting}`,
+  return ["**Private DM result**", `Delivered: ${sent} · Not delivered: ${failed.length} · Waiting: ${waiting}`,
     ...failed.slice(0, 5).map(r => `<@${r.user_id}>: ${r.last_error || "Message cancelled."}${r.retry_at ? " A retry is saved." : ""}`),
     ...(!rows.length ? ["No recipients were queued. Add the member again before sending."] : []),
   ].join("\n").slice(0, 1700);
@@ -60,11 +60,11 @@ function page(s, notice = "") {
   const jobs = store.deliveries(s.guild, s.event), sent = jobs.filter(j => j.status === "sent").length;
   const failures = jobs.filter(j => ["blocked", "failed", "pending"].includes(j.status) && j.last_error);
   const roomId = settings?.room_id || event.event_channel_id;
-  return { ...safe, content: [notice, `**${event.title} — ROOM LINKS**`, `Event day: ${t.day} · ${t.timezone}`, roomId ? `Room: <#${roomId}>` : "Choose the event room below, or Harmony will use the channel of the linked Discord event.", "", `${members.length} selected member${members.length === 1 ? "" : "s"}:`, ...members.slice(0, 12).map(m => `• <@${m.user_id}> — ${m.scheduled ? `Scheduled ${settings?.local_time || "09:00"} on the event day` : "Send Now only"}`), ...(members.length > 12 ? [`…and ${members.length - 12} more`] : []), "", `Confirmed delivered: ${sent}. Queued / scheduled: ${jobs.filter(j => ["pending", "sending"].includes(j.status)).length}.`, ...failures.slice(0, 4).map(j => `<@${j.user_id}>: ${j.last_error}${j.retry_at ? ` Retry after ${j.retry_at}.` : ""}`), "", "Use Add Members even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message."].filter(v => v !== undefined && v !== "").join("\n").slice(0, 1900), components: [
-    new Row().addComponents(new Users().setCustomId(id(s, "add")).setPlaceholder("Add members to receive the room link").setMinValues(1).setMaxValues(25)),
+  return { ...safe, content: [notice, `**${event.title} — PRIVATE DMs**`, "Delivery: Private DMs to the selected members", `Event day: ${t.day} · ${t.timezone}`, roomId ? `Button opens: <#${roomId}>` : "Choose the room the button should open. Delivery is always a private DM.", "", `${members.length} selected member${members.length === 1 ? "" : "s"}:`, ...members.slice(0, 12).map(m => `• <@${m.user_id}> — ${m.scheduled ? `Scheduled ${settings?.local_time || "09:00"} on the event day` : "Send Now only"}`), ...(members.length > 12 ? [`…and ${members.length - 12} more`] : []), "", `Confirmed delivered: ${sent}. Queued / scheduled: ${jobs.filter(j => ["pending", "sending"].includes(j.status)).length}.`, ...failures.slice(0, 4).map(j => `<@${j.user_id}>: ${j.last_error}${j.retry_at ? ` Retry after ${j.retry_at}.` : ""}`), "", "Use Add Members even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message."].filter(v => v !== undefined && v !== "").join("\n").slice(0, 1900), components: [
+    new Row().addComponents(new Users().setCustomId(id(s, "add")).setPlaceholder("Who receives the DM? Add members").setMinValues(1).setMaxValues(25)),
     new Row().addComponents(new Users().setCustomId(id(s, "remove")).setPlaceholder("Remove members from this event's messages").setMinValues(1).setMaxValues(25)),
-    new Row().addComponents(new Channels().setCustomId(id(s, "room")).setPlaceholder("Confirm or correct the event room").addChannelTypes(...service.roomTypes)),
-    new Row().addComponents(button(s, "send", "Send Now", Style.Primary, jobKey).setDisabled(!members.length), button(s, "schedule", "Schedule Event-Day Message", Style.Success).setDisabled(!members.length)),
+    new Row().addComponents(new Channels().setCustomId(id(s, "room")).setPlaceholder("Room the DM button opens").addChannelTypes(...service.roomTypes)),
+    new Row().addComponents(button(s, "send", "Send DM Now", Style.Primary, jobKey).setDisabled(!members.length), button(s, "schedule", "Schedule Event-Day DM", Style.Success).setDisabled(!members.length)),
     new Row().addComponents(button(s, "stop", "Stop Scheduled Messages"), button(s, "retry", "Retry Failed Delivery"), button(s, "back", "Back to Events")),
   ] };
 }
@@ -124,12 +124,12 @@ async function handle(i) {
         await i.deferUpdate();
         await service.resolveRoom(i.client, event, i.values[0]);
         store.configure(s.guild, s.event, { roomId: i.values[0] === event.event_channel_id ? null : i.values[0] }, i.user.id);
-        await i.editReply(page(s, "Message destination saved. The calendar and room permissions are unchanged."));
+        await i.editReply(page(s, "Button link saved. Messages will go to members’ DMs; nothing will be posted in that room."));
       } else if (action === "schedule") {
         const t = service.timing(event, store.settings(s.guild, s.event)?.local_time || "09:00");
         s.scheduleUsers = store.members(s.guild, s.event).map(m => m.user_id);
         s.scheduleContext = scheduleContext(s, event);
-        await i.showModal(new Modal().setCustomId(id(s, "schedule-save")).setTitle("Event-day room message").addComponents(new Row().addComponents(new Input().setCustomId("time").setLabel(`Time HH:MM · ${t.timezone}`.slice(0, 45)).setStyle(TextInputStyle.Short).setPlaceholder("09:00 = 9 AM; 19:00 = 7 PM").setValue(store.settings(s.guild, s.event)?.local_time || "09:00").setRequired(true).setMaxLength(5))));
+        await i.showModal(new Modal().setCustomId(id(s, "schedule-save")).setTitle("Event-day DM").addComponents(new Row().addComponents(new Input().setCustomId("time").setLabel(`Time HH:MM · ${t.timezone}`.slice(0, 45)).setStyle(TextInputStyle.Short).setPlaceholder("09:00 = 9 AM; 19:00 = 7 PM").setValue(store.settings(s.guild, s.event)?.local_time || "09:00").setRequired(true).setMaxLength(5))));
       } else if (action === "schedule-save") {
         await i.deferUpdate();
         if (!s.scheduleUsers?.length || s.scheduleContext !== scheduleContext(s, event)) throw Error("The event day, time zone or room settings changed. Open Schedule Event-Day Message again.");
@@ -151,7 +151,7 @@ async function handle(i) {
         const users = s.manual.get(extra);
         if (!users) throw Error("That Send Now button expired. Reopen this event's room links.");
         await i.deferUpdate();
-        await i.editReply(page(s, "**Sending room links…** A delivered or failed result will appear here."));
+        await i.editReply(page(s, "**Sending private DMs…** A delivered or failed result will appear here."));
         if (!service.validDay(event, new Date())) throw Error("This event has finished. Choose an upcoming event.");
         await service.resolveRoom(i.client, event, store.settings(s.guild, s.event)?.room_id);
         const now = new Date(), ids = store.enqueue(s.guild, s.event, users, `manual:${s.guild}:${s.event}:${s.token}:${extra}`, "manual", now.toISOString(), now);
@@ -173,8 +173,8 @@ async function handle(i) {
     if (i.deferred) {
       const current = events.getEvent(s.guild, s.event);
       const view = current ? page(s) : list(s);
-      await i.editReply({ ...view, content: ("**Room message was not completed**\n" + error.message + "\n\n" + view.content).slice(0, 1900) });
-      if (i.followUp) await i.followUp({ ...safe, content: "**Room message was not completed**\n" + error.message, flags: 64 });
+      await i.editReply({ ...view, content: ("**Private DM was not completed**\n" + error.message + "\n\n" + view.content).slice(0, 1900) });
+      if (i.followUp) await i.followUp({ ...safe, content: "**Private DM was not completed**\n" + error.message, flags: 64 });
     } else await i.reply({ ...response, flags: 64 });
   } finally { s.busy = false; }
   return true;

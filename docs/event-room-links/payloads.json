@@ -49,7 +49,7 @@
           {
             "type": 2,
             "custom_id": "harmony-room-links:open:community",
-            "label": "Send Room Links",
+            "label": "Send Room Links by DM",
             "style": 2
           }
         ]
@@ -60,15 +60,15 @@
     "allowedMentions": {
       "parse": []
     },
-    "content": "**Sunday Listening Party — ROOM LINKS**\nEvent day: 2030-06-23 · America/New_York\nRoom: <#fixture-room>\n1 selected member:\n• <@fixture-member> — Scheduled 09:00 on the event day\nConfirmed delivered: 0. Queued / scheduled: 1.\nUse Add Members even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message.",
+    "content": "**Sunday Listening Party — PRIVATE DMs**\nDelivery: Private DMs to the selected members\nEvent day: 2030-06-23 · America/New_York\nButton opens: <#fixture-room>\n1 selected member:\n• <@fixture-member> — Scheduled 09:00 on the event day\nConfirmed delivered: 0. Queued / scheduled: 1.\nUse Add Members even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message.",
     "components": [
       {
         "type": 1,
         "components": [
           {
             "type": 5,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:add",
-            "placeholder": "Add members to receive the room link",
+            "custom_id": "harmony-room-links:457e14351d305a73:add",
+            "placeholder": "Who receives the DM? Add members",
             "min_values": 1,
             "max_values": 25
           }
@@ -79,7 +79,7 @@
         "components": [
           {
             "type": 5,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:remove",
+            "custom_id": "harmony-room-links:457e14351d305a73:remove",
             "placeholder": "Remove members from this event's messages",
             "min_values": 1,
             "max_values": 25
@@ -91,8 +91,8 @@
         "components": [
           {
             "type": 8,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:room",
-            "placeholder": "Confirm or correct the event room",
+            "custom_id": "harmony-room-links:457e14351d305a73:room",
+            "placeholder": "Room the DM button opens",
             "channel_types": [
               0,
               5,
@@ -107,15 +107,15 @@
         "components": [
           {
             "type": 2,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:send:811956590d627639",
-            "label": "Send Now",
+            "custom_id": "harmony-room-links:457e14351d305a73:send:c5951cb0e13120a3",
+            "label": "Send DM Now",
             "style": 1,
             "disabled": false
           },
           {
             "type": 2,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:schedule",
-            "label": "Schedule Event-Day Message",
+            "custom_id": "harmony-room-links:457e14351d305a73:schedule",
+            "label": "Schedule Event-Day DM",
             "style": 3,
             "disabled": false
           }
@@ -126,19 +126,19 @@
         "components": [
           {
             "type": 2,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:stop",
+            "custom_id": "harmony-room-links:457e14351d305a73:stop",
             "label": "Stop Scheduled Messages",
             "style": 2
           },
           {
             "type": 2,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:retry",
+            "custom_id": "harmony-room-links:457e14351d305a73:retry",
             "label": "Retry Failed Delivery",
             "style": 2
           },
           {
             "type": 2,
-            "custom_id": "harmony-room-links:428f7b30043f33a4:back",
+            "custom_id": "harmony-room-links:457e14351d305a73:back",
             "label": "Back to Events",
             "style": 2
           }
