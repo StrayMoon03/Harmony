@@ -281,9 +281,10 @@ async function downloadMedia(url, options = {}) {
     const browserDir = path.join(jobDir, "browser");
     await fs.mkdir(browserDir, { recursive: true });
     const getReel = options.downloadInstagramReel || require("./instagramReelFallback").downloadInstagramReel;
+    const getPhotos = options.downloadInstagramPhotos || require("./instagramPhotoFallback").downloadInstagramPhotos;
     const result = isReel
       ? await getReel(url, browserDir, { signal })
-      : await require("./instagramPhotoFallback").downloadInstagramPhotos(url, browserDir, { signal });
+      : await getPhotos(url, browserDir, { signal });
     const browserResult = { files: result.files.map(probeFile), hasAudio: result.hasAudio, creator: result.creator, platform: "instagram" };
     if (!isReel || (browserResult.files.some((file) => file.isVideo) && browserResult.hasAudio !== false)) {
       return withAuthFailure(browserResult);
