@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 from urllib.parse import urlparse
 
 
@@ -143,14 +144,39 @@ def allowed_response(url):
             and (parsed.path.startswith("/api/") or parsed.path.startswith("/graphql")))
 
 
-def load_session_cookies(filename):
+def load_session_cookies(filename, now=None):
+    # Load the jar the same way yt-dlp and gallery-dl do: keep cookies whose
+    # file expiry is 0 or already past (exporters often write those for the
+    # session cookie). A past/zero expiry is sent as a browser-session cookie,
+    # otherwise Chromium would discard it immediately.
+    current = time.time() if now is None else now
     jar = http.cookiejar.MozillaCookieJar(filename)
-    jar.load(ignore_discard=True, ignore_expires=False)
-    return [{"name": c.name, "value": c.value, "domain": c.domain,
-             "path": c.path or "/", "secure": c.secure,
-             **({"expires": c.expires} if c.expires else {})}
-            for c in jar if c.domain.lstrip(".") == "instagram.com"
-            or c.domain.endswith(".instagram.com")]
+    jar.load(ignore_discard=True, ignore_expires=True)
+    cookies = []
+    for c in jar:
+        if not (c.domain.lstrip(".") == "instagram.com" or c.domain.endswith(".instagram.com")):
+            continue
+        cookie = {"name": c.name, "value": c.value, "domain": c.domain,
+                  "path": c.path or "/", "secure": c.secure}
+        if c.expires and c.expires > current:
+            cookie["expires"] = c.expires
+        cookies.append(cookie)
+    return cookies
+
+
+def cookie_expiry_state(filename, name, now=None):
+    """Return 'future', 'past', 'zero', 'session', or 'absent' for one cookie name."""
+    current = time.time() if now is None else now
+    jar = http.cookiejar.MozillaCookieJar(filename)
+    jar.load(ignore_discard=True, ignore_expires=True)
+    for c in jar:
+        if c.name == name and (c.domain.lstrip(".") == "instagram.com" or c.domain.endswith(".instagram.com")):
+            if c.expires is None:
+                return "session"
+            if c.expires == 0:
+                return "zero"
+            return "future" if c.expires > current else "past"
+    return "absent"
 
 
 def parse_args(argv):
@@ -257,6 +283,8 @@ def main(diagnostics):
                 diagnostics["cookieCount"] = len(cookies)
                 diagnostics["sessionCookiePresent"] = "sessionid" in names
                 diagnostics["userIdCookiePresent"] = "ds_user_id" in names
+                if filename:
+                    diagnostics["sessionCookieFileExpiry"] = cookie_expiry_state(filename, "sessionid")
                 if not cookies:
                     diagnostics["stage"] = "no_cookies"
                     raise ValueError("Instagram session cookies are unavailable")
