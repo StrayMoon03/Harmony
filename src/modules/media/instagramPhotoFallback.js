@@ -71,6 +71,26 @@ async function saveVerifiedPhotos(result, expectedCode, jobDir, options = {}) {
   }
 }
 
+const DIAGNOSTICS_PREFIX = "HARMONY_INSTAGRAM_PHOTO_DIAGNOSTICS:";
+
+function photoBrowserDiagnostics(stderr) {
+  if (typeof stderr !== "string") return null;
+  const line = stderr.split(/\r?\n/).find((value) => value.startsWith(DIAGNOSTICS_PREFIX));
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line.slice(DIAGNOSTICS_PREFIX.length));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function logPhotoBrowserDiagnostics(stderr, logger = console) {
+  const diagnostics = photoBrowserDiagnostics(stderr);
+  if (diagnostics) logger.warn(DIAGNOSTICS_PREFIX + JSON.stringify(diagnostics));
+  return diagnostics;
+}
+
 async function downloadInstagramPhotos(url, jobDir, options = {}) {
   const parsed = new URL(url);
   const match = parsed.pathname.match(/^\/(?:[A-Za-z0-9._]+\/)?p\/([A-Za-z0-9_-]+)\/?$/);
@@ -79,7 +99,15 @@ async function downloadInstagramPhotos(url, jobDir, options = {}) {
   const env = options.env || process.env;
   const attempt = async (useSession) => {
     const args = [path.join(__dirname, "instagramPhotoBrowser.py"), url, ...(useSession ? ["--session"] : [])];
-    const { stdout } = await withBrowserLock(() => run(env.PYTHON_PATH || "python3", args, { timeout: 45000, maxBuffer: 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}) }), { signal: options.signal });
+    let output;
+    try {
+      output = await withBrowserLock(() => run(env.PYTHON_PATH || "python3", args, { timeout: 45000, maxBuffer: 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}) }), { signal: options.signal });
+    } catch (error) {
+      logPhotoBrowserDiagnostics(error?.stderr, options.logger);
+      throw error;
+    }
+    logPhotoBrowserDiagnostics(output?.stderr, options.logger);
+    const stdout = output?.stdout;
     const line = String(stdout || "").split(/\r?\n/).find((x) => x.startsWith("HARMONY_INSTAGRAM_PHOTOS:"));
     if (!line) throw new Error("Instagram browser returned no verified media");
     const result = JSON.parse(line.slice("HARMONY_INSTAGRAM_PHOTOS:".length));
@@ -103,4 +131,4 @@ async function downloadInstagramPhotos(url, jobDir, options = {}) {
   }
 }
 
-module.exports = { downloadInstagramPhotos, saveVerifiedPhotos };
+module.exports = { downloadInstagramPhotos, saveVerifiedPhotos, photoBrowserDiagnostics };
