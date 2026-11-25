@@ -1,7 +1,7 @@
 "use strict";
 const store = require("../stores/concertCountdownStore");
 const events = require("../stores/eventSchedulerStore");
-const { buildCountdown } = require("./concertCountdownModel");
+const { buildCountdown, localDate, nextMidnight } = require("./concertCountdownModel");
 const images = require("./concertCountdownRender");
 const { createHash, randomBytes } = require("node:crypto");
 const access = require("./concertCountdownPermissions");
@@ -173,6 +173,8 @@ async function refresh(
       row.render_version === images.RENDER_VERSION &&
       row.message_id &&
       !row.delivery &&
+      !row.last_error &&
+      (!scheduled || (row.last_success && localDate(new Date(row.last_success), JSON.parse(row.config).timezone) === m.today)) &&
       now.getTime() - Date.parse(row.checked_at || 0) < HEALTH_MS
     )
       return { skipped: true };
@@ -335,6 +337,22 @@ async function refresh(
     locks.delete(key);
   }
 }
+// Only metadata is scanned; photographs and Discord are loaded for due work.
+function nextUpdate(row, now = new Date()) {
+  const published = Boolean(row.message_id || row.published_at);
+  const upgrade = published && row.render_version !== images.RENDER_VERSION;
+  if ((!published && !row.delivery) || (!row.enabled && !upgrade)) return null;
+  let due;
+  if (row.retry_at && Date.parse(row.retry_at) > now.getTime()) due = new Date(row.retry_at);
+  else if (upgrade || row.delivery || row.last_error || !row.fingerprint || !row.last_success) due = now;
+  else {
+    const { timezone } = JSON.parse(row.config);
+    due = localDate(new Date(row.last_success), timezone) !== localDate(now, timezone)
+      ? now : nextMidnight(now, timezone);
+  }
+  // A crashed worker's durable lease must expire before recovery can run.
+  return row.lease_until >= due.getTime() ? new Date(row.lease_until + 1) : due;
+}
 async function runUpdates(client, { now = new Date() } = {}) {
   const result = { updated: 0, skipped: 0, deferred: 0, failed: 0 };
   for (const row of store.renderingWork(images.RENDER_VERSION)) {
@@ -342,6 +360,11 @@ async function runUpdates(client, { now = new Date() } = {}) {
       Boolean(row.message_id || row.published_at) &&
       row.render_version !== images.RENDER_VERSION;
     try {
+      const due = nextUpdate(row, now);
+      if (!due || due > now) {
+        result.deferred++;
+        continue;
+      }
       const status = await refresh(client, row.guild_id, row.channel_id, {
         scheduled: true,
         renderUpgrade: upgrade,
@@ -352,6 +375,16 @@ async function runUpdates(client, { now = new Date() } = {}) {
       else result.updated++;
     } catch (error) {
       result.failed++;
+      // Model/metadata errors can happen before refresh acquires its lease.
+      // Persist their retry too, avoiding an immediate timer loop on bad data.
+      const saved = store.get(row.guild_id, row.channel_id);
+      if (saved && !(saved.lease_until > Date.now()) && !(Date.parse(saved.retry_at) > now.getTime())) {
+        store.update(row.guild_id, row.channel_id, {
+          last_error: String(error.message).slice(0, 300),
+          retry_at: new Date(now.getTime() + 300000).toISOString(),
+          retry_kind: "scheduler",
+        });
+      }
       console.error(
         "Concert countdown update failed",
         row.channel_id,
@@ -361,23 +394,45 @@ async function runUpdates(client, { now = new Date() } = {}) {
   }
   return result;
 }
-function start(client) {
-  let busy = false;
+function start(client, { clock = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  let busy = false, stopped = false, timer;
+  const arm = () => {
+    if (busy || stopped) return;
+    clearTimer(timer);
+    timer = undefined;
+    const now = clock();
+    let earliest;
+    try {
+      for (const row of store.renderingWork(images.RENDER_VERSION)) {
+        let due;
+        try { due = nextUpdate(row, now); }
+        catch { due = row.retry_at && Date.parse(row.retry_at) > now.getTime() ? new Date(row.retry_at) : now; }
+        if (due && (!earliest || due < earliest)) earliest = due;
+      }
+    } catch (error) {
+      console.error("Concert countdown scheduler failed", error.message);
+      earliest = new Date(now.getTime() + 300000);
+    }
+    if (earliest) {
+      timer = setTimer(run, Math.max(1, earliest.getTime() - now.getTime()));
+      timer.unref?.();
+    }
+  };
   const run = async () => {
-    if (busy) return;
+    if (busy || stopped) return;
     busy = true;
     try {
-      await runUpdates(client);
+      await runUpdates(client, { now: clock() });
     } catch (error) {
       console.error("Concert countdown scheduler failed", error.message);
     } finally {
       busy = false;
+      arm();
     }
   };
-  run();
-  const timer = setInterval(run, 60000);
-  timer.unref?.();
-  return () => clearInterval(timer);
+  const unsubscribe = store.subscribe(arm);
+  void run(); // Catch up missed local dates and pending renderer upgrades at startup.
+  return () => { stopped = true; unsubscribe(); clearTimer(timer); };
 }
 module.exports = {
   model,
@@ -386,6 +441,7 @@ module.exports = {
   refresh,
   start,
   runUpdates,
+  nextUpdate,
   fingerprint,
   REQUIRED,
   findPinned,

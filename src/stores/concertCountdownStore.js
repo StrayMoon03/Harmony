@@ -1,6 +1,8 @@
 "use strict";
 const { getDb } = require("../db/sqlite");
 const { createHash, randomUUID } = require("node:crypto");
+const changes = new (require("node:events").EventEmitter)();
+const subscribe = listener => { changes.on("change", listener); return () => changes.off("change", listener); };
 const get = (g, c) =>
   getDb()
     .prepare(
@@ -23,9 +25,10 @@ const enabled = () =>
 function renderingWork(version) {
   return getDb()
     .prepare(
-      `SELECT guild_id,channel_id,enabled,message_id,published_at,render_version
+      `SELECT guild_id,channel_id,enabled,message_id,published_at,render_version,config,fingerprint,last_success,last_error,retry_at,delivery,lease_until
     FROM concert_countdowns
-    WHERE enabled=1 OR ((message_id IS NOT NULL OR published_at IS NOT NULL) AND COALESCE(render_version,'')<>?)
+    WHERE (message_id IS NOT NULL OR published_at IS NOT NULL OR delivery IS NOT NULL)
+      AND (enabled=1 OR ((message_id IS NOT NULL OR published_at IS NOT NULL) AND COALESCE(render_version,'')<>?))
     ORDER BY guild_id,channel_id`,
     )
     .all(version);
@@ -42,6 +45,7 @@ function save(g, c, config, expected) {
     ON CONFLICT(guild_id,channel_id) DO UPDATE SET config=excluded.config,fingerprint=NULL,revision=revision+1,retry_at=CASE WHEN retry_kind='rate_limit' THEN retry_at ELSE NULL END`,
     )
     .run(g, c, JSON.stringify({ ...config, guildId: g }));
+  changes.emit("change");
   return get(g, c);
 }
 // Correct a newly created private draft's room without leaving a second draft.
@@ -57,6 +61,7 @@ function moveDraft(g, from, to, expected) {
     if (get(g, to)) throw Error("This room already has a countdown.");
     db.prepare("UPDATE concert_countdowns SET channel_id=?,revision=revision+1,fingerprint=NULL WHERE guild_id=? AND channel_id=?").run(to, g, from);
     db.exec("COMMIT");
+    changes.emit("change");
     return get(g, to);
   } catch (error) {
     db.exec("ROLLBACK");
@@ -79,6 +84,7 @@ function photo(g, c, bytes, type) {
       "UPDATE concert_countdowns SET photo=?,photo_type=?,fingerprint=NULL,revision=revision+1,retry_at=CASE WHEN retry_kind='rate_limit' THEN retry_at ELSE NULL END WHERE guild_id=? AND channel_id=?",
     )
     .run(bytes, type, g, c);
+  changes.emit("change");
 }
 function photos(g) {
   return getDb()
@@ -119,6 +125,7 @@ function update(g, c, fields) {
         " WHERE guild_id=? AND channel_id=?",
     )
     .run(...keys.map((k) => fields[k]), g, c);
+  changes.emit("change");
 }
 function acquire(g, c) {
   const token = randomUUID();
@@ -145,6 +152,8 @@ function release(g, c, token) {
       "UPDATE concert_countdowns SET lease_token=NULL,lease_until=NULL WHERE guild_id=? AND channel_id=? AND lease_token=?",
     )
     .run(g, c, token);
+  // A manual update may have armed a retry while its lease was still held.
+  changes.emit("change");
 }
 // Reads only the approved calendar; candidates and Radar discoveries are separate tables.
 function concerts(g, query = "") {
@@ -152,6 +161,7 @@ function concerts(g, query = "") {
 }
 
 module.exports = {
+  subscribe,
   get,
   list,
   enabled,

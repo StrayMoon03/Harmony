@@ -20,6 +20,19 @@ function dayIndex(date) {
     throw Error("Invalid concert date");
   return ms / 86400000;
 }
+// Find the next local date boundary, not now + 24 hours. The IANA zone
+// determines the boundary on 23/25-hour days and where midnight is skipped.
+function nextMidnight(now, timezone) {
+  const today = localDate(now, timezone);
+  let low = now.getTime(), high = low + 48 * 60 * 60 * 1000;
+  if (!Number.isFinite(low)) throw Error("Invalid countdown clock");
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (localDate(new Date(middle), timezone) <= today) low = middle;
+    else high = middle;
+  }
+  return new Date(high);
+}
 function concertState(date, today) {
   const days = dayIndex(date) - dayIndex(today);
   if (days < 0)
@@ -98,6 +111,7 @@ function buildCountdown(config, events, now = new Date()) {
 }
 module.exports = {
   localDate,
+  nextMidnight,
   dayIndex,
   concertState,
   buildCountdown,

@@ -887,7 +887,8 @@ test("new UI pages validate Discord limits, pagination, configured markers and p
   }
   const offered = [...f.s.offeredLocations];
   await manager.handle(f.i("concert-next"));
-  assert.notDeepEqual(f.s.offeredLocations, offered);
+  assert.deepEqual(f.s.offeredLocations, offered); // All bundled locations fit on the same page.
+  assert.ok(offered.includes("toronto") && offered.includes("vancouver"));
   const close = f.i("close", { deleteReply: async () => {} }); await manager.handle(close);
   assert.equal(manager.authorize(f.i("add"), f.s), true); // panel access is unchanged
   const expired = f.i("add"); await manager.handle(expired);
@@ -1018,4 +1019,53 @@ test("a slow creation preview cannot be approved for a different room or a confi
     assert.equal(f.s.uiInFlight, undefined);
     assert.equal(store.get(f.g, f.c).message_id, null);
   } finally { service.preview = preview; if (release) release(); }
+});
+
+test('Add Countdown exposes every bundled location in supported menus, including Toronto and Vancouver without paging', async () => {
+  const f = fixture(), tour = require('../src/services/concertTourCalendar');
+  await manager.handle(f.i('add'));
+  const page = manager.concertPicker(f.s), options = page.components.flatMap(r => r.toJSON().components).flatMap(c => c.options || []);
+  assert.deepEqual(options.map(o => o.value).sort(), tour.bundled.locations.map(l => l.key).sort());
+  assert.equal(options.length, 34); assert.equal(new Set(options.map(o => o.value)).size, 34);
+  for (const key of ['toronto', 'vancouver']) {
+    const menu = page.components.map(r => r.toJSON().components[0]).find(c => c.options?.some(o => o.value === key));
+    assert.equal(menu.options.length, 9); assert.match(menu.custom_id, /choose-concert-more$/);
+    const chosen = f.i('choose-concert-more', { values: [key] }); await manager.handle(chosen);
+    const location = tour.bundled.locations.find(l => l.key === key);
+    assert.equal(f.s.draft.city, location.city); assert.equal(f.s.draft.timezone, location.timezone);
+    assert.equal(f.s.auto, true); assert.equal(f.s.missingDates, true);
+    // Read-only visibility does not import missing dates or publish a countdown.
+    assert.equal(store.concerts(f.g).length, 0); assert.equal(store.list(f.g).length, 0);
+    await manager.handle(f.i('add'));
+    const search = f.i('search-save', { fields: { getTextInputValue: () => location.city } }); await manager.handle(search);
+    assert.deepEqual(f.s.offeredLocations, [key]);
+    await manager.handle(f.i('add'));
+  }
+});
+test('Toronto and Vancouver reuse approved records, populate all dates, and import only after review without duplicates', async () => {
+  const tour = require('../src/services/concertTourCalendar');
+  for (const key of ['toronto', 'vancouver']) {
+    const f = fixture(), manifest = tour.scopedManifest(key), l = manifest.locations[0];
+    const existing = calendar.createCalendarEvent({ guildId: f.g, calendarChannelId: 'calendar', title: `Stray Kids World Tour RUN IT — ${l.city}`, eventLocation: l.venue, timezone: l.timezone, eventTimezone: l.timezone, eventDate: l.dates[0].date, calendarType: 'stray_kids', category: 'concert', allDay: true, createdBy: 'owner' });
+    const review = tour.audit(f.g, manifest), count = store.concerts(f.g).length;
+    assert.equal(count, 1); assert.equal(review.entries[0].eventId, existing);
+    tour.importConfirmed(f.g, manifest, review.fingerprint, 'owner');
+    const again = tour.audit(f.g, manifest); const result = tour.importConfirmed(f.g, manifest, again.fingerprint, 'owner');
+    assert.equal(result.created, 0); assert.equal(store.concerts(f.g).length, l.dates.length);
+    await manager.handle(f.i('add'));
+    const chosen = f.i('choose-concert-more', { values: [key] }); await manager.handle(chosen);
+    assert.equal(f.s.draft.eventIds.length, l.dates.length); assert.ok(f.s.draft.eventIds.includes(existing));
+    assert.equal(f.s.missingDates, false); assert.equal(f.s.auto, true);
+    assert.equal(store.list(f.g).length, 0);
+  }
+});
+test('Add Countdown still paginates approved locations beyond the two native menu limit', async () => {
+  const f = fixture(), tour = require('../src/services/concertTourCalendar'), original = tour.groups;
+  tour.groups = () => Array.from({ length: 60 }, (_, n) => ({ key: 'fixture-' + n, city: 'City ' + n, country: 'Country', venue: 'Venue', events: [], audit: [] }));
+  try {
+    await manager.handle(f.i('add')); assert.equal(f.s.offeredLocations.length, 50);
+    await manager.handle(f.i('concert-next')); assert.equal(f.s.offeredLocations.length, 10);
+    assert.equal(f.s.offeredLocations[0], 'fixture-50');
+    await manager.handle(f.i('concert-prev')); assert.equal(f.s.offeredLocations[0], 'fixture-0');
+  } finally { tour.groups = original; }
 });

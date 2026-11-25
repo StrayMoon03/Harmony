@@ -1,0 +1,241 @@
+{
+  "allowedMentions": {
+    "parse": []
+  },
+  "content": null,
+  "attachments": [],
+  "embeds": [
+    {
+      "color": 16746031,
+      "title": "Add Countdown — Select Concert",
+      "description": "34 locations · Page 1\nBoth lists below are part of the same concert picker. Search by city, country, venue or date. All approved dates at the selected venue will be filled in together. Locations needing calendar approval remain marked."
+    }
+  ],
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 3,
+          "custom_id": "harmony-countdown:c9452e7e208be279:choose-concert",
+          "placeholder": "Choose a city and venue",
+          "options": [
+            {
+              "label": "Arlington — AT&T Stadium",
+              "value": "arlington",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Arnhem — GelreDome",
+              "value": "arnhem",
+              "description": "Netherlands · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Atlanta — Mercedes-Benz Stadium",
+              "value": "atlanta",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Baltimore — M&T Bank Stadium",
+              "value": "baltimore",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Bangkok — Impact Arena",
+              "value": "bangkok",
+              "description": "Thailand · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Barcelona — Estadi Olímpic Lluís Companys",
+              "value": "barcelona",
+              "description": "Spain · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Chicago — Soldier Field",
+              "value": "chicago",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "East Rutherford — MetLife Stadium",
+              "value": "east-rutherford",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Fukuoka — Mizuho PayPay Dome Fukuoka",
+              "value": "fukuoka",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Hong Kong — Kai Tak Stadium",
+              "value": "hong-kong",
+              "description": "Hong Kong · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Houston — Reliant Stadium",
+              "value": "houston",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "London — Tottenham Hotspur Stadium",
+              "value": "london",
+              "description": "United Kingdom · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Los Angeles — SoFi Stadium",
+              "value": "los-angeles",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Miami — Hard Rock Stadium",
+              "value": "miami",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Milan — San Siro Stadium",
+              "value": "milan",
+              "description": "Italy · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Munich — Allianz Arena",
+              "value": "munich",
+              "description": "Germany · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Nagoya — Vantelin Dome Nagoya",
+              "value": "nagoya",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Orlando — Camping World Stadium",
+              "value": "orlando",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Osaka — Kyocera Dome Osaka",
+              "value": "osaka-kyocera",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Osaka — Yanmar Stadium Nagai",
+              "value": "osaka-yanmar",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Paris — Plenitude Arena",
+              "value": "paris",
+              "description": "France · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "San Diego — PETCO Park",
+              "value": "san-diego",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Santa Clara — Levi’s Stadium",
+              "value": "santa-clara",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Seattle — Lumen Field",
+              "value": "seattle",
+              "description": "United States · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Seoul — Gocheok Sky Dome",
+              "value": "seoul-special",
+              "description": "South Korea · 0 approved dates · More dates need import"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 3,
+          "custom_id": "harmony-countdown:c9452e7e208be279:choose-concert-more",
+          "placeholder": "More cities and venues (26–34)",
+          "options": [
+            {
+              "label": "Seoul — KSPO Dome",
+              "value": "seoul-kspo",
+              "description": "South Korea · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Singapore — Singapore Indoor Stadium",
+              "value": "singapore",
+              "description": "Singapore · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Taipei — Taipei Dome",
+              "value": "taipei",
+              "description": "Taiwan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Tokyo — MUFG Stadium",
+              "value": "tokyo-mufg",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Tokyo — Tokyo Dome",
+              "value": "tokyo-dome",
+              "description": "Japan · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Toronto — Rogers Stadium",
+              "value": "toronto",
+              "description": "Canada · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Vancouver — BC Place",
+              "value": "vancouver",
+              "description": "Canada · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Vienna — Ernst-Happel-Stadion",
+              "value": "vienna",
+              "description": "Austria · 0 approved dates · More dates need import"
+            },
+            {
+              "label": "Yokohama — Nissan Stadium",
+              "value": "yokohama",
+              "description": "Japan · 0 approved dates · More dates need import"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "custom_id": "harmony-countdown:c9452e7e208be279:concert-prev",
+          "label": "Previous",
+          "style": 2,
+          "disabled": true
+        },
+        {
+          "type": 2,
+          "custom_id": "harmony-countdown:c9452e7e208be279:concert-next",
+          "label": "Next",
+          "style": 2,
+          "disabled": true
+        },
+        {
+          "type": 2,
+          "custom_id": "harmony-countdown:c9452e7e208be279:search",
+          "label": "Search Locations",
+          "style": 2
+        },
+        {
+          "type": 2,
+          "custom_id": "harmony-countdown:c9452e7e208be279:home",
+          "label": "Back",
+          "style": 2
+        }
+      ]
+    }
+  ]
+}

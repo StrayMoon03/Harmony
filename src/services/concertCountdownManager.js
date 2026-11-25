@@ -147,16 +147,21 @@ function configuredLocations(s, l) {
   });
 }
 function concertPicker(s) {
-  const locations = tour.groups(s.guild, s.query), page = s.locationPage = Math.min(s.locationPage || 0, Math.max(0, Math.ceil(locations.length / 25) - 1));
-  const slice = locations.slice(page * 25, page * 25 + 25);
+  // Two supported 25-option menus show all 34 bundled venue groups together.
+  // Keep pagination for future approved locations beyond this 50-location page.
+  const locations = tour.groups(s.guild, s.query), page = s.locationPage = Math.min(s.locationPage || 0, Math.max(0, Math.ceil(locations.length / 50) - 1));
+  const slice = locations.slice(page * 50, page * 50 + 50);
   s.offeredLocations = slice.map(l => l.key);
   const components = [];
-  if (slice.length) components.push(new Row().addComponents(new Select().setCustomId(id(s, "choose-concert")).setPlaceholder("Choose a city and venue").addOptions(slice.map(l => ({
-    label: `${l.city} — ${l.venue}`.slice(0, 100), value: l.key,
-    description: `${configuredLocations(s, l).length ? "Already configured · " : ""}${l.country} · ${l.events.length} approved dates${l.audit.some(a => a.status === "missing") ? " · More dates need import" : ""}`.slice(0, 100),
-  })))));
-  components.push(new Row().addComponents(button(s, "concert-prev", "Previous").setDisabled(page === 0), button(s, "concert-next", "Next").setDisabled((page + 1) * 25 >= locations.length), button(s, "search", "Search Locations"), button(s, "home", "Back")));
-  return { ...safe, content: null, attachments: [], embeds: [embed("Add Countdown — Select Concert", `${locations.length} locations · Page ${page + 1}\nSearch by city, country, venue or date. All approved dates at the selected venue will be filled in together. Locations needing calendar approval remain marked.`)], components };
+  for (let offset = 0; offset < slice.length; offset += 25) {
+    const menu = slice.slice(offset, offset + 25), more = offset > 0;
+    components.push(new Row().addComponents(new Select().setCustomId(id(s, more ? "choose-concert-more" : "choose-concert")).setPlaceholder(more ? `More cities and venues (${page * 50 + offset + 1}–${page * 50 + offset + menu.length})` : "Choose a city and venue").addOptions(menu.map(l => ({
+      label: `${l.city} — ${l.venue}`.slice(0, 100), value: l.key,
+      description: `${configuredLocations(s, l).length ? "Already configured · " : ""}${l.country} · ${l.events.length} approved dates${l.audit.some(a => a.status === "missing") ? " · More dates need import" : ""}`.slice(0, 100),
+    })))));
+  }
+  components.push(new Row().addComponents(button(s, "concert-prev", "Previous").setDisabled(page === 0), button(s, "concert-next", "Next").setDisabled((page + 1) * 50 >= locations.length), button(s, "search", "Search Locations"), button(s, "home", "Back")));
+  return { ...safe, content: null, attachments: [], embeds: [embed("Add Countdown — Select Concert", `${locations.length} locations · Page ${page + 1}\n${slice.length > 25 ? "Both lists below are part of the same concert picker. " : ""}Search by city, country, venue or date. All approved dates at the selected venue will be filled in together. Locations needing calendar approval remain marked.`)], components };
 }
 function setup(s, notice = "") {
   const c = s.draft, events = store.concerts(s.guild);
@@ -562,7 +567,7 @@ async function handle(i) {
   let ownsWork = false;
   try {
     if (s.uiInFlight) throw Error("This countdown is preparing an update. Wait for its result.");
-    if (["choose-concert", "setup-room", "photo-save", "preview", "reuse-photo", "tour-upload-save", "tour-approve", "discovery-run"].includes(action)) {
+    if (["choose-concert", "choose-concert-more", "setup-room", "photo-save", "preview", "reuse-photo", "tour-upload-save", "tour-approve", "discovery-run"].includes(action)) {
       s.uiInFlight = true;
       ownsWork = true;
     }
@@ -598,7 +603,7 @@ async function handle(i) {
       s.pickingConcert = true;
       s.locationPage = Math.max(0, (s.locationPage || 0) + (action === "concert-next" ? 1 : action === "concert-prev" ? -1 : 0));
       await i.update(concertPicker(s));
-    } else if (action === "choose-concert") {
+    } else if (action === "choose-concert" || action === "choose-concert-more") {
       if (!s.offeredLocations?.includes(i.values[0])) throw Error("Choose a concert from the current page");
       await i.deferUpdate();
       const location = tour.groups(s.guild).find(l => l.key === i.values[0]);
