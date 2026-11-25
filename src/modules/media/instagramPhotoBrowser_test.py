@@ -6,7 +6,7 @@ import contextlib
 import io
 import json
 from instagramPhotoBrowser import (allowed_response, contains_exact_record, exact_code, extract_photos,
-                                    load_session_cookies, parse_args, parse_json_body, response_message, run)
+                                    cookie_expiry_state, load_session_cookies, parse_args, parse_json_body, response_message, run)
 
 
 class PhotoExtractionTests(unittest.TestCase):
@@ -108,6 +108,38 @@ class SessionPassTests(unittest.TestCase):
             os.unlink(name)
         self.assertEqual([c["name"] for c in cookies], ["sessionid"])
         self.assertEqual(cookies[0]["domain"], ".instagram.com")
+
+
+class SessionCookieExpiryTests(unittest.TestCase):
+    def jar(self, expiry):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+        handle.write("# Netscape HTTP Cookie File\n")
+        handle.write(f"#HttpOnly_.instagram.com\tTRUE\t/\tTRUE\t{expiry}\tsessionid\tfake\n")
+        handle.write(".instagram.com\tTRUE\t/\tTRUE\t4102444800\tds_user_id\tfake\n")
+        handle.write("#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\tsessionid\tother\n")
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_httponly_sessionid_with_future_expiry_keeps_expiry(self):
+        cookies = {c["name"]: c for c in load_session_cookies(self.jar(4102444800), now=1000)}
+        self.assertEqual(set(cookies), {"sessionid", "ds_user_id"})
+        self.assertEqual(cookies["sessionid"]["expires"], 4102444800)
+        self.assertEqual(cookies["sessionid"]["domain"], ".instagram.com")
+
+    def test_httponly_sessionid_with_zero_or_past_expiry_is_kept_as_session_cookie(self):
+        for expiry in ("0", "500"):
+            cookies = {c["name"]: c for c in load_session_cookies(self.jar(expiry), now=1000)}
+            self.assertIn("sessionid", cookies, expiry)
+            self.assertNotIn("expires", cookies["sessionid"], expiry)
+            self.assertEqual(cookies["sessionid"]["value"], "fake")
+
+    def test_cookie_expiry_state(self):
+        self.assertEqual(cookie_expiry_state(self.jar(4102444800), "sessionid", now=1000), "future")
+        self.assertEqual(cookie_expiry_state(self.jar(500), "sessionid", now=1000), "past")
+        self.assertEqual(cookie_expiry_state(self.jar(0), "sessionid", now=1000), "zero")
+        self.assertEqual(cookie_expiry_state(self.jar(""), "sessionid", now=1000), "session")
+        self.assertEqual(cookie_expiry_state(self.jar(0), "csrftoken", now=1000), "absent")
 
 
 class LoggedInResponseTests(unittest.TestCase):
