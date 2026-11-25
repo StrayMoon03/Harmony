@@ -107,6 +107,7 @@ async function refreshCandidateManagers(client, guildId) {
 }
 
 function managerPanelComponents(calendarType, guildId = null) {
+  const roomLinkEntry = require("./eventRoomLinkManager").entry(calendarType);
   const prefix = `harmony-manager:${calendarType}`;
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${prefix}:add`).setLabel("➕ Add Event").setStyle(ButtonStyle.Primary),
@@ -118,6 +119,7 @@ function managerPanelComponents(calendarType, guildId = null) {
     return [row, new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`${prefix}:findnative`).setLabel("🔎 Find Discord Event").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:birthdays`).setLabel("🎂 Birthdays").setStyle(ButtonStyle.Primary),
+      roomLinkEntry,
     )];
   }
   if (calendarType === "stray_kids") {
@@ -126,6 +128,7 @@ function managerPanelComponents(calendarType, guildId = null) {
       new ButtonBuilder().setCustomId(`${prefix}:discovery-toggle`).setLabel(store.isCalendarDiscoveryEnabled(guildId) ? "⏸️ Turn Discovery Off" : "⏱️ Turn Discovery On").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${prefix}:candidate-inbox`).setLabel(pendingDiscoveryLabel(guildId)).setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${prefix}:discovery-status`).setLabel("📊 Discovery Status").setStyle(ButtonStyle.Secondary),
+      roomLinkEntry,
     )];
   }
   return [row];
@@ -398,6 +401,7 @@ function youtifulEditPanel(event) {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`harmony-manager:community:editannouncementpick:${event.id}`).setLabel("📣 Announcements").setStyle(ButtonStyle.Secondary),
+        require("./eventRoomLinkManager").eventEntry(event),
         new ButtonBuilder().setCustomId(`harmony-manager:community:done:${event.id}`).setLabel("Done").setStyle(ButtonStyle.Success)
       ),
     ],
@@ -476,6 +480,7 @@ function announcementPrompt(eventId) {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`harmony-manager:community:ysannounce:${eventId}`).setLabel("📣 Schedule Announcements").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`harmony-manager:community:ysannounce-no:${eventId}`).setLabel("No Thanks").setStyle(ButtonStyle.Secondary),
+    require("./eventRoomLinkManager").eventEntry({ id: eventId }),
   )];
 }
 
@@ -2704,6 +2709,7 @@ async function linkNativeEventToHarmony(interaction, nativeId, linkedId, descrip
 
 async function handleEventSchedulerInteraction(interaction) {
   const customId = interaction.customId || "";
+  if (customId.startsWith("harmony-room-links:")) return require("./eventRoomLinkManager").handle(interaction);
   if (customId.startsWith("harmony-reminder:") || customId.startsWith("harmony-reminders:")) return handleReminderInteraction(interaction);
   if (customId.startsWith("harmony-calendar:")) {
     const allowed = Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator));
@@ -4408,6 +4414,7 @@ module.exports = {
   YOUTIFUL_EVENT_TYPE_LABELS,
   YOUTIFUL_TIMEZONE_OPTIONS,
   calendarDateInTimezone,
+  calendarPresentationTimezone,
   upcomingCalendarEvents,
   calendarCutoffBoundary,
   nativeCutoffDate,
