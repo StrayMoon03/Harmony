@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import sys
 from urllib.parse import urlparse
@@ -18,12 +17,77 @@ def exact_code(url):
     return match.group(1)
 
 
+def allowed_media(url):
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url)
+    return (parsed.scheme == "https" and not parsed.username and not parsed.password
+            and parsed.port in (None, 443)
+            and (parsed.hostname or "").endswith((".cdninstagram.com", ".fbcdn.net")))
+
+
+def best_url(candidates, key="url"):
+    valid = [item for item in candidates if isinstance(item, dict) and allowed_media(item.get(key))]
+    valid.sort(key=lambda item: (item.get("width") or 0) * (item.get("height") or 0), reverse=True)
+    return valid[0][key] if valid else None
+
+
+def image_url(item):
+    versions = (item.get("image_versions2") or {}).get("candidates") or []
+    if not isinstance(versions, list):
+        versions = []
+    url = best_url(versions)
+    if url:
+        return url
+    resources = item.get("display_resources")
+    if isinstance(resources, list):
+        url = best_url(resources, key="src")
+        if url:
+            return url
+    display = item.get("display_url")
+    return display if allowed_media(display) else None
+
+
+def video_url(item):
+    versions = item.get("video_versions") if isinstance(item.get("video_versions"), list) else []
+    url = best_url(versions)
+    if url:
+        return url
+    direct = item.get("video_url")
+    return direct if allowed_media(direct) else None
+
+
+def is_video_item(item):
+    return item.get("media_type") == 2 or item.get("is_video") is True or bool(item.get("video_versions") or item.get("video_url"))
+
+
+def record_items(record):
+    carousel = record.get("carousel_media")
+    if isinstance(carousel, list) and carousel:
+        return carousel
+    sidecar = record.get("edge_sidecar_to_children")
+    edges = sidecar.get("edges") if isinstance(sidecar, dict) else None
+    if isinstance(edges, list) and edges:
+        nodes = [edge.get("node") for edge in edges if isinstance(edge, dict) and isinstance(edge.get("node"), dict)]
+        if nodes:
+            return nodes
+    return [record]
+
+
+def is_post_record(value, code):
+    if value.get("code") != code and value.get("shortcode") != code:
+        return False
+    return bool(value.get("image_versions2") or value.get("carousel_media")
+                or value.get("edge_sidecar_to_children") or value.get("video_versions")
+                or value.get("video_url") or value.get("display_url"))
+
+
 def extract_photos(payload, code):
     records = []
 
     def walk(value):
         if isinstance(value, dict):
-            if value.get("code") == code and value.get("image_versions2"):
+            if is_post_record(value, code):
                 records.append(value)
             for child in value.values():
                 walk(child)
@@ -33,21 +97,40 @@ def extract_photos(payload, code):
 
     walk(payload)
     for record in records:
-        items = record.get("carousel_media") or [record]
-        if not isinstance(items, list) or not 1 <= len(items) <= 20:
+        raw_items = record_items(record)
+        if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 20:
             continue
-        urls = []
-        for item in items:
-            if item.get("media_type") != 1 or item.get("video_versions"):
-                break
-            candidates = sorted((item.get("image_versions2") or {}).get("candidates") or [], key=lambda x: (x.get("width") or 0) * (x.get("height") or 0), reverse=True)
-            url = next((x.get("url") for x in candidates if isinstance(x.get("url"), str) and urlparse(x["url"]).scheme == "https" and (urlparse(x["url"]).hostname or "").endswith((".cdninstagram.com", ".fbcdn.net"))), None)
+        items = []
+        photo_only = True
+        complete = True
+        for item in raw_items:
+            if not isinstance(item, dict):
+                complete = False
+                continue
+            if is_video_item(item):
+                photo_only = False
+                url = video_url(item)
+                if url:
+                    items.append({"type": "video", "url": url})
+                continue
+            url = image_url(item)
             if not url:
-                break
-            urls.append(url)
-        if len(urls) == len(items):
-            return {"code": code, "creator": (record.get("user") or {}).get("username"), "photos": urls}
-    raise ValueError("No complete photo-only attachment set matched the requested Instagram post")
+                complete = False
+                continue
+            items.append({"type": "image", "url": url})
+        if not items:
+            continue
+        if photo_only and (not complete or len(items) != len(raw_items)):
+            continue
+        owner = record.get("user") or record.get("owner") or {}
+        creator = owner.get("username") if isinstance(owner, dict) else None
+        return {
+            "code": code,
+            "creator": creator,
+            "items": items,
+            "photos": [item["url"] for item in items if item["type"] == "image"],
+        }
+    raise ValueError("No complete attachment set matched the requested Instagram post")
 
 
 def main():
@@ -57,6 +140,7 @@ def main():
         browser = playwright.chromium.launch(**chromium_launch_kwargs(playwright))
         try:
             page = browser.new_page()
+            # Logged-out recovery only: never load Instagram cookies in this helper.
             page.goto(f"https://www.instagram.com/p/{code}/", wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
             if exact_code(page.url) != code:
@@ -76,5 +160,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        print("Instagram browser could not verify a complete photo post", file=sys.stderr)
+        print("Instagram browser could not verify a complete post", file=sys.stderr)
         sys.exit(1)
