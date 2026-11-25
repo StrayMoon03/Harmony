@@ -209,6 +209,7 @@ client.once("clientReady", async () => {
   startBirthdayScheduler(client);
   startMemberCountScheduler(client);
   startEventScheduler(client);
+  require("./services/eventRoomLinkService").start(client);
   countdownService.start(client);
   startCalendarDiscovery(client);
   startRadar(client);
