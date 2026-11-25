@@ -1,6 +1,8 @@
 import copy
 import unittest
-from instagramPhotoBrowser import exact_code, extract_photos
+import os
+import tempfile
+from instagramPhotoBrowser import allowed_response, exact_code, extract_photos, load_session_cookies, parse_args
 
 
 class PhotoExtractionTests(unittest.TestCase):
@@ -74,6 +76,34 @@ class PhotoExtractionTests(unittest.TestCase):
         for url in ("https://example.com/p/target/", "https://www.instagram.com/reel/target/"):
             with self.assertRaises(ValueError):
                 exact_code(url)
+
+
+class SessionPassTests(unittest.TestCase):
+    def test_parse_args_session_flag(self):
+        self.assertEqual(parse_args(["helper", "https://www.instagram.com/p/target/"]), ("https://www.instagram.com/p/target/", False))
+        self.assertEqual(parse_args(["helper", "https://www.instagram.com/p/target/", "--session"]), ("https://www.instagram.com/p/target/", True))
+        with self.assertRaises(ValueError):
+            parse_args(["helper"])
+
+    def test_only_instagram_api_responses_are_read(self):
+        self.assertTrue(allowed_response("https://www.instagram.com/graphql/query"))
+        self.assertTrue(allowed_response("https://www.instagram.com/api/v1/media/1/info/"))
+        for url in ("https://example.com/api/v1/x", "http://www.instagram.com/api/v1/x",
+                    "https://www.instagram.com/p/target/", "https://scontent.cdninstagram.com/api/x"):
+            self.assertFalse(allowed_response(url))
+
+    def test_session_cookies_only_keep_instagram_domains(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("# Netscape HTTP Cookie File\n")
+            handle.write(".instagram.com\tTRUE\t/\tTRUE\t4102444800\tsessionid\tfake\n")
+            handle.write(".example.com\tTRUE\t/\tTRUE\t4102444800\tother\tfake\n")
+            name = handle.name
+        try:
+            cookies = load_session_cookies(name)
+        finally:
+            os.unlink(name)
+        self.assertEqual([c["name"] for c in cookies], ["sessionid"])
+        self.assertEqual(cookies[0]["domain"], ".instagram.com")
 
 
 if __name__ == "__main__":

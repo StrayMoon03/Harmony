@@ -1,4 +1,6 @@
+import http.cookiejar
 import json
+import os
 import re
 import sys
 from urllib.parse import urlparse
@@ -133,19 +135,65 @@ def extract_photos(payload, code):
     raise ValueError("No complete attachment set matched the requested Instagram post")
 
 
+def allowed_response(url):
+    parsed = urlparse(url)
+    return (parsed.scheme == "https" and not parsed.username and not parsed.password
+            and parsed.port in (None, 443)
+            and parsed.hostname in ("instagram.com", "www.instagram.com", "i.instagram.com")
+            and (parsed.path.startswith("/api/") or parsed.path.startswith("/graphql")))
+
+
+def load_session_cookies(filename):
+    jar = http.cookiejar.MozillaCookieJar(filename)
+    jar.load(ignore_discard=True, ignore_expires=False)
+    return [{"name": c.name, "value": c.value, "domain": c.domain,
+             "path": c.path or "/", "secure": c.secure,
+             **({"expires": c.expires} if c.expires else {})}
+            for c in jar if c.domain.lstrip(".") == "instagram.com"
+            or c.domain.endswith(".instagram.com")]
+
+
+def parse_args(argv):
+    args = list(argv[1:])
+    use_session = "--session" in args
+    args = [arg for arg in args if arg != "--session"]
+    if len(args) != 1:
+        raise ValueError("Expected one Instagram post URL")
+    return args[0], use_session
+
+
 def main():
     from playwright.sync_api import sync_playwright
-    code = exact_code(sys.argv[1])
+    url, use_session = parse_args(sys.argv)
+    code = exact_code(url)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(**chromium_launch_kwargs(playwright))
         try:
-            page = browser.new_page()
-            # Logged-out recovery only: never load Instagram cookies in this helper.
+            context = browser.new_context()
+            payloads = []
+            if use_session:
+                # Session pass: only runs after the logged-out pass failed, using
+                # Harmony's own Instagram session (the same file gallery-dl uses).
+                filename = os.environ.get("INSTAGRAM_COOKIES")
+                cookies = load_session_cookies(filename) if filename else []
+                if not cookies:
+                    raise ValueError("Instagram session cookies are unavailable")
+                context.add_cookies(cookies)
+
+                def inspect_response(response):
+                    if not allowed_response(response.url):
+                        return
+                    try:
+                        payloads.append(response.json())
+                    except Exception:
+                        pass
+
+                context.on("response", inspect_response)
+            page = context.new_page()
             page.goto(f"https://www.instagram.com/p/{code}/", wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
             if exact_code(page.url) != code:
                 raise ValueError("Instagram did not open the requested post")
-            payloads = []
             for text in page.locator('script[type="application/json"]').all_text_contents():
                 try:
                     payloads.append(json.loads(text))
