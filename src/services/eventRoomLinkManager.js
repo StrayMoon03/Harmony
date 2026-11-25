@@ -33,6 +33,23 @@ function scheduleContext(s, event) {
   const timing = service.timing(event);
   return JSON.stringify([timing.day, timing.timezone, event.event_channel_id, event.discord_event_id, store.settings(s.guild, s.event) || null]);
 }
+function receipt(ids) {
+  const rows = ids.map(store.get).filter(Boolean);
+  const sent = rows.filter(r => r.status === "sent").length;
+  const failed = rows.filter(r => ["blocked", "failed", "cancelled"].includes(r.status) || (r.status !== "sent" && r.last_error));
+  const waiting = rows.filter(r => ["pending", "sending"].includes(r.status) && !r.last_error).length;
+  return ["**Room message result**", `Delivered: ${sent} · Not delivered: ${failed.length} · Waiting: ${waiting}`,
+    ...failed.slice(0, 5).map(r => `<@${r.user_id}>: ${r.last_error || "Message cancelled."}${r.retry_at ? " A retry is saved." : ""}`),
+    ...(!rows.length ? ["No recipients were queued. Add the member again before sending."] : []),
+  ].join("\n").slice(0, 1700);
+}
+async function result(i, s, ids) {
+  const text = receipt(ids);
+  try { await i.editReply(page(s, text)); }
+  catch (error) { console.warn("[event-room-links] result_edit_failed", String(error.message).slice(0, 120)); }
+  // A separate private receipt is visible even when the long setup is collapsed.
+  if (i.followUp) await i.followUp({ ...safe, content: text, flags: 64 }).catch(error => console.warn("[event-room-links] receipt_failed", String(error.message).slice(0, 120)));
+}
 function page(s, notice = "") {
   const event = events.getEvent(s.guild, s.event);
   if (!event) throw Error("This event was cancelled or is no longer available.");
@@ -56,6 +73,7 @@ async function handle(i) {
   if (!permitted(i)) { await i.reply({ ...safe, content: "Only the server owner or members with Manage Server or Manage Events can send event room links.", flags: 64 }); return true; }
   const [, token, action, extra] = i.customId.split(":");
   let s;
+  console.info("[event-room-links] action_received", JSON.stringify({ action: ["open", "event"].includes(token) ? token : action }));
   if (token === "open" || token === "event") {
     let calendarType = action;
     if (token === "event") {
@@ -66,7 +84,10 @@ async function handle(i) {
     if (!["community", "stray_kids"].includes(calendarType)) return true;
     s = create(i, calendarType);
     if (token === "event") s.event = Number(action);
-    await i.reply({ ...(s.event ? page(s) : list(s)), flags: 64 }); return true;
+    await i.deferReply({ flags: 64 });
+    try { await i.editReply(s.event ? page(s) : list(s)); }
+    catch (error) { console.error("[event-room-links] open_failed", error.message); await i.editReply({ ...safe, content: "Could not open room links: " + error.message }); }
+    return true;
   }
   s = sessions.get(token);
   if (!s || s.expires <= Date.now() || s.guild !== i.guildId || s.channel !== i.channelId || s.user !== i.user.id) {
@@ -130,27 +151,32 @@ async function handle(i) {
         const users = s.manual.get(extra);
         if (!users) throw Error("That Send Now button expired. Reopen this event's room links.");
         await i.deferUpdate();
+        await i.editReply(page(s, "**Sending room links…** A delivered or failed result will appear here."));
         if (!service.validDay(event, new Date())) throw Error("This event has finished. Choose an upcoming event.");
         await service.resolveRoom(i.client, event, store.settings(s.guild, s.event)?.room_id);
         const now = new Date(), ids = store.enqueue(s.guild, s.event, users, `manual:${s.guild}:${s.event}:${s.token}:${extra}`, "manual", now.toISOString(), now);
         for (const row of store.due(now).filter(r => ids.includes(r.id))) await service.deliver(i.client, row.id, { now });
-        await i.editReply(page(s, "Send Now processed. Check confirmed deliveries and any errors below."));
+        await result(i, s, ids);
       } else if (action === "retry") {
-        await i.deferUpdate(); store.retry(s.guild, s.event);
+        await i.deferUpdate();
+        await i.editReply(page(s, "**Checking delivery and retrying…**"));
+        store.retry(s.guild, s.event);
         const now = new Date();
         const ids = store.deliveries(s.guild, s.event).map(r => r.id);
         for (const row of store.due(now).filter(r => ids.includes(r.id))) await service.deliver(i.client, row.id, { now });
-        await i.editReply(page(s, "Retry processed. Saved rate-limit delays are respected."));
+        await result(i, s, ids);
       } else throw Error("Reopen this event's room links.");
     }
   } catch (error) {
+    console.error("[event-room-links] action_failed", JSON.stringify({ action, reason: String(error.message).replace(/https?:\/\/\S+/g, "[url]").slice(0, 200) }));
     const response = { ...safe, content: error.message };
     if (i.deferred) {
       const current = events.getEvent(s.guild, s.event);
       const view = current ? page(s) : list(s);
-      await i.editReply({ ...view, content: (error.message + "\n\n" + view.content).slice(0, 1900) });
+      await i.editReply({ ...view, content: ("**Room message was not completed**\n" + error.message + "\n\n" + view.content).slice(0, 1900) });
+      if (i.followUp) await i.followUp({ ...safe, content: "**Room message was not completed**\n" + error.message, flags: 64 });
     } else await i.reply({ ...response, flags: 64 });
   } finally { s.busy = false; }
   return true;
 }
-module.exports = { entry, eventEntry, handle, page, list, create, permitted };
+module.exports = { receipt, entry, eventEntry, handle, page, list, create, permitted };
