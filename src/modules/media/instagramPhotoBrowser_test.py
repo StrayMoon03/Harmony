@@ -2,7 +2,11 @@ import copy
 import unittest
 import os
 import tempfile
-from instagramPhotoBrowser import allowed_response, exact_code, extract_photos, load_session_cookies, parse_args
+import contextlib
+import io
+import json
+from instagramPhotoBrowser import (allowed_response, contains_exact_record, exact_code, extract_photos,
+                                    load_session_cookies, parse_args, parse_json_body, response_message, run)
 
 
 class PhotoExtractionTests(unittest.TestCase):
@@ -104,6 +108,48 @@ class SessionPassTests(unittest.TestCase):
             os.unlink(name)
         self.assertEqual([c["name"] for c in cookies], ["sessionid"])
         self.assertEqual(cookies[0]["domain"], ".instagram.com")
+
+
+class LoggedInResponseTests(unittest.TestCase):
+    def test_parses_guarded_and_streamed_graphql_bodies(self):
+        self.assertEqual(parse_json_body('for (;;);{"a": 1}'), [{"a": 1}])
+        self.assertEqual(parse_json_body('{"data": {"x": 1}}\n{"label": "defer"}\n'), [{"data": {"x": 1}}, {"label": "defer"}])
+        self.assertEqual(parse_json_body("<html>"), [])
+        self.assertEqual(parse_json_body(""), [])
+
+    def test_guarded_logged_in_web_info_record_is_extracted(self):
+        record = {"data": {"xdt_api__v1__media__shortcode__web_info": {"items": [{
+            "code": "target", "carousel_media": [
+                {"media_type": 1, "image_versions2": {"candidates": [{"width": 10, "height": 10, "url": "https://a.cdninstagram.com/0.jpg"}]}},
+                {"media_type": 2, "video_versions": [{"width": 10, "height": 10, "url": "https://a.cdninstagram.com/1.mp4"}]},
+            ]}]}}}
+        payloads = parse_json_body("for (;;);" + json.dumps(record))
+        self.assertTrue(contains_exact_record(payloads, "target"))
+        result = extract_photos(payloads, "target")
+        self.assertEqual([item["type"] for item in result["items"]], ["image", "video"])
+
+    def test_response_message_keeps_only_status_fields(self):
+        info = response_message({"message": "Please wait a few minutes before you try again.", "require_login": True,
+                                 "status": "fail", "checkpoint_url": "https://www.instagram.com/challenge/secret/", "token": "x"})
+        self.assertEqual(info, {"message": "Please wait a few minutes before you try again.", "require_login": True,
+                                "status": "fail", "checkpoint_url": True})
+        self.assertEqual(response_message({"errors": [{"message": "nope"}]})["message"], "nope")
+        self.assertEqual(response_message({"data": {"b": 1, "a": 2}})["dataFields"], ["a", "b"])
+
+    def test_run_emits_diagnostics_on_failure(self):
+        def failing(diagnostics):
+            diagnostics["stage"] = "redirected"
+            diagnostics["finalPath"] = "/accounts/login/"
+            raise ValueError("Instagram did not open the requested post")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(run(failing), 1)
+        line = [l for l in err.getvalue().splitlines() if l.startswith("HARMONY_INSTAGRAM_PHOTO_DIAGNOSTICS:")][0]
+        data = json.loads(line.split(":", 1)[1])
+        self.assertEqual(data["stage"], "redirected")
+        self.assertEqual(data["finalPath"], "/accounts/login/")
+        self.assertEqual(data["error"], "ValueError")
+        self.assertIn("could not verify", err.getvalue())
 
 
 if __name__ == "__main__":

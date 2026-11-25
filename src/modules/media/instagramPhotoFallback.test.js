@@ -159,3 +159,18 @@ test('photo fallback reports both failures and still rejects a session result fo
     assert.deepEqual(await fs.readdir(dir), []);
   });
 });
+
+test('photo fallback logs redacted browser diagnostics from a failed session retry', async () => {
+  const { downloadInstagramPhotos, photoBrowserDiagnostics } = require('./instagramPhotoFallback');
+  const diag = { session: true, stage: 'redirected', finalPath: '/accounts/login/', responses: [{ path: '/graphql/query', status: 401, message: 'Please wait a few minutes before you try again.' }] };
+  const stderr = `Harmony Chromium executable: /x\nHARMONY_INSTAGRAM_PHOTO_DIAGNOSTICS:${JSON.stringify(diag)}\nInstagram browser could not verify a complete post\n`;
+  assert.deepEqual(photoBrowserDiagnostics(stderr), diag);
+  assert.equal(photoBrowserDiagnostics('HARMONY_INSTAGRAM_PHOTO_DIAGNOSTICS:not json'), null);
+  const warnings = [];
+  const logger = { warn: (line) => warnings.push(line) };
+  const exec = async () => { const error = new Error('Command failed'); error.stderr = stderr; throw error; };
+  await assert.rejects(downloadInstagramPhotos('https://www.instagram.com/p/target/', os.tmpdir(), { exec, env: { INSTAGRAM_COOKIES: '/tmp/cookies.txt' }, logger }), /session retry/);
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every((line) => line.startsWith('HARMONY_INSTAGRAM_PHOTO_DIAGNOSTICS:')));
+  assert.deepEqual(JSON.parse(warnings[1].split(':').slice(1).join(':')), diag);
+});
