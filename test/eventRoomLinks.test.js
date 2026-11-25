@@ -13,8 +13,8 @@ function fixture() {
   const eventId = events.createCalendarEvent({ guildId, calendarChannelId: "calendar", title: "Our listening party", calendarType: "community", eventDate: "2030-06-18", eventAt: "2030-06-18T23:00:00.000Z", eventEndAt: "2030-06-19T02:00:00.000Z", eventTimezone: "America/New_York", timezone: "America/New_York", eventChannelId: roomId, allDay: false, createdBy: "owner" });
   const messages = new Collection(), calls = { send: 0, fetch: 0, member: 0 };
   const f = { guildId, userId, roomId, eventId, calls, messages, sendError: null, allow: true, bot: false, left: false, historyError: false };
-  const room = { id: roomId, guildId, type: ChannelType.GuildText, permissionsFor: () => ({ has: () => f.allow }) };
-  const guild = { id: guildId, ownerId: "owner", channels: { fetch: async id => { if (id !== roomId && id !== "corrected-room") throw Error("Unknown room"); return { ...room, id }; } }, roles: { fetch: async () => new Collection() } };
+  const room = { id: roomId, guildId, name: "cinema", type: ChannelType.GuildText, permissionsFor: () => ({ has: () => f.allow }) };
+  const guild = { id: guildId, ownerId: "owner", channels: { fetch: async id => { if (!id) return new Collection([[roomId, room], ["corrected-room", { ...room, id: "corrected-room", name: "other-room" }]]); if (id !== roomId && id !== "corrected-room") throw Error("Unknown room"); return { ...room, id }; } }, roles: { fetch: async () => new Collection() } };
   const member = () => ({ id: userId, guild, user: { id: userId, bot: f.bot } });
   guild.members = { fetch: async () => { calls.member++; if (f.left) throw Object.assign(Error("Unknown Member"), { code: 10007 }); return member(); } };
   const dm = { id: "dm-" + userId, messages: { fetch: async options => {
@@ -148,7 +148,7 @@ test("unsent schedules follow an event reschedule and room change; sent schedule
 });
 test("missing event room never falls back to a calendar announcement channel", async () => {
   const f = fixture(); events.updateEvent(f.guildId, f.eventId, { event_channel_id: null });
-  await assert.rejects(service.resolveRoom(f.client, f.event()), /Choose the event room/);
+  await assert.rejects(service.resolveRoom(f.client, f.event()), /Choose the room the DM button/);
   assert.equal(f.calls.send, 0);
 });
 test("stopping scheduled messages preserves members for Send Now", async () => {
@@ -212,7 +212,7 @@ test("authorized event staff can open this feature without broadening other Sche
   const staff = i("open", { user: { id: "staff" }, memberPermissions: { has: flag => flag === require("discord.js").PermissionFlagsBits.ManageEvents }, customId: "harmony-room-links:open:community" });
   await scheduler.handleEventSchedulerInteraction(staff);
   assert.equal(staff.replyFlags, 64);
-  assert.match(staff.response.content, /SEND EVENT ROOM LINKS/);
+  assert.match(staff.response.content, /SEND ROOM LINKS BY DM/);
 });
 test("manager room correction, removal and scheduling do not alter the calendar event or private reminder preferences", async () => {
   const f = fixture(), { i } = ui(f); f.add();
@@ -241,7 +241,7 @@ test("the room link manager supports paginated events and fits Discord's compone
   }
   for (const type of ["community", "stray_kids"]) {
     const controls = scheduler.managerPanelComponents(type, f.guildId).flatMap(row => row.toJSON().components);
-    assert.ok(controls.some(c => c.label === "Send Room Links"));
+    assert.ok(controls.some(c => c.label === "Send Room Links by DM"));
     assert.ok(scheduler.managerPanelComponents(type, f.guildId).every(row => row.toJSON().components.length <= 5));
   }
 });
@@ -371,7 +371,7 @@ test("Send Now immediately displays Sending and provides a separate private deli
     const receipts = [], send = i("send", { customId: sendId, followUp: async p => { receipts.push(p); } });
     const task = manager.handle(send);
     while (!release) await new Promise(resolve => setImmediate(resolve));
-    assert.match(send.response.content, /Sending room links/);
+    assert.match(send.response.content, /Sending private DMs/);
     release(); await task;
     assert.match(send.response.content, /Delivered: 1 · Not delivered: 0/);
     assert.equal(receipts[0].flags, 64);
@@ -388,4 +388,64 @@ test("a failed direct message produces an explicit private failure receipt witho
   assert.match(receipts[0].content, /Delivered: 0 · Not delivered: 1/);
   assert.match(receipts[0].content, /DMs are unavailable/);
   assert.equal(receipts[0].flags, 64);
+});
+test("actual Discord.js room metadata can prepare a DM even when direct channel lookup and bot posting are denied", async () => {
+  const { ClientUser, PermissionFlagsBits: P } = require("discord.js");
+  const f = fixture(), client = new Client({ intents: [] });
+  const botId = "900000000000000001";
+  client.user = new ClientUser(client, { id: botId, username: "Harmony", discriminator: "0000", avatar: null, bot: true });
+  const roles = [{ id: f.guildId, name: "@everyone", permissions: String(P.ViewChannel), position: 0 }];
+  const guild = client.guilds._add({ id: f.guildId, name: "STAY fixture", owner_id: "900000000000000099", roles, emojis: [], features: [] });
+  const data = { id: f.roomId, guild_id: f.guildId, name: "cinema", type: ChannelType.GuildText, parent_id: null, permission_overwrites: [{ id: botId, type: 1, allow: "0", deny: String(P.ViewChannel | P.SendMessages) }] };
+  const gets = [];
+  client.rest.get = async route => {
+    gets.push(route);
+    if (route === `/channels/${f.roomId}`) throw Object.assign(Error("Missing Access"), { code: 50001 });
+    if (route === `/guilds/${f.guildId}/channels`) return [data];
+    if (route === `/guilds/${f.guildId}/roles`) return roles;
+    if (route === `/guilds/${f.guildId}/members/${f.userId}`) return { user: { id: f.userId, username: "member", discriminator: "0000", avatar: null, bot: false }, roles: [], joined_at: "2026-01-01T00:00Z" };
+    throw Error("Unexpected GET " + route);
+  };
+  for (const method of ["post", "put", "patch", "delete"]) client.rest[method] = async () => { throw Error("No room posts or permission mutations allowed"); };
+  guild.members._add({ user: { id: botId, username: "Harmony", discriminator: "0000", avatar: null, bot: true }, roles: [], joined_at: "2026-01-01T00:00Z" });
+  f.client.guilds.cache = new Collection([[f.guildId, guild]]);
+  const { room } = await service.resolveRoom(f.client, f.event());
+  assert.equal(room.permissionsFor(guild.members.cache.get(botId)).has(P.ViewChannel), false);
+  assert.equal(room.permissionsFor(guild.members.cache.get(botId)).has(P.SendMessages), false);
+  const id = f.enqueue();
+  await service.deliver(f.client, id, { now });
+  assert.equal(store.get(id).status, "sent");
+  assert.equal(f.calls.send, 1);
+  assert.equal(gets.includes(`/channels/${f.roomId}`), false);
+  assert.match(f.lastPayload.components[0].toJSON().components[0].url, new RegExp(f.roomId + "$"));
+});
+test("explicit same-server mentions, URLs and unique #room names resolve without guessing ordinary announcement locations", async () => {
+  const f = fixture();
+  for (const value of [`<#${f.roomId}>`, `https://discord.com/channels/${f.guildId}/${f.roomId}`, "#cinema"]) {
+    const room = await service.resolveRoom(f.client, { ...f.event(), event_channel_id: null, event_location: value });
+    assert.equal(room.room.id, f.roomId);
+  }
+  await assert.rejects(service.resolveRoom(f.client, { ...f.event(), event_channel_id: null, event_location: "Cinema is in this community" }), /DM button/);
+  await assert.rejects(service.resolveRoom(f.client, { ...f.event(), event_channel_id: null, event_location: `https://discord.com/channels/other/${f.roomId}` }), /DM button/);
+});
+test("fresh room metadata still rejects cross-server, incomplete and recipient-inaccessible rooms", async () => {
+  const f = fixture();
+  const fetch = f.guild.channels.fetch;
+  for (const bad of [{ ...f.room, guildId: "other" }, { ...f.room, name: null }, { ...f.room, type: ChannelType.GuildCategory }]) {
+    f.guild.channels.fetch = async () => new Collection([[f.roomId, bad]]);
+    await assert.rejects(service.resolveRoom(f.client, f.event()), /Choose|verify/);
+  }
+  f.guild.channels.fetch = fetch;
+  f.allow = false;
+  const id = f.enqueue(); await service.deliver(f.client, id, { now });
+  assert.equal(f.calls.send, 0);
+  assert.equal(store.get(id).status, "blocked");
+});
+test("private controls explicitly distinguish DM delivery from the room the button opens", () => {
+  const f = fixture(), { s } = ui(f); f.add();
+  const view = manager.page(s), json = JSON.stringify(view);
+  assert.match(view.content, /Delivery: Private DMs/);
+  assert.match(view.content, /Button opens:/);
+  assert.match(json, /Send DM Now/);
+  assert.match(json, /Room the DM button opens/);
 });

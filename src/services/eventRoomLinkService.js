@@ -17,19 +17,39 @@ function validDay(event, now) {
   return calendar().calendarDateInTimezone(now, t.timezone) <= t.day && (!event.event_end_at || Date.parse(event.event_end_at) > now.getTime());
 }
 async function resolveRoom(client, event, override = null) {
-  const guild = await client.guilds.fetch(event.guild_id);
+  const guild = client.guilds.cache?.get(event.guild_id) || await client.guilds.fetch(event.guild_id);
+  // We need channel identity/overwrites, not access to its messages. Reading a
+  // single restricted channel can fail even though a recipient may enter it.
+  let channels;
+  try { channels = await guild.channels.fetch(); }
+  catch (error) { throw Object.assign(Error("Harmony could not load the server's room details. Your message is still a DM; nothing was posted in a room."), { code: error.code }); }
   let id = override || event.event_channel_id;
+  let native;
   if (!id && event.discord_event_id) {
-    const native = await guild.scheduledEvents.fetch(event.discord_event_id);
+    try { native = await guild.scheduledEvents.fetch(event.discord_event_id); }
+    catch (error) { if (![50001, 50013, 10070].includes(Number(error.code))) throw error; }
     id = native?.channelId;
-    if (!id) {
-      const link = String(native?.entityMetadata?.location || "").match(/^https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/?$/);
-      if (link?.[1] === event.guild_id) id = link[2];
+  }
+  if (!id) {
+    // Only an explicit channel mention, same-server URL or unique #name is
+    // evidence. Ordinary locations and announcement channels are not guesses.
+    for (const value of [native?.entityMetadata?.location, event.event_location]) {
+      const text = String(value || "").trim();
+      const mention = text.match(/^<#(\d+)>$/);
+      const url = text.match(/^https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/?$/);
+      if (mention) id = mention[1];
+      else if (url?.[1] === event.guild_id) id = url[2];
+      else if (/^#[^\s#]+$/.test(text)) {
+        const matches = [...(channels?.values?.() || [])].filter(c => c.name?.toLowerCase() === text.slice(1).toLowerCase());
+        if (matches.length === 1) id = matches[0].id;
+      }
+      if (id) break;
     }
   }
-  if (!id) throw Error("Choose the event room first. The announcement channel is not used as a substitute.");
-  const room = await guild.channels.fetch(id, { force: true });
-  if (room?.guildId !== event.guild_id || !roomTypes.includes(room.type)) throw Error("Choose a text, announcement, voice or stage room in this server.");
+  if (!id) throw Error("Choose the room the DM button should open (for example, Cinema). The message itself will go only to the selected members' DMs.");
+  const room = channels?.get?.(id);
+  if (room?.guildId !== event.guild_id || !roomTypes.includes(room.type)) throw Error("Choose a text, announcement, voice or stage room in this server for the DM button.");
+  if (!room.name || typeof room.permissionsFor !== "function") throw Error("Harmony cannot verify this room's access details. Nothing was sent; choose a room whose recipient access can be checked.");
   return { guild, room };
 }
 function link(g, c) { return `https://discord.com/channels/${g}/${c}`; }
