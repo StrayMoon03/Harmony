@@ -1,6 +1,6 @@
 "use strict";
 const { randomBytes } = require("node:crypto");
-const { ActionRowBuilder: Row, ButtonBuilder: Button, ButtonStyle: Style, UserSelectMenuBuilder: Users, StringSelectMenuBuilder: Select, ChannelSelectMenuBuilder: Channels, ModalBuilder: Modal, TextInputBuilder: Input, TextInputStyle, PermissionFlagsBits: P } = require("discord.js");
+const { ActionRowBuilder: Row, ButtonBuilder: Button, ButtonStyle: Style, StringSelectMenuBuilder: Select, ChannelSelectMenuBuilder: Channels, ModalBuilder: Modal, TextInputBuilder: Input, TextInputStyle, PermissionFlagsBits: P } = require("discord.js");
 const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const store = require("../stores/eventRoomLinkStore");
 const events = require("../stores/eventSchedulerStore");
@@ -60,13 +60,49 @@ function page(s, notice = "") {
   const jobs = store.deliveries(s.guild, s.event), sent = jobs.filter(j => j.status === "sent").length;
   const failures = jobs.filter(j => ["blocked", "failed", "pending"].includes(j.status) && j.last_error);
   const roomId = settings?.room_id || event.event_channel_id;
-  return { ...safe, content: [notice, `**${event.title} — PRIVATE DMs**`, "Delivery: Private DMs to the selected members", `Event day: ${t.day} · ${t.timezone}`, roomId ? `Button opens: <#${roomId}>` : "Choose the room the button should open. Delivery is always a private DM.", "", `${members.length} selected member${members.length === 1 ? "" : "s"}:`, ...members.slice(0, 12).map(m => `• <@${m.user_id}> — ${m.scheduled ? `Scheduled ${settings?.local_time || "09:00"} on the event day` : "Send Now only"}`), ...(members.length > 12 ? [`…and ${members.length - 12} more`] : []), "", `Confirmed delivered: ${sent}. Queued / scheduled: ${jobs.filter(j => ["pending", "sending"].includes(j.status)).length}.`, ...failures.slice(0, 4).map(j => `<@${j.user_id}>: ${j.last_error}${j.retry_at ? ` Retry after ${j.retry_at}.` : ""}`), "", "Use Add Members even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message."].filter(v => v !== undefined && v !== "").join("\n").slice(0, 1900), components: [
-    new Row().addComponents(new Users().setCustomId(id(s, "add")).setPlaceholder("Who receives the DM? Add members").setMinValues(1).setMaxValues(25)),
-    new Row().addComponents(new Users().setCustomId(id(s, "remove")).setPlaceholder("Remove members from this event's messages").setMinValues(1).setMaxValues(25)),
+  return { ...safe, content: [notice, `**${event.title} — PRIVATE DMs**`, "Delivery: Private DMs to the selected members", `Event day: ${t.day} · ${t.timezone}`, roomId ? `Button opens: <#${roomId}>` : "Choose the room the button should open. Delivery is always a private DM.", "", `${members.length} selected member${members.length === 1 ? "" : "s"}:`, ...members.slice(0, 12).map(m => `• <@${m.user_id}> — ${m.scheduled ? `Scheduled ${settings?.local_time || "09:00"} on the event day` : "Send Now only"}`), ...(members.length > 12 ? [`…and ${members.length - 12} more`] : []), "", `Confirmed delivered: ${sent}. Queued / scheduled: ${jobs.filter(j => ["pending", "sending"].includes(j.status)).length}.`, ...failures.slice(0, 4).map(j => `<@${j.user_id}>: ${j.last_error}${j.retry_at ? ` Retry after ${j.retry_at}.` : ""}`), "", "Use Manage DM Recipients even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message."].filter(v => v !== undefined && v !== "").join("\n").slice(0, 1900), components: [
+    new Row().addComponents(button(s, "recipients", "Manage DM Recipients")),
     new Row().addComponents(new Channels().setCustomId(id(s, "room")).setPlaceholder("Room the DM button opens").addChannelTypes(...service.roomTypes)),
     new Row().addComponents(button(s, "send", "Send DM Now", Style.Primary, jobKey).setDisabled(!members.length), button(s, "schedule", "Schedule Event-Day DM", Style.Success).setDisabled(!members.length)),
     new Row().addComponents(button(s, "stop", "Stop Scheduled Messages"), button(s, "retry", "Retry Failed Delivery"), button(s, "back", "Back to Events")),
   ] };
+}
+const normalizeName = value => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+const savedIds = s => store.members(s.guild, s.event).map(m => m.user_id).sort();
+const sameIds = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+function recipientPage(s, notice = "") {
+  const d = s.recipientEdits?.get(s.event);
+  if (!d) throw Error("Reopen Manage DM Recipients.");
+  const found = d.roster.filter(m => normalizeName(m.search).includes(normalizeName(d.query)));
+  const pages = Math.max(1, Math.ceil(found.length / 25));
+  d.page = Math.max(0, Math.min(d.page, pages - 1));
+  const shown = found.slice(d.page * 25, d.page * 25 + 25);
+  d.offered = shown.map(m => m.id);
+  d.view = randomBytes(8).toString("hex");
+  const components = [];
+  if (shown.length) components.push(new Row().addComponents(new Select().setCustomId(id(s, "recipients-pick", d.view)).setPlaceholder("Check or uncheck members").setMinValues(0).setMaxValues(shown.length).addOptions(shown.map(m => ({ label: m.name.slice(0, 100), description: m.description.slice(0, 100), value: m.id, default: d.selected.has(m.id) })))));
+  components.push(new Row().addComponents(button(s, "recipients-search", "Search Members"), button(s, "recipients-clear", "Clear Search").setDisabled(!d.query), button(s, "recipients-prev", "Previous").setDisabled(!d.page), button(s, "recipients-next", "Next").setDisabled(d.page + 1 >= pages)));
+  components.push(new Row().addComponents(button(s, "recipients-save", "Save Recipients", Style.Success), button(s, "recipients-back", "Back")));
+  return { ...safe, content: [notice, `**Manage DM Recipients — ${events.getEvent(s.guild, s.event)?.title || "Event"}**`, `${d.selected.size} selected members · Page ${d.page + 1} of ${pages}`, d.query ? `Search: ${d.query}` : "All server members", `${found.length} matching members`, !shown.length ? "No matching members. Your selections are kept." : "Check names to add them; uncheck names to remove them.", "Selections on other pages and searches are kept. Event interest is not required.", "Choose Save Recipients to apply your changes. This does not send any messages."].filter(Boolean).join("\n").slice(0, 1900), components };
+}
+async function openRecipients(i, s) {
+  const baseline = savedIds(s);
+  s.recipientEdits ||= new Map();
+  let d = s.recipientEdits.get(s.event), notice = "";
+  if (!d || !sameIds(baseline, d.baseline)) {
+    const roster = await i.guild.members.fetch();
+    const choices = new Map();
+    for (const member of roster.values()) {
+      if (member.guild.id !== s.guild || member.user.bot) continue;
+      const name = member.displayName || member.user.globalName || member.user.username || member.id;
+      choices.set(member.id, { id: member.id, name, description: `@${member.user.username || member.id}`, search: `${name} ${member.user.globalName || ""} ${member.user.username || ""}` });
+    }
+    for (const user of baseline) if (!choices.has(user)) choices.set(user, { id: user, name: `Saved recipient (${user})`, description: "Existing selection; member unavailable", search: user });
+    if (d) notice = "The saved recipient list changed. Loaded the latest selections; review them before saving.";
+    d = { baseline, selected: new Set(baseline), roster: [...choices.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)), query: "", page: 0 };
+    s.recipientEdits.set(s.event, d);
+  }
+  return recipientPage(s, notice);
 }
 async function handle(i) {
   if (!i.customId?.startsWith("harmony-room-links:")) return false;
@@ -108,7 +144,41 @@ async function handle(i) {
     } else {
       const event = events.getEvent(s.guild, s.event);
       if (!event || event.calendar_type !== s.calendarType) throw Error("This event was cancelled or changed. Choose it again.");
-      if (action === "add") {
+      if (action === "recipients") {
+        await i.deferUpdate();
+        await i.editReply(await openRecipients(i, s));
+      } else if (action.startsWith("recipients-")) {
+        const d = s.recipientEdits?.get(s.event);
+        if (!d) throw Error("Reopen Manage DM Recipients.");
+        if (action === "recipients-search") {
+          await i.showModal(new Modal().setCustomId(id(s, "recipients-query")).setTitle("Search Members").addComponents(new Row().addComponents(new Input().setCustomId("name").setLabel("Member name or username").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100).setValue(d.query))));
+        } else if (action === "recipients-save") {
+          await i.deferUpdate();
+          if (!sameIds(savedIds(s), d.baseline)) throw Error("Recipients changed in another setup. Reopen Manage DM Recipients to load the saved list.");
+          for (const user of d.selected) if (!d.baseline.includes(user)) {
+            const member = await i.guild.members.fetch({ user, force: true });
+            if (member.id !== user || member.guild.id !== s.guild || member.user.bot) throw Error("Choose human members of this server. No recipient changes were saved.");
+          }
+          const currentEvent = events.getEvent(s.guild, s.event);
+          if (!currentEvent || currentEvent.calendar_type !== s.calendarType) throw Error("This event was cancelled or changed. Choose it again.");
+          store.replaceRecipients(s.guild, s.event, [...d.selected], d.baseline, i.user.id);
+          s.recipientEdits.delete(s.event);
+          await i.editReply(page(s, "Recipients saved. No messages were sent."));
+        } else if (action === "recipients-back") {
+          await i.update(page(s, "Recipient edits are kept in this private setup. Reopen Manage DM Recipients to continue, then Save Recipients to apply them."));
+        } else {
+          if (action === "recipients-pick") {
+            const values = [...new Set(i.values)];
+            if (extra !== d.view || values.some(u => !d.offered.includes(u))) throw Error("That member list changed. Use the latest recipient list.");
+            for (const user of d.offered) d.selected.delete(user);
+            for (const user of values) d.selected.add(user);
+          } else if (action === "recipients-query") { d.query = i.fields.getTextInputValue("name").trim().slice(0, 100); d.page = 0; }
+          else if (action === "recipients-clear") { d.query = ""; d.page = 0; }
+          else if (["recipients-prev", "recipients-next"].includes(action)) d.page += action === "recipients-next" ? 1 : -1;
+          else throw Error("Reopen Manage DM Recipients.");
+          await i.update(recipientPage(s));
+        }
+      } else if (action === "add") {
         await i.deferUpdate();
         const ids = [...new Set(i.values)];
         if (!ids.length || ids.length > 25) throw Error("Choose up to 25 members at a time.");
@@ -172,11 +242,13 @@ async function handle(i) {
     const response = { ...safe, content: error.message };
     if (i.deferred) {
       const current = events.getEvent(s.guild, s.event);
-      const view = current ? page(s) : list(s);
-      await i.editReply({ ...view, content: ("**Private DM was not completed**\n" + error.message + "\n\n" + view.content).slice(0, 1900) });
-      if (i.followUp) await i.followUp({ ...safe, content: "**Private DM was not completed**\n" + error.message, flags: 64 });
+      const editingRecipients = action.startsWith("recipients");
+      const view = current ? (editingRecipients && s.recipientEdits?.has(s.event) ? recipientPage(s) : page(s)) : list(s);
+      const heading = editingRecipients ? "**Recipients were not saved**" : "**Private DM was not completed**";
+      await i.editReply({ ...view, content: (heading + "\n" + error.message + "\n\n" + view.content).slice(0, 1900) });
+      if (i.followUp) await i.followUp({ ...safe, content: heading + "\n" + error.message, flags: 64 });
     } else await i.reply({ ...response, flags: 64 });
   } finally { s.busy = false; }
   return true;
 }
-module.exports = { receipt, entry, eventEntry, handle, page, list, create, permitted };
+module.exports = { recipientPage, receipt, entry, eventEntry, handle, page, list, create, permitted };
