@@ -91,3 +91,71 @@ test('keeps photos when a mixed-carousel video cannot be downloaded', async () =
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+function photoLine(code) {
+  return `HARMONY_INSTAGRAM_PHOTOS:${JSON.stringify({ code, creator: 'poster', photos: ['https://a.cdninstagram.com/1.jpg'] })}\n`;
+}
+
+async function withImageFetch(fn) {
+  const original = global.fetch;
+  global.fetch = async () => new Response(Buffer.alloc(2048), { headers: { 'content-type': 'image/jpeg' } });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'instagram-session-retry-test-'));
+  try {
+    return await fn(dir);
+  } finally {
+    global.fetch = original;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('photo fallback stays logged out when the logged-out pass works', async () => {
+  const { downloadInstagramPhotos } = require('./instagramPhotoFallback');
+  await withImageFetch(async (dir) => {
+    const calls = [];
+    const exec = async (_bin, args) => { calls.push(args.slice(1)); return { stdout: photoLine('target') }; };
+    const result = await downloadInstagramPhotos('https://www.instagram.com/p/target/', dir, { exec, env: { INSTAGRAM_COOKIES: '/tmp/cookies.txt' } });
+    assert.equal(result.files.length, 1);
+    assert.deepEqual(calls, [['https://www.instagram.com/p/target/']]);
+  });
+});
+
+test('photo fallback retries once with the Instagram session after a logged-out failure', async () => {
+  const { downloadInstagramPhotos } = require('./instagramPhotoFallback');
+  await withImageFetch(async (dir) => {
+    const calls = [];
+    const exec = async (_bin, args) => {
+      calls.push(args.slice(1));
+      if (!args.includes('--session')) throw new Error('Instagram browser could not verify a complete post');
+      return { stdout: photoLine('target') };
+    };
+    const result = await downloadInstagramPhotos('https://www.instagram.com/p/target/', dir, { exec, env: { INSTAGRAM_COOKIES: '/tmp/cookies.txt' } });
+    assert.equal(result.files.length, 1);
+    assert.equal(result.creator, 'poster');
+    assert.deepEqual(calls, [['https://www.instagram.com/p/target/'], ['https://www.instagram.com/p/target/', '--session']]);
+  });
+});
+
+test('photo fallback does not retry with a session when no Instagram cookies are configured', async () => {
+  const { downloadInstagramPhotos } = require('./instagramPhotoFallback');
+  await withImageFetch(async (dir) => {
+    let calls = 0;
+    const exec = async () => { calls += 1; throw new Error('logged-out failed'); };
+    await assert.rejects(downloadInstagramPhotos('https://www.instagram.com/p/target/', dir, { exec, env: {} }), /logged-out failed/);
+    assert.equal(calls, 1);
+  });
+});
+
+test('photo fallback reports both failures and still rejects a session result for another post', async () => {
+  const { downloadInstagramPhotos } = require('./instagramPhotoFallback');
+  await withImageFetch(async (dir) => {
+    const exec = async (_bin, args) => {
+      if (!args.includes('--session')) throw new Error('logged-out failed');
+      return { stdout: photoLine('other') };
+    };
+    await assert.rejects(
+      downloadInstagramPhotos('https://www.instagram.com/p/target/', dir, { exec, env: { INSTAGRAM_COOKIES: '/tmp/cookies.txt' } }),
+      /logged-out failed; session retry: Instagram photo identity mismatch/,
+    );
+    assert.deepEqual(await fs.readdir(dir), []);
+  });
+});
