@@ -5,6 +5,7 @@ const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const { probeFile } = require("./downloader");
+const { asStepRunner } = require("./tiktokTiming");
 
 const execFileAsync = promisify(execFile);
 
@@ -443,12 +444,17 @@ function isYtDlpExtractionFailure(err) {
  * @param {string} jobDir
  * @returns {Promise<{ hasAudio: boolean }>}
  */
-async function downloadTikTokVideoWithYtDlp(url, jobDir) {
+async function downloadTikTokVideoWithYtDlp(url, jobDir, timing) {
+  const runStep = asStepRunner(timing);
   console.log(
     `TikTok download: format selector "${FORMAT_PREFER_AUDIO}"`
   );
 
-  await runYtDlp(url, jobDir, FORMAT_PREFER_AUDIO);
+  await runStep(
+    "download.ytdlp",
+    () => runYtDlp(url, jobDir, FORMAT_PREFER_AUDIO),
+    { tool: "ytdlp" }
+  );
 
   await new Promise((resolve) =>
     setTimeout(resolve, 300)
@@ -463,8 +469,9 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
     );
   }
 
-  let hasAudio = await fileHasAudioStream(
-    videoFiles[0].path
+  let hasAudio = await runStep(
+    "download.ffprobe",
+    () => fileHasAudioStream(videoFiles[0].path)
   );
 
   if (!hasAudio) {
@@ -475,10 +482,14 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
     await clearJobMediaFiles(jobDir);
 
     try {
-      await runYtDlp(
-        url,
-        jobDir,
-        FORMAT_RETRY_WITH_AUDIO
+      await runStep(
+        "download.ytdlp_retry",
+        () => runYtDlp(
+          url,
+          jobDir,
+          FORMAT_RETRY_WITH_AUDIO
+        ),
+        { tool: "ytdlp" }
       );
     } catch (retryErr) {
       console.warn(
@@ -487,10 +498,14 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
       );
 
       await clearJobMediaFiles(jobDir);
-      await runYtDlp(
-        url,
-        jobDir,
-        FORMAT_PREFER_AUDIO
+      await runStep(
+        "download.ytdlp_retry",
+        () => runYtDlp(
+          url,
+          jobDir,
+          FORMAT_PREFER_AUDIO
+        ),
+        { tool: "ytdlp" }
       );
     }
 
@@ -507,8 +522,9 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
       );
     }
 
-    hasAudio = await fileHasAudioStream(
-      videoFiles[0].path
+    hasAudio = await runStep(
+      "download.ffprobe",
+      () => fileHasAudioStream(videoFiles[0].path)
     );
 
     if (hasAudio) {
@@ -540,13 +556,18 @@ async function downloadTikTokVideoWithYtDlp(url, jobDir) {
  * @param {string} jobDir
  * @returns {Promise<{ hasAudio: boolean, creator: string|null }>}
  */
-async function downloadTikTokVideoWithGalleryDl(url, jobDir) {
+async function downloadTikTokVideoWithGalleryDl(url, jobDir, timing) {
+  const runStep = asStepRunner(timing);
   console.warn(
     "TikTok yt-dlp failed. Falling back to gallery-dl for this video…"
   );
 
   await clearJobMediaFiles(jobDir);
-  await runGalleryDl(url, jobDir);
+  await runStep(
+    "download.gallery_dl",
+    () => runGalleryDl(url, jobDir),
+    { tool: "gallery_dl" }
+  );
 
   await new Promise((resolve) =>
     setTimeout(resolve, 300)
@@ -564,8 +585,9 @@ async function downloadTikTokVideoWithGalleryDl(url, jobDir) {
   let hasAudio = false;
 
   if (videoFiles.length > 0) {
-    hasAudio = await fileHasAudioStream(
-      videoFiles[0].path
+    hasAudio = await runStep(
+      "download.ffprobe",
+      () => fileHasAudioStream(videoFiles[0].path)
     );
   }
 
@@ -611,7 +633,8 @@ async function downloadTikTokVideoWithGalleryDl(url, jobDir) {
  *   hasAudio: boolean
  * }>}
  */
-async function downloadTikTokMedia(url) {
+async function downloadTikTokMedia(url, timing) {
+  const runStep = asStepRunner(timing);
   const jobDir =
     await createTikTokJobDirectory();
 
@@ -624,7 +647,11 @@ async function downloadTikTokMedia(url) {
         "TikTok photo post detected. Using gallery-dl."
       );
 
-      await runGalleryDl(url, jobDir);
+      await runStep(
+        "download.gallery_dl",
+        () => runGalleryDl(url, jobDir),
+        { tool: "gallery_dl" }
+      );
 
       creator =
         await getGalleryDlCreator(url);
@@ -647,7 +674,8 @@ async function downloadTikTokMedia(url) {
         const ytResult =
           await downloadTikTokVideoWithYtDlp(
             url,
-            jobDir
+            jobDir,
+            timing
           );
         hasAudio = ytResult.hasAudio;
       } catch (ytErr) {
@@ -668,7 +696,8 @@ async function downloadTikTokMedia(url) {
           const gdlResult =
             await downloadTikTokVideoWithGalleryDl(
               url,
-              jobDir
+              jobDir,
+              timing
             );
           hasAudio = gdlResult.hasAudio;
           if (gdlResult.creator) {
@@ -700,7 +729,10 @@ async function downloadTikTokMedia(url) {
     );
 
     const files = isTikTokPhotoPost(url)
-      ? await normalizeTikTokPhotoImages(jobDir)
+      ? await runStep(
+          "download.photo_normalize",
+          () => normalizeTikTokPhotoImages(jobDir)
+        )
       : await collectMediaFiles(jobDir);
 
     if (files.length === 0) {

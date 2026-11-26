@@ -43,3 +43,13 @@ test("other media keeps the existing lifecycle cutoff", () => {
     undefined
   );
 });
+
+test("TikTok keeps the existing 20-second lifecycle cutoff", () => {
+  for (const url of [
+    "https://www.tiktok.com/t/ZP9Pb9y6KG2YW-jm2Tt",
+    "https://www.tiktok.com/@creator/video/123456789",
+    "https://vm.tiktok.com/ZMExample/",
+  ]) {
+    assert.equal(mediaLifecycleCutoffMs(url), undefined);
+  }
+});
