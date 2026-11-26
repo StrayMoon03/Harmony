@@ -1,6 +1,7 @@
 "use strict";
 const { getDb } = require("../db/sqlite");
 const { createHash, randomUUID } = require("node:crypto");
+const TOPIC_VERSION = "concert-topic-v1";
 const changes = new (require("node:events").EventEmitter)();
 const subscribe = listener => { changes.on("change", listener); return () => changes.off("change", listener); };
 const get = (g, c) =>
@@ -25,13 +26,14 @@ const enabled = () =>
 function renderingWork(version) {
   return getDb()
     .prepare(
-      `SELECT guild_id,channel_id,enabled,message_id,published_at,render_version,config,fingerprint,last_success,last_error,retry_at,delivery,lease_until
+      `SELECT guild_id,channel_id,enabled,message_id,published_at,render_version,config,fingerprint,last_success,last_error,retry_at,delivery,lease_until,
+      topic_lease_until,revision,topic_version,topic_revision,topic_text,topic_pending_text,topic_last_success,topic_error,topic_retry_at,topic_retry_kind,topic_attempts
     FROM concert_countdowns
     WHERE (message_id IS NOT NULL OR published_at IS NOT NULL OR delivery IS NOT NULL)
-      AND (enabled=1 OR ((message_id IS NOT NULL OR published_at IS NOT NULL) AND COALESCE(render_version,'')<>?))
+      AND (enabled=1 OR ((message_id IS NOT NULL OR published_at IS NOT NULL) AND (COALESCE(render_version,'')<>? OR COALESCE(topic_version,'')<>?)))
     ORDER BY guild_id,channel_id`,
     )
-    .all(version);
+    .all(version, TOPIC_VERSION);
 }
 function save(g, c, config, expected) {
   const old = get(g, c);
@@ -114,6 +116,8 @@ function update(g, c, fields) {
     "render_version",
     "checked_at",
     "legacy_recovery",
+    "topic_version", "topic_revision", "topic_text", "topic_pending_text", "topic_last_success",
+    "topic_error", "topic_retry_at", "topic_retry_kind", "topic_attempts",
   ];
   const keys = Object.keys(fields);
   if (!keys.length || keys.some((k) => !allowed.includes(k)))
@@ -155,12 +159,28 @@ function release(g, c, token) {
   // A manual update may have armed a retry while its lease was still held.
   changes.emit("change");
 }
+// Topic edits have their own lease so an optional PATCH never locks the graphic.
+function acquireTopic(g, c) {
+  const token = randomUUID(), now = Date.now();
+  return getDb().prepare("UPDATE concert_countdowns SET topic_lease_token=?,topic_lease_until=? WHERE guild_id=? AND channel_id=? AND (topic_lease_until IS NULL OR topic_lease_until<?)")
+    .run(token, now + 15 * 60000, g, c, now).changes ? token : null;
+}
+function renewTopic(g, c, token) {
+  return getDb().prepare("UPDATE concert_countdowns SET topic_lease_until=? WHERE guild_id=? AND channel_id=? AND topic_lease_token=?")
+    .run(Date.now() + 15 * 60000, g, c, token).changes > 0;
+}
+function releaseTopic(g, c, token) {
+  getDb().prepare("UPDATE concert_countdowns SET topic_lease_token=NULL,topic_lease_until=NULL WHERE guild_id=? AND channel_id=? AND topic_lease_token=?").run(g, c, token);
+  changes.emit("change");
+}
 // Reads only the approved calendar; candidates and Radar discoveries are separate tables.
 function concerts(g, query = "") {
   return require("../services/concertTourCalendar").listConcerts(g, query);
 }
 
 module.exports = {
+  TOPIC_VERSION,
+  acquireTopic, renewTopic, releaseTopic,
   subscribe,
   get,
   list,

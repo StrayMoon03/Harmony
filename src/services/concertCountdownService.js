@@ -3,6 +3,7 @@ const store = require("../stores/concertCountdownStore");
 const events = require("../stores/eventSchedulerStore");
 const { buildCountdown, localDate, nextMidnight } = require("./concertCountdownModel");
 const images = require("./concertCountdownRender");
+const topics = require("./concertCountdownTopic");
 const { createHash, randomBytes } = require("node:crypto");
 const access = require("./concertCountdownPermissions");
 const locks = new Set();
@@ -127,7 +128,7 @@ async function recoverDelivery(channel, client, marker, delivery, filename) {
     "Recovery history exceeds 10,000 messages. Retry with administrator assistance; no duplicate was sent.",
   );
 }
-async function refresh(
+async function refreshGraphic(
   client,
   g,
   c,
@@ -338,7 +339,7 @@ async function refresh(
   }
 }
 // Only metadata is scanned; photographs and Discord are loaded for due work.
-function nextUpdate(row, now = new Date()) {
+function nextGraphicUpdate(row, now = new Date()) {
   const published = Boolean(row.message_id || row.published_at);
   const upgrade = published && row.render_version !== images.RENDER_VERSION;
   if ((!published && !row.delivery) || (!row.enabled && !upgrade)) return null;
@@ -353,19 +354,36 @@ function nextUpdate(row, now = new Date()) {
   // A crashed worker's durable lease must expire before recovery can run.
   return row.lease_until >= due.getTime() ? new Date(row.lease_until + 1) : due;
 }
-async function runUpdates(client, { now = new Date() } = {}) {
+async function refresh(client, g, c, options = {}) {
+  const result = await refreshGraphic(client, g, c, options);
+  try {
+    const now = options.now || new Date(), row = store.get(g, c);
+    const due = row && topics.nextUpdate(row, now);
+    if ((!options.scheduled && (options.force || options.publish)) || (due && due <= now)) {
+      await topics.sync(client, g, c, current => model(current, now), options);
+    }
+  } catch (error) {
+    console.warn("Countdown graphic saved; optional topic update could not complete", c);
+  }
+  return result;
+}
+function nextUpdate(row, now = new Date()) {
+  const graphic = nextGraphicUpdate(row, now), topic = topics.nextUpdate(row, now);
+  return !graphic ? topic : !topic ? graphic : new Date(Math.min(graphic.getTime(), topic.getTime()));
+}
+async function runUpdates(client, { now = new Date(), waitForTopics = true } = {}) {
   const result = { updated: 0, skipped: 0, deferred: 0, failed: 0 };
   for (const row of store.renderingWork(images.RENDER_VERSION)) {
     const upgrade =
       Boolean(row.message_id || row.published_at) &&
       row.render_version !== images.RENDER_VERSION;
     try {
-      const due = nextUpdate(row, now);
+      const due = nextGraphicUpdate(row, now);
       if (!due || due > now) {
         result.deferred++;
         continue;
       }
-      const status = await refresh(client, row.guild_id, row.channel_id, {
+      const status = await refreshGraphic(client, row.guild_id, row.channel_id, {
         scheduled: true,
         renderUpgrade: upgrade,
         now,
@@ -392,6 +410,19 @@ async function runUpdates(client, { now = new Date() } = {}) {
       );
     }
   }
+  // Finish all due graphics first. The live timer never waits on optional PATCHes.
+  const updateTopics = async () => {
+    for (const row of store.renderingWork(images.RENDER_VERSION)) {
+      try {
+        const due = topics.nextUpdate(row, now);
+        if (due && due <= now) await topics.sync(client, row.guild_id, row.channel_id, current => model(current, now), { now, scheduled: true });
+      } catch (error) {
+        console.warn("Countdown topic update failed", row.channel_id, String(error.message).slice(0, 160));
+      }
+    }
+  };
+  if (waitForTopics) await updateTopics();
+  else void updateTopics().catch(error => console.warn("Countdown topic worker failed", String(error.message).slice(0, 160)));
   return result;
 }
 function start(client, { clock = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
@@ -422,7 +453,7 @@ function start(client, { clock = () => new Date(), setTimer = setTimeout, clearT
     if (busy || stopped) return;
     busy = true;
     try {
-      await runUpdates(client, { now: clock() });
+      await runUpdates(client, { now: clock(), waitForTopics: false });
     } catch (error) {
       console.error("Concert countdown scheduler failed", error.message);
     } finally {

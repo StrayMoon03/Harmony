@@ -90,6 +90,14 @@ function fixture() {
     type: ChannelType.GuildText,
     name: "chicago",
     overwritesFor: () => ({ roles: [] }),
+    topic: "",
+    setTopic: async value => {
+      f.topicCalls = (f.topicCalls || 0) + 1;
+      if (f.topicError && f.topicError !== "after") throw f.topicError;
+      channel.topic = value;
+      if (f.topicError === "after") throw Error("Topic response lost after write");
+      return channel;
+    },
     permissionsFor: () => ({
       has: (flag) => f.allow && !f.missingFlags?.includes(flag),
     }),
@@ -585,8 +593,8 @@ test("lost send response can be retried immediately without losing the durable d
 });
 function isolateRenderingWork() {
   db.getDb()
-    .prepare("UPDATE concert_countdowns SET enabled=0,render_version=?")
-    .run(images.RENDER_VERSION);
+    .prepare("UPDATE concert_countdowns SET enabled=0,render_version=?,topic_version=?")
+    .run(images.RENDER_VERSION, store.TOPIC_VERSION);
 }
 async function upgradeFixture() {
   isolateRenderingWork();
@@ -1041,7 +1049,7 @@ test('scheduler arms one midnight timer, wakes on settings changes and stops wit
   const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(pending.size, 1); assert.equal([...pending.values()][0].ms, 16 * 3600000);
-  const task = [...pending.values()][0]; pending.clear(); now = new Date('2027-06-17T04:00Z'); await task.fn();
+  const task = [...pending.values()][0]; pending.clear(); now = new Date('2027-06-17T04:00Z'); await task.fn(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.edit, 1); assert.equal([...pending.values()][0].ms, 24 * 3600000);
   store.update(f.g, f.c, { enabled: 0 }); assert.equal(pending.size, 0);
   store.update(f.g, f.c, { enabled: 1 }); assert.equal(pending.size, 1);
@@ -1055,7 +1063,7 @@ test('invalid saved zone retries with backoff; a surviving lease delays recovery
   store.update(f.g, f.c, { fingerprint: 'old' });
   assert.equal((await service.runUpdates(f.client, { now })).failed, 1);
   assert.equal(service.nextUpdate(f.row(), now).toISOString(), '2027-06-17T06:05:00.000Z');
-  const due = { ...f.row(), lease_until: now.getTime() + 600000 };
+  const due = { ...f.row(), lease_until: now.getTime() + 600000, topic_lease_until: now.getTime() + 600000 };
   assert.equal(service.nextUpdate(due, now).getTime(), due.lease_until + 1);
   assert.equal(f.calls.send, 1);
 });
@@ -1066,9 +1074,9 @@ test('the running midnight timer arms the exact rate-limit retry and recovers wi
   try {
     await new Promise(resolve => setImmediate(resolve));
     const midnight = [...pending.values()][0]; pending.clear(); now = new Date('2027-06-17T04:00Z');
-    f.editError = Object.assign(Error('Rate limited'), { status: 429, retry_after: 90 }); await midnight.fn();
+    f.editError = Object.assign(Error('Rate limited'), { status: 429, retry_after: 90 }); await midnight.fn(); await new Promise(resolve => setImmediate(resolve));
     assert.equal(pending.size, 1); const retry = [...pending.values()][0]; assert.equal(retry.ms, 90000);
-    pending.clear(); now = new Date('2027-06-17T04:01:30Z'); f.editError = null; await retry.fn();
+    pending.clear(); now = new Date('2027-06-17T04:01:30Z'); f.editError = null; await retry.fn(); await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.calls.send, 1); assert.equal(f.calls.edit, 2); assert.equal(f.row().last_error, null);
     assert.equal([...pending.values()][0].ms, 24 * 3600000 - 90000);
   } finally { stop(); }
@@ -1096,4 +1104,169 @@ test('a manual failure releases its lease and rearms the saved retry without wai
     assert.equal(pending.size, 1); assert.equal([...pending.values()][0].ms, 90000);
     assert.equal(f.row().lease_until, null);
   } finally { stop(); }
+});
+
+const topics = require('../src/services/concertCountdownTopic');
+test('publication adds the topic, and local midnight edits it with the existing pinned graphic', async () => {
+  const f = fixture(); f.channel.topic = 'Chicago travel chat\nKeep your ticket details private.';
+  await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  assert.equal(f.channel.topic, '🧡 2 days until Chicago! 🖤\nChicago travel chat\nKeep your ticket details private.');
+  const before = f.row(), id = before.message_id; store.update(f.g, f.c, { enabled: 1 });
+  isolateOtherTopics(f);
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T05:00Z') });
+  assert.match(f.channel.topic, /^🧡 1 day until Chicago! 🖤\nChicago travel chat/);
+  assert.equal(f.row().topic_last_success, '2027-06-17T05:00:00.000Z');
+  assert.equal(f.row().last_success, f.row().topic_last_success);
+  assert.equal(f.row().message_id, id); assert.equal(f.calls.send, 1); assert.equal(f.calls.edit, 1); assert.equal(f.calls.pin, 1);
+  for (const k of ['config', 'revision', 'photo', 'photo_type', 'published_at']) assert.deepEqual(f.row()[k], before[k]);
+});
+function isolateOtherTopics(f) {
+  db.getDb().prepare('UPDATE concert_countdowns SET enabled=0,render_version=?,topic_version=? WHERE guild_id<>?').run(images.RENDER_VERSION, topics.VERSION, f.g);
+}
+test('missing Manage Channels is a private topic error and never blocks publication or daily graphic updates', async () => {
+  isolateRenderingWork(); const f = fixture(); f.missingFlags = [P.ManageChannels]; f.channel.topic = 'Original topic';
+  await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  assert.equal(f.calls.send, 1); assert.equal(f.calls.pin, 1); assert.equal(f.row().last_error, null);
+  assert.match(f.row().topic_error, /Manage Channels/); assert.equal(f.channel.topic, 'Original topic');
+  const graphicRevision = f.row().revision, id = f.row().message_id;
+  store.update(f.g, f.c, { enabled: 1 });
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T05:00Z') });
+  assert.equal(f.calls.edit, 1); assert.equal(f.row().message_id, id); assert.equal(f.row().revision, graphicRevision);
+  f.missingFlags = [];
+  await f.refresh({ force: true, now: new Date('2027-06-17T05:01Z') });
+  assert.equal(f.row().topic_error, null); assert.match(f.channel.topic, /^🧡 1 day/); assert.equal(f.calls.send, 1);
+});
+test('existing disabled published cards receive a one-time topic addition without graphic changes or reconfiguration', async () => {
+  isolateRenderingWork(); const f = fixture(); await f.refresh({ publish: true });
+  store.update(f.g, f.c, { topic_version: null, topic_text: null, topic_last_success: null }); f.channel.topic = 'Preserved room description';
+  const before = f.row(), calls = { ...f.calls }, now = new Date('2027-01-02T12:00Z');
+  db.closeDb(); await service.runUpdates(f.client, { now });
+  assert.equal(f.row().topic_version, topics.VERSION); assert.match(f.channel.topic, /Preserved room description$/);
+  assert.deepEqual(f.calls, calls); assert.equal(f.row().enabled, 0);
+  for (const key of ['config', 'photo', 'photo_type', 'message_id', 'published_at', 'last_success', 'fingerprint', 'render_version', 'revision']) assert.deepEqual(f.row()[key], before[key], key);
+  const text = f.channel.topic, count = f.topicCalls; db.closeDb(); await service.runUpdates(f.client, { now: new Date('2027-01-03T12:00Z') });
+  assert.equal(f.channel.topic, text); assert.equal(f.topicCalls, count);
+  await f.refresh({ force: true, now: new Date('2027-01-03T12:00Z') }); assert.equal(f.row().enabled, 0); assert.notEqual(f.channel.topic, text);
+});
+test('unpublished drafts and private previews never edit topics', async () => {
+  isolateRenderingWork(); const f = fixture(); store.update(f.g, f.c, { enabled: 1 });
+  await service.preview(f.row()); await service.runUpdates(f.client, { now: new Date('2027-01-01T12:00Z') });
+  assert.equal(f.topicCalls, undefined); assert.equal(f.calls.send, 0); assert.equal(f.row().topic_version, null);
+});
+test('topic failure retries independently after restart, preserving graphic success and message identity', async () => {
+  isolateRenderingWork(); const f = fixture(); f.topicError = Error('Discord temporarily unavailable');
+  await f.refresh({ publish: true, now: new Date('2027-01-01T12:00Z') });
+  const id = f.row().message_id, success = f.row().last_success; assert.equal(f.row().last_error, null);
+  assert.equal(f.row().topic_retry_at, '2027-01-01T12:05:00.000Z');
+  db.closeDb(); f.topicError = null;
+  await service.runUpdates(f.client, { now: new Date('2027-01-01T12:04:59Z') }); assert.equal(f.topicCalls, 1);
+  await service.runUpdates(f.client, { now: new Date('2027-01-01T12:05:00Z') }); assert.equal(f.topicCalls, 2);
+  assert.equal(f.row().topic_error, null); assert.equal(f.row().topic_version, topics.VERSION);
+  assert.equal(f.row().last_success, success); assert.equal(f.row().message_id, id); assert.equal(f.calls.send, 1); assert.equal(f.calls.edit, 0);
+});
+test('topic rate limits cannot be bypassed by Refresh Now or restart', async () => {
+  isolateRenderingWork(); const f = fixture(); f.topicError = Object.assign(Error('429 topic bucket'), { status: 429, retry_after: 900 });
+  await f.refresh({ publish: true, now: new Date('2027-01-01T12:00Z') });
+  assert.equal(f.row().topic_retry_at, '2027-01-01T12:15:00.000Z');
+  assert.equal(f.row().retry_at, null); db.closeDb(); f.topicError = null;
+  await f.refresh({ force: true, now: new Date('2027-01-01T12:01Z') }); assert.equal(f.topicCalls, 1); assert.equal(f.calls.edit, 1);
+  await service.runUpdates(f.client, { now: new Date('2027-01-01T12:15:00Z') }); assert.equal(f.topicCalls, 2); assert.equal(f.calls.send, 1);
+});
+test('a lost topic response is recovered without duplicating its text, even when the local date changes', async () => {
+  isolateRenderingWork(); const f = fixture(); f.channel.topic = 'Keep this'; f.topicError = 'after';
+  await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  assert.ok(f.row().topic_pending_text); assert.match(f.channel.topic, /^🧡 2 days/);
+  db.closeDb(); f.topicError = null;
+  await service.runUpdates(f.client, { now: new Date('2027-06-17T05:00Z') });
+  assert.equal(f.row().topic_pending_text, null); assert.equal(f.channel.topic, '🧡 1 day until Chicago! 🖤\nKeep this');
+  assert.equal(f.topicCalls, 2); assert.equal(f.calls.send, 1);
+});
+test('repeated same-day refreshes skip topic PATCHes and persisted burst limits defer changed topics', async () => {
+  isolateRenderingWork(); const f = fixture(); await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  await f.refresh({ force: true, now: new Date('2027-06-16T05:01Z') }); assert.equal(f.topicCalls, 1);
+  const reviseCity = city => { const config = JSON.parse(f.row().config); config.city = city; store.save(f.g, f.c, config); };
+  reviseCity('City two'); await f.refresh({ force: true, now: new Date('2027-06-16T05:02Z') }); assert.equal(f.topicCalls, 2);
+  reviseCity('City three'); db.closeDb(); await f.refresh({ force: true, now: new Date('2027-06-16T05:03Z') });
+  assert.equal(f.topicCalls, 2); assert.equal(f.row().topic_retry_at, '2027-06-16T05:10:00.000Z'); assert.equal(f.calls.edit, 3);
+  store.update(f.g, f.c, { enabled: 1 }); await service.runUpdates(f.client, { now: new Date('2027-06-16T05:10Z') });
+  assert.equal(f.topicCalls, 3); assert.match(f.channel.topic, /until City three/); assert.equal(f.calls.send, 1);
+});
+test('overlong topics and edited ownership are preserved, with independent private errors', async () => {
+  isolateRenderingWork(); const f = fixture(); f.channel.topic = 'x'.repeat(1024);
+  await f.refresh({ publish: true }); assert.equal(f.calls.send, 1); assert.equal(f.channel.topic.length, 1024); assert.equal(f.topicCalls, undefined);
+  assert.match(f.row().topic_error, /Not enough channel topic space/);
+  f.channel.topic = 'Short welcome'; await f.refresh({ force: true }); assert.equal(f.topicCalls, 1);
+  f.channel.topic = '🧡 5 days until Chicago! 🖤\nRoom info';
+  await f.refresh({ force: true }); assert.match(f.row().topic_error, /kept for review/); assert.equal(f.topicCalls, 1);
+});
+test('concurrent refreshes and topic attempts cannot duplicate countdown lines or publication', async () => {
+  isolateRenderingWork(); const f = fixture(); await f.refresh({ publish: true }); const before = f.topicCalls;
+  const results = await Promise.allSettled([f.refresh({ force: true }), f.refresh({ force: true })]);
+  assert.ok(results.some(r => r.status === 'fulfilled')); assert.equal(f.calls.send, 1); assert.equal(f.topicCalls, before);
+  assert.equal(f.channel.topic.split('🧡').length - 1, 1);
+});
+test('all due graphics finish before an optional topic request waits or fails', async () => {
+  isolateRenderingWork(); const first = fixture(), second = fixture();
+  await first.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  await second.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  store.update(first.g, first.c, { enabled: 1 }); store.update(second.g, second.c, { enabled: 1 });
+  const client = { user: { id: 'bot' }, guilds: { cache: new Map([[first.g, first.guild], [second.g, second.guild]]) } };
+  let reached, finish;
+  const reachedTopic = new Promise(resolve => { reached = resolve; }), waiting = new Promise(resolve => { finish = resolve; });
+  first.channel.setTopic = async () => { reached(); await waiting; throw Error('Topic service unavailable'); };
+  const update = service.runUpdates(client, { now: new Date('2027-06-17T05:00Z') });
+  await reachedTopic;
+  assert.equal(first.calls.edit, 1); assert.equal(second.calls.edit, 1);
+  // The topic lease must not prevent even this room's manual graphic refresh.
+  await first.refresh({ force: true, now: new Date('2027-06-17T05:01Z') });
+  assert.equal(first.calls.edit, 2);
+  finish(); await update;
+  assert.equal(first.row().last_error, null); assert.match(first.row().topic_error, /Topic service unavailable/);
+  assert.equal(second.row().topic_error, null); assert.equal(first.calls.send, 1); assert.equal(second.calls.send, 1);
+});
+test('topic timer is scheduled independently when the graphic is already current', async () => {
+  isolateRenderingWork(); const f = fixture(); f.topicError = Error('Temporary topic outage');
+  await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  let now = new Date('2027-06-16T05:01Z'), seq = 0; const pending = new Map();
+  const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    const task = [...pending.values()][0]; assert.equal(task.ms, 4 * 60000); pending.clear();
+    now = new Date('2027-06-16T05:05Z'); f.topicError = null; await task.fn(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.topicCalls, 2); assert.equal(f.row().topic_error, null); assert.equal(pending.size, 0); // Disabled bootstrap is now finished.
+    assert.equal(f.calls.edit, 0); assert.equal(f.calls.send, 1);
+  } finally { stop(); }
+});
+test('editing selected concert dates refreshes the topic on the current day without another publication', async () => {
+  isolateRenderingWork(); const f = fixture(); await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  store.update(f.g, f.c, { enabled: 1 });
+  const second = calendar.createCalendarEvent({ guildId: f.g, calendarChannelId: 'cal', title: 'Chicago night two', eventDate: '2027-06-19', timezone: 'America/Chicago', calendarType: 'stray_kids', category: 'concert', allDay: true, createdBy: 'admin' });
+  const config = JSON.parse(f.row().config); config.eventIds.push(second); store.save(f.g, f.c, config);
+  await service.runUpdates(f.client, { now: new Date('2027-06-16T05:01Z') });
+  assert.equal(f.channel.topic, '🧡 Day 1: 2 days | Day 2: 3 days 🖤');
+  assert.equal(f.calls.send, 1); assert.equal(f.calls.edit, 1); assert.equal(f.calls.pin, 1);
+  assert.equal(f.row().topic_revision, f.row().revision);
+});
+test('a slow topic PATCH never holds the automatic midnight timer or the graphic lease', async () => {
+  isolateRenderingWork(); const f = fixture(); await f.refresh({ publish: true, now: new Date('2027-06-16T05:00Z') });
+  store.update(f.g, f.c, { enabled: 1 });
+  let now = new Date('2027-06-17T05:00Z'), seq = 0, entered, finish;
+  const waiting = new Promise(resolve => { finish = resolve; }), reached = new Promise(resolve => { entered = resolve; }), pending = new Map();
+  f.channel.setTopic = async () => { entered(); await waiting; throw Error('Delayed topic error'); };
+  const stop = service.start(f.client, { clock: () => now, setTimer: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; }, clearTimer: id => pending.delete(id) });
+  try {
+    await reached; await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.calls.edit, 1); assert.equal(f.row().lease_until, null); assert.ok(f.row().topic_lease_until);
+    const task = [...pending.values()][0]; assert.ok(task);
+    pending.clear(); now = new Date('2027-06-18T05:00Z'); await task.fn();
+    assert.equal(f.calls.edit, 2); assert.equal(f.calls.send, 1); // Next midnight still runs while the earlier topic PATCH waits.
+  } finally { stop(); finish(); await new Promise(resolve => setImmediate(resolve)); }
+});
+test('a delayed 429 persists its deadline from failure time rather than the earlier batch start', async t => {
+  isolateRenderingWork(); const f = fixture(), start = new Date('2027-06-16T05:00Z');
+  let current = start.getTime(); t.mock.method(Date, 'now', () => current);
+  f.channel.setTopic = async () => { current += 20 * 60000; throw Object.assign(Error('Delayed 429'), { status: 429, retry_after: 900 }); };
+  await f.refresh({ publish: true, now: start });
+  assert.equal(f.row().topic_retry_at, '2027-06-16T05:35:00.000Z');
+  assert.equal(f.row().last_success, start.toISOString()); assert.equal(f.calls.send, 1);
 });

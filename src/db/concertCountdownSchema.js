@@ -30,6 +30,17 @@ function migrateCountdowns(db) {
     lease_until: "INTEGER",
     checked_at: "TEXT",
     legacy_recovery: "INTEGER NOT NULL DEFAULT 0",
+    topic_lease_token: "TEXT",
+    topic_lease_until: "INTEGER",
+    topic_version: "TEXT",
+    topic_revision: "INTEGER",
+    topic_text: "TEXT",
+    topic_pending_text: "TEXT",
+    topic_last_success: "TEXT",
+    topic_error: "TEXT",
+    topic_retry_at: "TEXT",
+    topic_retry_kind: "TEXT",
+    topic_attempts: "TEXT NOT NULL DEFAULT '[]'",
   })) {
     if (!columns.has(name))
       db.exec(`ALTER TABLE concert_countdowns ADD COLUMN ${name} ${type}`);

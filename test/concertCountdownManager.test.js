@@ -1069,3 +1069,13 @@ test('Add Countdown still paginates approved locations beyond the two native men
     await manager.handle(f.i('concert-prev')); assert.equal(f.s.offeredLocations[0], 'fixture-0');
   } finally { tour.groups = original; }
 });
+test('optional topic errors are visible privately in the existing manager without adding primary controls', async () => {
+  const f = fixture(), id = f.event();
+  store.save(f.g, f.c, { guildId: f.g, city: 'Chicago', country: 'United States', venue: 'Soldier Field', timezone: 'America/Chicago', eventIds: [id] });
+  store.update(f.g, f.c, { message_id: 'existing', published_at: 'before', topic_error: 'Harmony needs Manage Channels to update this topic.', topic_retry_at: '2027-01-01T12:05:00Z' });
+  f.s.room = f.c;
+  const view = manager.detail(f.s); assert.match(JSON.stringify(view.embeds), /Channel topic/); assert.match(JSON.stringify(view.embeds), /Manage Channels/);
+  const home = manager.home(f.s); assert.equal(home.components.length, 4);
+  assert.equal(view.components.flatMap(r => r.toJSON().components).filter(c => /Publish|Refresh Now|Check room access/.test(c.label)).length, 3);
+  assert.deepEqual(view.allowedMentions, { parse: [] });
+});
