@@ -1,0 +1,31 @@
+Public concert countdowns / Facebook — executed verification
+
+Focused countdown, sharing and public HTTP regressions
+node --test --test-concurrency=1 test/publicConcertCountdown.test.js test/concertCountdown*.test.js test/concertTourCalendar.test.js
+ℹ tests 204
+ℹ suites 0
+ℹ pass 204
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10768.845503
+
+Full Harmony regression suite
+HARMONY_DB_PATH=<isolated temporary database> npm test -- --test-concurrency=1
+ℹ tests 1106
+ℹ suites 0
+ℹ pass 1106
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43511.420907
+
+Syntax checks: public server/protocol/page/venue, bot sharing service/manager — passed
+git diff --check — passed
+Real Chromium 158 desktop (1280 px) and mobile/touch (390 px) — passed; no horizontal overflow; 800 px approved graphic loaded
+Public midnight PNG: 205/206 → 204/205 at 2026-11-26 06:00 UTC / Chicago midnight — passed
+Approved-renderer byte comparison and unchanged Open Graph tags across midnight — passed
+Static Facebook venue thumbnail: 1200×630 JPEG; EXIF stripped — passed
+No production data, Railway resources, Discord messages/topics or Facebook posts were changed.

@@ -1079,3 +1079,20 @@ test('optional topic errors are visible privately in the existing manager withou
   assert.equal(view.components.flatMap(r => r.toJSON().components).filter(c => /Publish|Refresh Now|Check room access/.test(c.label)).length, 3);
   assert.deepEqual(view.allowedMentions, { parse: [] });
 });
+test('Facebook link is private, explicit opt-in and revocable with no reconfiguration or photo upload',async()=>{
+  const f=fixture(), id=f.event(), images=require('../src/services/concertCountdownRender'), sharing=require('../src/services/concertCountdownSharing');
+  store.save(f.g,f.c,{guildId:f.g,city:'Chicago',country:'United States',venue:'Soldier Field',timezone:'America/Chicago',eventIds:[id]});
+  const now=new Date('2027-01-01T12:00Z');store.update(f.g,f.c,{message_id:'published',published_at:now.toISOString(),last_success:now.toISOString(),render_version:images.RENDER_VERSION,fingerprint:service.fingerprint(service.model(store.get(f.g,f.c),now),store.get(f.g,f.c))});
+  f.s.room=f.c;const before=store.get(f.g,f.c), oldFetch=global.fetch, saved={};
+  const env={COUNTDOWN_PUBLIC_ORIGIN:'https://countdowns.example.com',COUNTDOWN_PUBLIC_SYNC_URL:'http://public-countdowns.railway.internal:3101/internal/sync',COUNTDOWN_PUBLIC_SYNC_SECRET:'fixture-only-secret-'.repeat(3)};
+  for(const[k,v]of Object.entries(env)){saved[k]=process.env[k];process.env[k]=v;}const calls=[];global.fetch=async(url,opts)=>{calls.push(JSON.parse(opts.body));return{ok:true,status:200};};
+  try{
+    const controls=manager.detail(f.s).components.flatMap(r=>r.toJSON().components);assert.equal(controls.filter(c=>c.label==='Get Facebook Countdown Link').length,1);
+    const open=f.i('facebook-link');await manager.handle(open);assert.match(JSON.stringify(open.response),/Anyone with the public link/);assert.equal(sharing.get(f.g,f.c).enabled,0);assert.equal(calls.length,0);
+    const enable=f.i('share-enable',{customId:`harmony-countdown:${f.s.token}:share-enable:${f.s.shareReviewNonce}`});await manager.handle(enable);assert.equal(sharing.get(f.g,f.c).enabled,1);assert.match(JSON.stringify(enable.response),/https:\/\/countdowns.example.com\/countdowns\/chicago/);assert.equal(calls[0].operation,'upsert');
+    const disable=f.i('share-disable',{customId:`harmony-countdown:${f.s.token}:share-disable:${f.s.shareReviewNonce}`});await manager.handle(disable);assert.equal(calls[1].operation,'withdraw');assert.equal(sharing.get(f.g,f.c).enabled,0);
+    const stale=f.i('share-enable',{customId:enable.customId});await manager.handle(stale);assert.match(stale.response.content,/Review public sharing/);assert.equal(sharing.get(f.g,f.c).enabled,0);
+    assert.deepEqual(store.get(f.g,f.c),before);assert.deepEqual(disable.response.allowedMentions,{parse:[]});
+    const outsider=f.i('facebook-link',{user:{id:'outsider'}});await manager.handle(outsider);assert.match(outsider.response.content,/not authorized/);assert.equal(outsider.response.flags,64);
+  }finally{global.fetch=oldFetch;for(const k of Object.keys(env)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}}
+});

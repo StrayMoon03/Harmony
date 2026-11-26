@@ -32,6 +32,8 @@ const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const { validateConfig } = require("./concertCountdownModel");
 const service = require("./concertCountdownService");
 const topics = require("./concertCountdownTopic");
+const sharing = require("./concertCountdownSharing");
+const { hashData } = require("../../services/public-countdowns/protocol");
 const { downloadPhoto } = require("./concertCountdownPhoto");
 const roomAccess = require("./concertCountdownPermissions");
 const sessions = new Map(),
@@ -273,8 +275,19 @@ function detail(s, notice = "") {
         ).setDisabled(!row.published_at && !row.message_id),
         button(s, "configured", "Configured Countdowns"),
       ),
+      new Row().addComponents(button(s,"facebook-link","Get Facebook Countdown Link").setDisabled(!row.published_at && !row.message_id)),
     ],
   };
+}
+function sharingPage(s, notice = "") {
+  const share = sharing.ensure(s.guild, s.room);
+  let origin = "", available = true, data;
+  try { origin = sharing.settings().origin; data = sharing.projection(store.get(s.guild,s.room)); }
+  catch { available = false; }
+  s.shareReviewHash = data ? hashData(data) : null;
+  s.shareReviewRoom = s.room;
+  s.shareReviewNonce = randomBytes(6).toString("hex");
+  return { ...safe, content:notice || null, attachments:[], embeds:[embed("Facebook Countdown Link", `${share.enabled ? "Public sharing: On" : share.pending ? "Public sharing: Removal pending" : "Public sharing: Off"}\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed.\n\n${data ? data.city + " — " + data.venue + "\n" + data.dates.join(" · ") : "Publish the latest reviewed changes before sharing."}\n\n${share.enabled && share.synced_hash && origin ? origin + "/countdowns/" + share.slug : "Enable public sharing below to create the public page."}\n${share.last_error || ""}\n${!available ? "Public hosting is not configured yet, or the published countdown needs review." : ""}`)], components:[new Row().addComponents(button(s,"share-enable:"+s.shareReviewNonce,"Enable Public Sharing",Style.Success).setDisabled(!available || !data || Boolean(share.enabled)),button(s,"share-disable:"+s.shareReviewNonce,"Disable Public Sharing").setDisabled(!share.enabled && !share.pending),button(s,"back","Back"))] };
 }
 function draftPage(s, notice = "") {
   if (s.creating) return setup(s, notice);
@@ -569,7 +582,7 @@ async function handle(i) {
   let ownsWork = false;
   try {
     if (s.uiInFlight) throw Error("This countdown is preparing an update. Wait for its result.");
-    if (["choose-concert", "choose-concert-more", "setup-room", "photo-save", "preview", "reuse-photo", "tour-upload-save", "tour-approve", "discovery-run"].includes(action)) {
+    if (["share-enable", "share-disable", "choose-concert", "choose-concert-more", "setup-room", "photo-save", "preview", "reuse-photo", "tour-upload-save", "tour-approve", "discovery-run"].includes(action)) {
       s.uiInFlight = true;
       ownsWork = true;
     }
@@ -582,7 +595,17 @@ async function handle(i) {
       delete s.publishRevision;
       delete s.publishRoom;
     }
-    if (action === "close") {
+    if (action === "facebook-link") {
+      await i.update(sharingPage(s));
+    } else if (action === "share-enable" || action === "share-disable") {
+      if (s.shareReviewRoom !== s.room || i.customId.split(":")[3] !== s.shareReviewNonce) throw Error("Review public sharing for this countdown again before changing it.");
+      await i.deferUpdate();
+      try {
+        if(action === "share-enable") await sharing.enable(s.guild,s.room,s.shareReviewHash);
+        else await sharing.disable(s.guild,s.room);
+        await i.editReply(sharingPage(s,action === "share-enable" ? "Your public link is ready to copy. Facebook posts are added manually." : "Public sharing disabled. The live page is unavailable; Facebook may retain an earlier cached preview."));
+      } catch(error) { await i.editReply(sharingPage(s,error.message)); }
+    } else if (action === "close") {
       await i.deferUpdate();
       await i.deleteReply();
       sessions.delete(s.token);
@@ -1154,6 +1177,7 @@ module.exports = {
   handle,
   home,
   configured,
+  sharingPage,
   concertPicker,
   setup,
   discoveryPage,

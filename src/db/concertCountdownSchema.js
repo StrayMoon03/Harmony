@@ -1,5 +1,10 @@
 "use strict";
 function migrateCountdowns(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS concert_countdown_shares (
+    guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 0, pending INTEGER NOT NULL DEFAULT 0,
+    sequence INTEGER NOT NULL DEFAULT 0, synced_hash TEXT, last_synced TEXT, last_error TEXT,
+    PRIMARY KEY(guild_id,channel_id));`);
   db.exec(`CREATE TABLE IF NOT EXISTS concert_countdowns (
     guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, config TEXT NOT NULL,
     photo BLOB, photo_type TEXT, message_id TEXT, enabled INTEGER NOT NULL DEFAULT 0,

@@ -1,0 +1,22 @@
+{
+  "timezone": "America/Chicago",
+  "before": {
+    "utc": "2026-11-26T05:59:59.999Z",
+    "localDate": "2026-11-25",
+    "days": [
+      205,
+      206
+    ]
+  },
+  "after": {
+    "utc": "2026-11-26T06:00:00.000Z",
+    "localDate": "2026-11-26",
+    "days": [
+      204,
+      205
+    ]
+  },
+  "openGraphUnchanged": true,
+  "approvedRendererByteMatch": true,
+  "imageETagChanged": true
+}
