@@ -86,6 +86,7 @@ async function inspect(client, g, c) {
       channelName: channel.name || "concert room",
       botMemberId: member.id,
       permissions,
+      topicPermission: { allowed: effective.has(P.ManageChannels), name: "Manage Channels (channel topic only)" },
       missing: permissions.filter((p) => !p.allowed).map((p) => p.name),
     };
     return { channel, member, diagnostics };
@@ -191,6 +192,7 @@ function description(d) {
     d.missing.length
       ? "Only the permissions marked ✕ are missing."
       : "All five required permissions are effective.",
+    ...(d.topicPermission ? [`${d.topicPermission.allowed ? "✓" : "✕"} ${d.topicPermission.name} — optional for the pinned graphic`] : []),
     "Checked Harmony's own member, current server roles and this room's current overrides. No permissions were changed.",
   ].join("\n");
 }

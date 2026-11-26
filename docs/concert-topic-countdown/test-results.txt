@@ -1,0 +1,29 @@
+Concert channel topic countdown — executed verification
+
+Focused countdown/tour regressions
+node --test --test-concurrency=1 test/concertCountdown*.test.js test/concertTourCalendar.test.js
+ℹ tests 183
+ℹ suites 0
+ℹ pass 183
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10263.558499
+
+Full Harmony regression suite
+HARMONY_DB_PATH=<isolated temporary database> npm test -- --test-concurrency=1
+ℹ tests 1085
+ℹ suites 0
+ℹ pass 1085
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43479.995297
+
+node --check: topic service, graphic scheduler, manager, permissions, store and schema — passed
+git diff --check — passed
+node scripts/preview-concert-countdown-topics.cjs — passed (six actual model/formatter examples)
+python3 scripts/render-concert-topic-previews.py — passed (desktop/mobile header illustrations)
+No live Discord or production database writes. No merge or deployment.

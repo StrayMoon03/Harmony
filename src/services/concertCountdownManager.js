@@ -31,6 +31,7 @@ const eventDay = (e) =>
 const { isAdminRoomAuthorized } = require("./adminAuthorization");
 const { validateConfig } = require("./concertCountdownModel");
 const service = require("./concertCountdownService");
+const topics = require("./concertCountdownTopic");
 const { downloadPhoto } = require("./concertCountdownPhoto");
 const roomAccess = require("./concertCountdownPermissions");
 const sessions = new Map(),
@@ -212,7 +213,8 @@ function openSaved(s, room) {
   return setup(s);
 }
 function published(s) {
-  return { ...safe, content: null, attachments: [], embeds: [embed("Countdown Published", "Your countdown is published and pinned. You can manage it at any time from Configured Countdowns.")], components: [new Row().addComponents(button(s, "add", "Create Another Countdown", Style.Primary), button(s, "configured", "Configured Countdowns"), button(s, "home", "Back to Countdown Manager"))] };
+  const row = store.get(s.guild, s.room);
+  return { ...safe, content: null, attachments: [], embeds: [embed("Countdown Published", "Your countdown is published and pinned. You can manage it at any time from Configured Countdowns." + (row?.topic_error || row?.topic_retry_at ? "\n\nChannel topic: " + topics.status(row) : ""))], components: [new Row().addComponents(button(s, "add", "Create Another Countdown", Style.Primary), button(s, "configured", "Configured Countdowns"), button(s, "home", "Back to Countdown Manager"))] };
 }
 function discoveryPage(s, notice = "") {
   const result = s.discovery, items = result?.items || [], page = s.discoveryPage = Math.min(s.discoveryPage || 0, Math.max(0, Math.ceil(items.length / 25) - 1));
@@ -244,7 +246,7 @@ function detail(s, notice = "") {
     embeds: [
       embed(
         `${c.city} concert countdown`,
-        `${c.venue} · ${c.country}\nRoom: <#${s.room}>\nTime zone: ${c.timezone}\n\n${active.panels.map((p) => `${p.date} — ${p.state === "upcoming" ? p.days + " days to go" : p.label}`).join("\n") || "No active dates. Select replacements from the approved calendar."}\n\n**Publication:** ${row.message_id ? "Published and managed" : "Private draft"}\n**Automatic updates:** ${row.enabled ? "On" : "Off"}\n**Photograph:** ${row.photo ? "Saved" : "No photograph — fallback shown"}\n**Last successful update:** ${row.last_success || "Never"}\n**Status:** ${row.last_error || "Ready"}${row.retry_at ? "\n**Retry after:** " + row.retry_at : ""}`,
+        `${c.venue} · ${c.country}\nRoom: <#${s.room}>\nTime zone: ${c.timezone}\n\n${active.panels.map((p) => `${p.date} — ${p.state === "upcoming" ? p.days + " days to go" : p.label}`).join("\n") || "No active dates. Select replacements from the approved calendar."}\n\n**Publication:** ${row.message_id ? "Published and managed" : "Private draft"}\n**Automatic updates:** ${row.enabled ? "On" : "Off"}\n**Photograph:** ${row.photo ? "Saved" : "No photograph — fallback shown"}\n**Last successful update:** ${row.last_success || "Never"}\n**Status:** ${row.last_error || "Ready"}${row.retry_at ? "\n**Retry after:** " + row.retry_at : ""}\n**Channel topic:** ${topics.status(row)}`,
       ),
     ],
     components: [

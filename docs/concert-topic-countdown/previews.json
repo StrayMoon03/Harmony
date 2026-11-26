@@ -1,0 +1,83 @@
+[
+  {
+    "name": "single",
+    "utc": "2026-11-25T12:00Z",
+    "localDate": "2026-11-25",
+    "dates": [
+      "2027-06-18"
+    ],
+    "countdown": "🧡 205 days until Chicago! 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 205 days until Chicago! 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  },
+  {
+    "name": "multiple",
+    "utc": "2026-11-25T12:00Z",
+    "localDate": "2026-11-25",
+    "dates": [
+      "2027-06-18",
+      "2027-06-19"
+    ],
+    "countdown": "🧡 Day 1: 205 days | Day 2: 206 days 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 Day 1: 205 days | Day 2: 206 days 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  },
+  {
+    "name": "concert-day",
+    "utc": "2027-06-18T05:00Z",
+    "localDate": "2027-06-18",
+    "dates": [
+      "2027-06-18",
+      "2027-06-19"
+    ],
+    "countdown": "🧡 Day 1: Concert day! | Day 2: 1 day 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 Day 1: Concert day! | Day 2: 1 day 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  },
+  {
+    "name": "mixed-states",
+    "utc": "2027-06-19T05:00Z",
+    "localDate": "2027-06-19",
+    "dates": [
+      "2027-06-18",
+      "2027-06-19"
+    ],
+    "countdown": "🧡 Day 1: Completed | Day 2: Concert day! 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 Day 1: Completed | Day 2: Concert day! 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  },
+  {
+    "name": "completed",
+    "utc": "2027-06-20T05:00Z",
+    "localDate": "2027-06-20",
+    "dates": [
+      "2027-06-18",
+      "2027-06-19"
+    ],
+    "countdown": "🧡 Day 1: Completed | Day 2: Completed 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 Day 1: Completed | Day 2: Completed 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  },
+  {
+    "name": "twelve-dates",
+    "utc": "2026-11-25T12:00Z",
+    "localDate": "2026-11-25",
+    "dates": [
+      "2027-06-18",
+      "2027-06-19",
+      "2027-06-20",
+      "2027-06-21",
+      "2027-06-22",
+      "2027-06-23",
+      "2027-06-24",
+      "2027-06-25",
+      "2027-06-26",
+      "2027-06-27",
+      "2027-06-28",
+      "2027-06-29"
+    ],
+    "countdown": "🧡 Day 1: 205 days | Day 2: 206 days | Day 3: 207 days | Day 4: 208 days | Day 5: 209 days | Day 6: 210 days | Day 7: 211 days | Day 8: 212 days | Day 9: 213 days | Day 10: 214 days | Day 11: 215 days | Day 12: 216 days 🖤",
+    "original": "Chicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private.",
+    "topic": "🧡 Day 1: 205 days | Day 2: 206 days | Day 3: 207 days | Day 4: 208 days | Day 5: 209 days | Day 6: 210 days | Day 7: 211 days | Day 8: 212 days | Day 9: 213 days | Day 10: 214 days | Day 11: 215 days | Day 12: 216 days 🖤\nChicago concert chat • Share travel plans and ticket tips.\nPlease keep personal ticket details private."
+  }
+]
