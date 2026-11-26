@@ -1,0 +1,84 @@
+{
+  "consent": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Facebook Countdown Link",
+        "description": "Public sharing: Off\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nEnable public sharing below to create the public page.\n\n"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:share-enable:23e96894f2ca",
+            "label": "Enable Public Sharing",
+            "style": 3,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:share-disable:23e96894f2ca",
+            "label": "Disable Public Sharing",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "enabled": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": null,
+    "attachments": [],
+    "embeds": [
+      {
+        "color": 16746031,
+        "title": "Facebook Countdown Link",
+        "description": "Public sharing: On\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nhttps://countdowns.example.com/countdowns/chicago-soldier-field-a603906ed0c0\n\n"
+      }
+    ],
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:share-enable:02608c5b5651",
+            "label": "Enable Public Sharing",
+            "style": 3,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:share-disable:02608c5b5651",
+            "label": "Disable Public Sharing",
+            "style": 2,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-countdown:1a089e8c838d0167:back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  }
+}

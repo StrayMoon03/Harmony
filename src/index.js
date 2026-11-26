@@ -211,6 +211,7 @@ client.once("clientReady", async () => {
   startEventScheduler(client);
   require("./services/eventRoomLinkService").start(client);
   countdownService.start(client);
+  require("./services/concertCountdownSharing").start();
   startCalendarDiscovery(client);
   startRadar(client);
 });
