@@ -1,0 +1,38 @@
+Public countdown deployment fix — executed verification
+
+Focused command: node --test --test-concurrency=1 test/publicCountdownStartup.test.js test/publicConcertCountdown.test.js test/concertCountdown*.test.js test/concertTourCalendar.test.js
+
+✔ runtime listener failures close the service and use sanitized diagnostics (5.117342ms)
+ℹ tests 213
+ℹ suites 0
+ℹ pass 213
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10352.049517
+
+
+Full command: HARMONY_DB_PATH=<isolated temporary SQLite path> npm test -- --test-concurrency=1
+
+ℹ tests 1115
+ℹ suites 0
+ℹ pass 1115
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 42647.711648
+
+
+All database/configuration/transport fixtures were isolated. Production investigation was read-only. No merge, deployment or live recovery claim.
+
+Final manager verification after import cleanup: node --test --test-concurrency=1 test/concertCountdownManager.test.js
+ℹ tests 45
+ℹ suites 0
+ℹ pass 45
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2001.782368
