@@ -5,7 +5,7 @@ const source = fs.readFileSync(__dirname + "/src/handlers/mediaHandler.js", "utf
 
 test("all supported platforms use the shared immediate-typing lifecycle", () => {
   assert.match(source, /withMediaLifecycle\(/);
-  assert.match(source, /processMediaMessage\(message, lifecycle\)/);
+  assert.match(source, /processMediaMessage\(message, lifecycle(?:, tiktokTimingRef)?\)/);
   assert.doesNotMatch(source, /await message\.channel\.sendTyping\(\)/);
 });
 

@@ -52,6 +52,10 @@ const {
   normalizeTikTokUrl,
 } = require("../modules/media/tiktokNormalize");
 const {
+  createTikTokTiming,
+  asStepRunner,
+} = require("../modules/media/tiktokTiming");
+const {
   findXLinks,
   extractXId,
 } = require("../modules/media/x");
@@ -478,7 +482,7 @@ async function getThreadsDiscordEmbedFallback(message, originalUrl, resolvedUrl)
  *
  * @param {import("discord.js").Message} message
  */
-async function processMediaMessage(message, lifecycle) {
+async function processMediaMessage(message, lifecycle, tiktokTimingRef) {
   if (message.author.bot) return;
 
   const instagramLinks =
@@ -761,10 +765,33 @@ async function processMediaMessage(message, lifecycle) {
   if (tiktokLinks.length > 0) {
     const originalUrl = tiktokLinks[0];
     const platform = "tiktok";
+    const timing = createTikTokTiming();
+    if (tiktokTimingRef) tiktokTimingRef.current = timing;
+    const runStep = asStepRunner(timing);
 
     try {
+      let shortLink = false;
+      try {
+        const parsed = new URL(originalUrl);
+        const hostname = parsed.hostname.toLowerCase();
+        shortLink =
+          hostname === "vm.tiktok.com" ||
+          hostname === "vt.tiktok.com" ||
+          (
+            (hostname === "tiktok.com" ||
+              hostname === "www.tiktok.com") &&
+            parsed.pathname.startsWith("/t/")
+          );
+      } catch {
+        shortLink = false;
+      }
+
       const normalizedUrl =
-        await normalizeTikTokUrl(originalUrl);
+        await runStep(
+          "short_link_resolution",
+          () => normalizeTikTokUrl(originalUrl),
+          { shortLink }
+        );
 
       if (isTikTokLiveUrl(normalizedUrl)) {
         throw new Error("TikTok live broadcasts cannot be archived as standalone media.");
@@ -784,6 +811,7 @@ async function processMediaMessage(message, lifecycle) {
 
       if (existing) {
         await lifecycle.markRetrieved();
+        timing.summary("already_shared");
         await sendAlreadySharedAndCleanup(message, existing, platform, originalUrl);
 
         return;
@@ -795,7 +823,11 @@ async function processMediaMessage(message, lifecycle) {
         // Metadata is optional; cap it so a slow probe cannot consume the
         // 20s retrieval budget before the download even starts.
         info =
-          await getMediaInfo(normalizedUrl, { timeoutMs: 6000 });
+          await runStep(
+            "metadata_probe",
+            () => getMediaInfo(normalizedUrl, { timeoutMs: 6000 }),
+            { timeoutMs: 6000 }
+          );
       } catch {
         console.warn(
           "TikTok metadata unavailable. Continuing with download only."
@@ -813,8 +845,9 @@ async function processMediaMessage(message, lifecycle) {
       }
 
       const downloadResult =
-        await downloadTikTokMedia(
-          normalizedUrl
+        await runStep(
+          "download",
+          () => downloadTikTokMedia(normalizedUrl, timing)
         );
 
       // Photo-mode downloads intentionally have no video audio stream.
@@ -826,6 +859,7 @@ async function processMediaMessage(message, lifecycle) {
           force: true,
         }).catch(() => {});
         await lifecycle.markRetrieved();
+        timing.summary("retrieved", { hasAudio: false, isPhotoPost });
         recordSocialSuccess(platform);
         console.warn(
           "TikTok download had no audio stream; preserving the original TikTok player."
@@ -860,12 +894,19 @@ async function processMediaMessage(message, lifecycle) {
       });
 
       await markRetrievedOrCleanup(lifecycle, downloadResult);
+      timing.summary("retrieved", {
+        isPhotoPost,
+        fileCount: classification.files.length,
+      });
       const sentMessageIds = await uploadMedia(
         message,
         classification.files,
         cardText,
         downloadResult.rawDir,
-        getTikTokUploadOptions(isPhotoPost)
+        {
+          ...getTikTokUploadOptions(isPhotoPost),
+          timing,
+        }
       );
       await deleteOriginalAfterSuccess(message, sentMessageIds, safeToDelete);
 
@@ -1336,10 +1377,19 @@ async function handleMediaMessage(message) {
   // global 20-second cutoff.
   const cutoffMs = mediaLifecycleCutoffMs(message.content);
   const cancelWorkOnTimeout = findInstagramLinks(message.content).length > 0;
+  const tiktokTimingRef = { current: null };
   return withMediaLifecycle(
     message,
-    (lifecycle) => processMediaMessage(message, lifecycle),
-    { cutoffMs, cancelWorkOnTimeout, onTimeout: (error) => logMediaError(message, error) }
+    (lifecycle) => processMediaMessage(message, lifecycle, tiktokTimingRef),
+    {
+      cutoffMs,
+      cancelWorkOnTimeout,
+      onTimeout: (error) => {
+        // Log-only attribution for the 20s TikTok retrieval cutoff.
+        try { tiktokTimingRef.current?.timeout(); } catch { /* ignore */ }
+        logMediaError(message, error);
+      },
+    }
   );
 }
 

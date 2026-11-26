@@ -8,6 +8,7 @@ const {
   ButtonStyle,
   EmbedBuilder,
 } = require("discord.js");
+const { asStepRunner } = require("./tiktokTiming");
 
 const execFileAsync = promisify(execFile);
 
@@ -767,100 +768,105 @@ async function uploadMedia(
     .replace(/[^a-z0-9_-]/gi, "")
     .slice(0, 48);
   let safeVideoFileIndex = 0;
+  const runStep = asStepRunner(options.timing);
 
   try {
-    for (const file of files) {
-      // Size compression already produces H.264/AAC/yuv420p. Run it first
-      // so oversized sources do not receive an unnecessary full-size encode.
-      let ready = await ensureUnderSizeLimit(file.path, maxBytes);
+    await runStep("ffprobe_compression", async () => {
+      for (const file of files) {
+        // Size compression already produces H.264/AAC/yuv420p. Run it first
+        // so oversized sources do not receive an unnecessary full-size encode.
+        let ready = await ensureUnderSizeLimit(file.path, maxBytes);
 
-      if (options.ensureAppleCompatibleVideo) {
-        ready = await ensureAppleCompatibleVideo(ready);
-        ready = await ensureUnderSizeLimit(ready, maxBytes);
-      }
+        if (options.ensureAppleCompatibleVideo) {
+          ready = await ensureAppleCompatibleVideo(ready);
+          ready = await ensureUnderSizeLimit(ready, maxBytes);
+        }
 
-      paths.push(ready);
-      if (safeVideoFileNamePrefix && VIDEO_EXT.has(path.extname(ready).toLowerCase())) {
-        safeVideoFileIndex += 1;
-        attachmentNames.push(`${safeVideoFileNamePrefix}-${safeVideoFileIndex}.mp4`);
-      } else {
-        attachmentNames.push(null);
+        paths.push(ready);
+        if (safeVideoFileNamePrefix && VIDEO_EXT.has(path.extname(ready).toLowerCase())) {
+          safeVideoFileIndex += 1;
+          attachmentNames.push(`${safeVideoFileNamePrefix}-${safeVideoFileIndex}.mp4`);
+        } else {
+          attachmentNames.push(null);
+        }
       }
-    }
+    });
 
     if (paths.length === 0) {
       throw new Error("No media files available to upload.");
     }
 
-    // Batch into groups of 10 (Discord hard limit per message).
-    /** @type {string[][]} */
-    const batches = [];
-    for (let i = 0; i < paths.length; i += DISCORD_MAX_ATTACHMENTS) {
-      batches.push(paths.slice(i, i + DISCORD_MAX_ATTACHMENTS));
-    }
-
-    console.log(
-      `Upload: ${paths.length} file(s) in ${batches.length} message(s)`
-    );
-
-    const structuredCard = cardText && typeof cardText === "object"
-      ? cardText
-      : null;
-
-    if (structuredCard) {
-      const headerMessage = await sendUploadBatch(message, {
-        content: structuredCard.header || "\u200b",
-        allowedMentions: { parse: [] },
-      });
-      sentMessageIds.push(headerMessage.id);
-    }
-
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      const isFirst = i === 0;
-
-      /** @type {import("discord.js").MessageReplyOptions} */
-      const payload = {
-        files: batch.map((filePath, batchIndex) => {
-          const name = attachmentNames[i * DISCORD_MAX_ATTACHMENTS + batchIndex];
-          return name ? { attachment: filePath, name } : filePath;
-        }),
-        allowedMentions: { repliedUser: false },
-      };
-
-      if (isFirst && !structuredCard) {
-        payload.embeds = [
-          new EmbedBuilder()
-            .setColor(embedColor)
-            .setDescription(cardText || "\u200b"),
-        ];
+    await runStep("upload_prep", async () => {
+      // Batch into groups of 10 (Discord hard limit per message).
+      /** @type {string[][]} */
+      const batches = [];
+      for (let i = 0; i < paths.length; i += DISCORD_MAX_ATTACHMENTS) {
+        batches.push(paths.slice(i, i + DISCORD_MAX_ATTACHMENTS));
       }
 
-      const sentMessage = await sendUploadBatch(message, payload, isFirst);
+      console.log(
+        `Upload: ${paths.length} file(s) in ${batches.length} message(s)`
+      );
 
-      sentMessageIds.push(sentMessage.id);
-    }
+      const structuredCard = cardText && typeof cardText === "object"
+        ? cardText
+        : null;
 
-    if (structuredCard) {
-      const components = structuredCard.buttonUrl
-        ? [new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setLabel(structuredCard.buttonLabel || "View original")
-            .setStyle(ButtonStyle.Link)
-            .setURL(structuredCard.buttonUrl)
-        )]
-        : [];
-      const footerMessage = await sendUploadBatch(message, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(embedColor)
-            .setDescription(structuredCard.footer || "\u200b"),
-        ],
-        components,
-        allowedMentions: { parse: [] },
-      });
-      sentMessageIds.push(footerMessage.id);
-    }
+      if (structuredCard) {
+        const headerMessage = await sendUploadBatch(message, {
+          content: structuredCard.header || "\u200b",
+          allowedMentions: { parse: [] },
+        });
+        sentMessageIds.push(headerMessage.id);
+      }
+
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        const isFirst = i === 0;
+
+        /** @type {import("discord.js").MessageReplyOptions} */
+        const payload = {
+          files: batch.map((filePath, batchIndex) => {
+            const name = attachmentNames[i * DISCORD_MAX_ATTACHMENTS + batchIndex];
+            return name ? { attachment: filePath, name } : filePath;
+          }),
+          allowedMentions: { repliedUser: false },
+        };
+
+        if (isFirst && !structuredCard) {
+          payload.embeds = [
+            new EmbedBuilder()
+              .setColor(embedColor)
+              .setDescription(cardText || "\u200b"),
+          ];
+        }
+
+        const sentMessage = await sendUploadBatch(message, payload, isFirst);
+
+        sentMessageIds.push(sentMessage.id);
+      }
+
+      if (structuredCard) {
+        const components = structuredCard.buttonUrl
+          ? [new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setLabel(structuredCard.buttonLabel || "View original")
+              .setStyle(ButtonStyle.Link)
+              .setURL(structuredCard.buttonUrl)
+          )]
+          : [];
+        const footerMessage = await sendUploadBatch(message, {
+          embeds: [
+            new EmbedBuilder()
+              .setColor(embedColor)
+              .setDescription(structuredCard.footer || "\u200b"),
+          ],
+          components,
+          allowedMentions: { parse: [] },
+        });
+        sentMessageIds.push(footerMessage.id);
+      }
+    });
   } catch (error) {
     for (const id of sentMessageIds) {
       const sent = await message.channel.messages?.fetch(id).catch(() => null);
