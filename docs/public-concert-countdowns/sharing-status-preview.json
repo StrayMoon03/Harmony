@@ -1,0 +1,110 @@
+{
+  "fixtureOnly": true,
+  "views": {
+    "off": {
+      "title": "Facebook Countdown Link",
+      "description": "Public sharing: Off\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nEnable public sharing below to create the public page.\n\n",
+      "controls": [
+        {
+          "label": "Enable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Disable Public Sharing",
+          "disabled": true
+        },
+        {
+          "label": "Back",
+          "disabled": false
+        }
+      ],
+      "allowedMentions": {
+        "parse": []
+      }
+    },
+    "awaitingInitialSync": {
+      "title": "Facebook Countdown Link",
+      "description": "Public sharing: Waiting for synchronization\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nSharing is enabled, but the live page is not confirmed yet. Harmony retries automatically. You do not need to enable sharing again.\nPublic countdown sync was not confirmed.\n",
+      "controls": [
+        {
+          "label": "Enable Public Sharing",
+          "disabled": true
+        },
+        {
+          "label": "Disable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Back",
+          "disabled": false
+        }
+      ],
+      "allowedMentions": {
+        "parse": []
+      }
+    },
+    "confirmed": {
+      "title": "Facebook Countdown Link",
+      "description": "Public sharing: On\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nYour public link is ready to copy.\n\nhttps://countdowns.example.com/countdowns/chicago-soldier-field-c9d28d898ed4\n\n",
+      "controls": [
+        {
+          "label": "Enable Public Sharing",
+          "disabled": true
+        },
+        {
+          "label": "Disable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Back",
+          "disabled": false
+        }
+      ],
+      "allowedMentions": {
+        "parse": []
+      }
+    },
+    "expiredConfirmation": {
+      "title": "Facebook Countdown Link",
+      "description": "Public sharing: Waiting for synchronization\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nSharing is enabled, but the live page is not confirmed yet. Harmony retries automatically. You do not need to enable sharing again.\n\nhttps://countdowns.example.com/countdowns/chicago-soldier-field-c9d28d898ed4\n\n",
+      "controls": [
+        {
+          "label": "Enable Public Sharing",
+          "disabled": true
+        },
+        {
+          "label": "Disable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Back",
+          "disabled": false
+        }
+      ],
+      "allowedMentions": {
+        "parse": []
+      }
+    },
+    "removalPending": {
+      "title": "Facebook Countdown Link",
+      "description": "Public sharing: Removal pending\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\nChicago — Soldier Field\n2027-06-18 · 2027-06-19\n\nRemoval is awaiting confirmation. The old page expires within 15 minutes without renewal.\n\n",
+      "controls": [
+        {
+          "label": "Enable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Disable Public Sharing",
+          "disabled": false
+        },
+        {
+          "label": "Back",
+          "disabled": false
+        }
+      ],
+      "allowedMentions": {
+        "parse": []
+      }
+    }
+  }
+}

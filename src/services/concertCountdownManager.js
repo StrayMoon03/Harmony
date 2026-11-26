@@ -33,7 +33,7 @@ const { validateConfig } = require("./concertCountdownModel");
 const service = require("./concertCountdownService");
 const topics = require("./concertCountdownTopic");
 const sharing = require("./concertCountdownSharing");
-const { hashData } = require("../../services/public-countdowns/protocol");
+const { hashData, LEASE_MS } = require("../../services/public-countdowns/protocol");
 const { downloadPhoto } = require("./concertCountdownPhoto");
 const roomAccess = require("./concertCountdownPermissions");
 const sessions = new Map(),
@@ -287,7 +287,14 @@ function sharingPage(s, notice = "") {
   s.shareReviewHash = data ? hashData(data) : null;
   s.shareReviewRoom = s.room;
   s.shareReviewNonce = randomBytes(6).toString("hex");
-  return { ...safe, content:notice || null, attachments:[], embeds:[embed("Facebook Countdown Link", `${share.enabled ? "Public sharing: On" : share.pending ? "Public sharing: Removal pending" : "Public sharing: Off"}\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed.\n\n${data ? data.city + " — " + data.venue + "\n" + data.dates.join(" · ") : "Publish the latest reviewed changes before sharing."}\n\n${share.enabled && share.synced_hash && origin ? origin + "/countdowns/" + share.slug : "Enable public sharing below to create the public page."}\n${share.last_error || ""}\n${!available ? "Public hosting is not configured yet, or the published countdown needs review." : ""}`)], components:[new Row().addComponents(button(s,"share-enable:"+s.shareReviewNonce,"Enable Public Sharing",Style.Success).setDisabled(!available || !data || Boolean(share.enabled)),button(s,"share-disable:"+s.shareReviewNonce,"Disable Public Sharing").setDisabled(!share.enabled && !share.pending),button(s,"back","Back"))] };
+  const fresh = share.synced_hash && share.last_synced && Date.now() - Date.parse(share.last_synced) < LEASE_MS;
+  const live = share.enabled && available && fresh && !share.pending && !share.last_error;
+  const status = share.enabled ? live ? "On" : "Waiting for synchronization" : share.pending ? "Removal pending" : "Off";
+  const instruction = share.enabled
+    ? live ? "Your public link is ready to copy." : "Sharing is enabled, but the live page is not confirmed yet. Harmony retries automatically. You do not need to enable sharing again."
+    : share.pending ? "Removal is awaiting confirmation. The old page expires within 15 minutes without renewal." : "Enable public sharing below to create the public page.";
+  const link = share.enabled && share.synced_hash && origin ? "\n\n" + origin + "/countdowns/" + share.slug : "";
+  return { ...safe, content:notice || null, attachments:[], embeds:[embed("Facebook Countdown Link", `Public sharing: ${status}\n\nAnyone with the public link can view this concert's city, venue, selected concert dates and saved venue photograph. No Discord account is needed. Your Discord rooms, conversations and members remain private.\n\n${data ? data.city + " — " + data.venue + "\n" + data.dates.join(" · ") : "Publish the latest reviewed changes before sharing."}\n\n${instruction}${link}\n${share.last_error || ""}\n${!available ? "Public hosting is not configured yet, or the published countdown needs review." : ""}`)], components:[new Row().addComponents(button(s,"share-enable:"+s.shareReviewNonce,"Enable Public Sharing",Style.Success).setDisabled(!available || !data || Boolean(share.enabled)),button(s,"share-disable:"+s.shareReviewNonce,"Disable Public Sharing").setDisabled(!share.enabled && !share.pending),button(s,"back","Back"))] };
 }
 function draftPage(s, notice = "") {
   if (s.creating) return setup(s, notice);

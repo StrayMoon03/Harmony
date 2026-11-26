@@ -72,3 +72,17 @@ test('approved calendar reschedules update the public projection without enablin
   await sharing.sync(f.g,f.c,f.options);assert.deepEqual(f.calls.at(-1).body.data.dates,['2027-06-18','2027-06-20']);
   assert.equal(f.row().enabled,before.enabled);assert.equal(f.row().message_id,before.message_id);assert.equal(f.row().fingerprint,before.fingerprint);
 });
+test('failed initial sync survives restart and retries existing consent without re-uploading or changing Discord configuration',async()=>{
+  const f=fixture(),before=f.row();
+  await assert.rejects(sharing.enable(f.g,f.c,f.hash(),{...f.options,transport:async()=>{throw Object.assign(Error('getaddrinfo ENOTFOUND'),{code:'ENOTFOUND'});}}),/not confirmed/);
+  const pending=sharing.get(f.g,f.c);assert.equal(pending.enabled,1);assert.equal(pending.pending,1);assert.equal(pending.synced_hash,null);
+  closeDb();
+  // start() performs its usual startup catch-up over persisted consent.
+  let complete;const delivered=new Promise(r=>{complete=r;});
+  const stop=sharing.start({...f.options,transport:async(url,options)=>{if(JSON.parse(options.body).slug!==pending.slug)return {ok:true,status:200};const response=await f.options.transport(url,options);complete();return response;}});
+  try{
+    await delivered;await new Promise(r=>setImmediate(r));
+    const ready=sharing.get(f.g,f.c);assert.equal(ready.enabled,1);assert.equal(ready.pending,0);assert.equal(ready.slug,pending.slug);assert.ok(ready.sequence>pending.sequence);assert.equal(ready.last_error,null);
+    assert.equal(f.calls.at(-1).body.operation,'upsert');assert.deepEqual(f.row(),before);
+  }finally{stop();}
+});

@@ -49,7 +49,7 @@ Public service variables:
 | `COUNTDOWN_PUBLIC_PEER_RATE` | Optional bounded request budget; default 600/minute per socket peer |
 | `COUNTDOWN_PUBLIC_GLOBAL_RATE` | Optional bounded global budget; default 2400/minute |
 
-Railway provides `RAILWAY_PRIVATE_DOMAIN`. The sync listener binds a resolved private address, never a wildcard/public listener. Its port is distinct from the public port. The domain must explicitly target port 3000. Give this service no Discord tokens, database URL, Welcome Pass secret, session credentials or bot volume.
+Railway provides `RAILWAY_PRIVATE_DOMAIN`. The sync listener binds a validated private address assigned to the local container, never a wildcard/public listener. It does not resolve its own service hostname during startup (see [deployment startup fix](deployment-fix.md)). Its port is distinct from the public port. The domain must explicitly target port 3000. Give this service no Discord tokens, database URL, Welcome Pass secret, session credentials or bot volume.
 
 Harmony variables (existing bot service, no hosting change to its existing HTTP/admin server):
 

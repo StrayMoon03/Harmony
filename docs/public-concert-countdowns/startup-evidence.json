@@ -1,0 +1,16 @@
+{
+  "deploymentId": "7a6d3a8a-fecf-4ce0-924d-f54f8ef70b2f",
+  "sourceCommit": "5d101837f0f0fa6d9327c8015b60ed5637a2868e",
+  "status": "FAILED",
+  "dns": {
+    "queries": 36,
+    "canonicalQueries": 12,
+    "resultCodes": [
+      "NXDOMAIN"
+    ],
+    "first": "2026-11-26T04:54:42.310254347Z",
+    "last": "2026-11-26T04:55:16.166450219Z"
+  },
+  "conclusion": "Startup awaited self-hostname lookup before either listen(). Canonical A/AAAA lookups returned NXDOMAIN during every recorded startup attempt; appended search-domain lookups also returned NXDOMAIN. This is a startup self-DNS failure, not an HTTP permission failure.",
+  "verification": "Read-only production evidence. No service/environment/secret/data changes or deployment performed."
+}

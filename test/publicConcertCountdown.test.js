@@ -107,5 +107,5 @@ test('restart rebuilds a missing cached graphic from the approved projection, wi
 });
 test('public-service startup rejects bot credentials and exits without revealing them',()=>{
   const result=require('node:child_process').spawnSync(process.execPath,[path.join(__dirname,'../services/public-countdowns/server.js')],{env:{...process.env,DISCORD_TOKEN:'PRIVATE-CREDENTIAL-CANARY'},encoding:'utf8',timeout:5000});
-  assert.equal(result.status,1);assert.doesNotMatch(result.stderr,/PRIVATE-CREDENTIAL-CANARY/);assert.match(result.stderr,/isolated configuration/);
+  assert.equal(result.status,1);assert.doesNotMatch(result.stderr,/PRIVATE-CREDENTIAL-CANARY/);assert.match(result.stderr,/PRIVATE_CONFIGURATION_PRESENT/);
 });

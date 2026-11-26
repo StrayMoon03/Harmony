@@ -152,17 +152,5 @@ async function createService({ directory, origin, secret, clock = () => new Date
   await refresh();
   return { publicServer, privateServer, refresh, close:async()=>{stopped=true;clearTimeout(timer);for(const server of [publicServer,privateServer]){server.closeAllConnections();if(server.listening)await new Promise(r=>server.close(r));}} };
 }
-async function main() {
-  const { lookup }=require('node:dns/promises');
-  const env=process.env, domain=env.RAILWAY_PRIVATE_DOMAIN;
-  if(['DISCORD_TOKEN','BOT_TOKEN','HARMONY_DB_PATH','DATABASE_URL','WELCOME_PASS_SHARED_SECRET'].some(k=>env[k]))throw Error('Private bot/database configuration must not be supplied to the public service');
-  if(!domain?.endsWith('.railway.internal')) throw Error('Private Railway networking is required; no public sync listener will be opened');
-  const addresses=await lookup(domain,{all:true}); const address=addresses.find(a=>/^f[cd][0-9a-f]*:/i.test(a.address)) || addresses.find(a=>/^10\./.test(a.address));
-  if(!address) throw Error('A private bind address is required');
-  if(Number(env.PORT||3000)===Number(env.COUNTDOWN_SYNC_PORT||3101)) throw Error('Public/private ports must differ');
-  const service=await createService({directory:env.COUNTDOWN_PUBLIC_DIRECTORY||'/data/countdowns',origin:env.COUNTDOWN_PUBLIC_ORIGIN,secret:env.COUNTDOWN_PUBLIC_SYNC_SECRET,perPeer:Number(env.COUNTDOWN_PUBLIC_PEER_RATE||600),globalLimit:Number(env.COUNTDOWN_PUBLIC_GLOBAL_RATE||2400)});
-  service.privateServer.listen(Number(env.COUNTDOWN_SYNC_PORT||3101),address.address);
-  service.publicServer.listen(Number(env.PORT||3000),'0.0.0.0');
-}
-if(require.main===module)main().catch(()=>{console.error('Public countdown service could not start; check its isolated configuration.');process.exit(1);});
+if(require.main===module)require('./startup').start({createService}).catch(()=>{process.exitCode=1;});
 module.exports={createService};

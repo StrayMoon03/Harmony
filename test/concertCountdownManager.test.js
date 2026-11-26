@@ -1096,3 +1096,25 @@ test('Facebook link is private, explicit opt-in and revocable with no reconfigur
     const outsider=f.i('facebook-link',{user:{id:'outsider'}});await manager.handle(outsider);assert.match(outsider.response.content,/not authorized/);assert.equal(outsider.response.flags,64);
   }finally{global.fetch=oldFetch;for(const k of Object.keys(env)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}}
 });
+test('sharing screen distinguishes pending sync, live, stale and removal states without contradictory enable instructions',()=>{
+  const f=fixture(),id=f.event(),sharing=require('../src/services/concertCountdownSharing');
+  store.save(f.g,f.c,{guildId:f.g,city:'Chicago',country:'United States',venue:'Soldier Field',timezone:'America/Chicago',eventIds:[id]});
+  const now=new Date();store.update(f.g,f.c,{message_id:'existing-message',published_at:now.toISOString(),last_success:now.toISOString(),fingerprint:'reviewed',enabled:0});
+  f.s.room=f.c;const before=store.get(f.g,f.c),saved={};
+  const env={COUNTDOWN_PUBLIC_ORIGIN:'https://countdowns.example.com',COUNTDOWN_PUBLIC_SYNC_URL:'http://public-countdowns.railway.internal:3101/internal/sync',COUNTDOWN_PUBLIC_SYNC_SECRET:'fixture-only-secret-'.repeat(3)};
+  for(const[k,v]of Object.entries(env)){saved[k]=process.env[k];process.env[k]=v;}
+  const description=()=>manager.sharingPage(f.s).embeds[0].toJSON().description;
+  try{
+    sharing.ensure(f.g,f.c);assert.match(description(),/Public sharing: Off/);assert.match(description(),/Enable public sharing below/);
+    getDb().prepare('UPDATE concert_countdown_shares SET enabled=1,pending=1,last_error=? WHERE guild_id=? AND channel_id=?').run('Public countdown sync was not confirmed.',f.g,f.c);
+    let text=description();assert.match(text,/Public sharing: Waiting for synchronization/);assert.match(text,/retries automatically/);assert.match(text,/do not need to enable sharing again/);assert.doesNotMatch(text,/Enable public sharing below|Public sharing: On/);
+    const controls=manager.sharingPage(f.s).components.flatMap(r=>r.toJSON().components);assert.equal(controls.find(c=>c.label==='Enable Public Sharing').disabled,true);assert.equal(controls.find(c=>c.label==='Disable Public Sharing').disabled,false);
+    getDb().prepare('UPDATE concert_countdown_shares SET pending=0,synced_hash=?,last_synced=?,last_error=NULL WHERE guild_id=? AND channel_id=?').run('a'.repeat(64),now.toISOString(),f.g,f.c);
+    text=description();assert.match(text,/Public sharing: On/);assert.match(text,/Your public link is ready/);assert.match(text,/https:\/\/countdowns.example.com\/countdowns\/chicago/);assert.match(text,/Discord rooms, conversations and members remain private/);
+    getDb().prepare('UPDATE concert_countdown_shares SET last_synced=? WHERE guild_id=? AND channel_id=?').run(new Date(now-16*60000).toISOString(),f.g,f.c);
+    assert.match(description(),/Waiting for synchronization/);
+    getDb().prepare('UPDATE concert_countdown_shares SET enabled=0,pending=1 WHERE guild_id=? AND channel_id=?').run(f.g,f.c);
+    text=description();assert.match(text,/Removal pending/);assert.doesNotMatch(text,/Enable public sharing below|countdowns.example.com\/countdowns/);
+    assert.deepEqual(store.get(f.g,f.c),before);
+  }finally{for(const k of Object.keys(env)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}}
+});
