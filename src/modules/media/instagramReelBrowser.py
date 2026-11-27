@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from urllib.parse import urlparse
 
 from chromiumExecutable import chromium_launch_kwargs
@@ -18,9 +19,58 @@ DIAGNOSTIC_KEYS = (
 )
 
 
+EXPIRY_STATES = ("future", "past", "zero", "session", "absent")
+LOADER_STATES = ("survived", "dropped", "absent")
+
+
+def _short_text(value, limit=160):
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.split())
+    return value[:limit] if value else None
+
+
+def safe_path(url):
+    path = urlparse(url).path or "/"
+    return path[:100]
+
+
+def cookie_expiry_state(filename, name, now=None):
+    """Return 'future', 'past', 'zero', 'session', or 'absent' for one cookie name."""
+    current = time.time() if now is None else now
+    jar = http.cookiejar.MozillaCookieJar(filename)
+    jar.load(ignore_discard=True, ignore_expires=True)
+    for c in jar:
+        if c.name == name and (c.domain.lstrip(".") == "instagram.com" or c.domain.endswith(".instagram.com")):
+            if c.expires is None:
+                return "session"
+            if c.expires == 0:
+                return "zero"
+            return "future" if c.expires > current else "past"
+    return "absent"
+
+
 def emit_diagnostics(signals):
     safe = {key: signals.get(key) is True for key in DIAGNOSTIC_KEYS}
-    print("HARMONY_INSTAGRAM_DIAGNOSTICS:" + json.dumps(safe), file=sys.stderr)
+    if isinstance(signals.get("cookieCount"), int) and signals["cookieCount"] >= 0:
+        safe["cookieCount"] = signals["cookieCount"]
+    if "sessionCookiePresent" in signals:
+        safe["sessionCookiePresent"] = signals["sessionCookiePresent"] is True
+    if "userIdCookiePresent" in signals:
+        safe["userIdCookiePresent"] = signals["userIdCookiePresent"] is True
+    expiry = signals.get("sessionCookieFileExpiry")
+    if expiry in EXPIRY_STATES:
+        safe["sessionCookieFileExpiry"] = expiry
+    loader = signals.get("sessionCookieLoader")
+    if loader in LOADER_STATES:
+        safe["sessionCookieLoader"] = loader
+    title = _short_text(signals.get("title"), 100)
+    if title is not None:
+        safe["title"] = title
+    path = signals.get("finalPath")
+    if isinstance(path, str) and path.startswith("/") and "://" not in path:
+        safe["finalPath"] = path[:100]
+    print("HARMONY_INSTAGRAM_DIAGNOSTICS:" + json.dumps(safe, sort_keys=True), file=sys.stderr)
 
 
 def record_signals(payload, code, signals):
@@ -127,7 +177,22 @@ def main(signals):
             filename = os.environ.get("INSTAGRAM_COOKIES")
             if filename:
                 try:
+                    signals["sessionCookieFileExpiry"] = cookie_expiry_state(filename, "sessionid")
+                except (OSError, ValueError, http.cookiejar.LoadError):
+                    signals["sessionCookieFileExpiry"] = "absent"
+                try:
                     cookies = load_cookies(filename)
+                    names = {cookie["name"] for cookie in cookies}
+                    signals["cookieCount"] = len(cookies)
+                    signals["sessionCookiePresent"] = "sessionid" in names
+                    signals["userIdCookiePresent"] = "ds_user_id" in names
+                    in_file = signals.get("sessionCookieFileExpiry") not in (None, "absent")
+                    if in_file and "sessionid" in names:
+                        signals["sessionCookieLoader"] = "survived"
+                    elif in_file:
+                        signals["sessionCookieLoader"] = "dropped"
+                    else:
+                        signals["sessionCookieLoader"] = "absent"
                     context.add_cookies(cookies)
                     signals["cookiesLoaded"] = bool(cookies)
                 except (OSError, ValueError, http.cookiejar.LoadError):
@@ -163,8 +228,14 @@ def main(signals):
             page.goto(f"https://www.instagram.com/reel/{code}/", wait_until="domcontentloaded", timeout=30000)
             signals["navigationCompleted"] = True
             page.wait_for_timeout(5000)
-            signals["loginRoute"] = "/accounts/login" in urlparse(page.url).path
-            signals["checkpointRoute"] = any(part in urlparse(page.url).path for part in ("/checkpoint", "/challenge"))
+            final_path = safe_path(page.url)
+            signals["finalPath"] = final_path
+            try:
+                signals["title"] = _short_text(page.title(), 100)
+            except Exception:
+                pass
+            signals["loginRoute"] = "/accounts/login" in final_path
+            signals["checkpointRoute"] = any(part in final_path for part in ("/checkpoint", "/challenge"))
             if reel_code(page.url) != code:
                 raise ValueError("Instagram redirected away from requested reel")
             signals["requestedPageConfirmed"] = True

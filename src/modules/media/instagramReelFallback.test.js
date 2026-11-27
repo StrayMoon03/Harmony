@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
+const { spawnSync } = require("node:child_process");
 const { saveVerifiedReel, exactReelCode } = require("./instagramReelFallback");
 const owned = { code: "EXACT", video: "https://scontent-a.cdninstagram.com/owned.mp4?secret=SIGNED" };
 const audioVideo = { stdout: JSON.stringify({ streams: [{ codec_type: "video" }, { codec_type: "audio" }] }) };
@@ -17,6 +18,51 @@ test("browser diagnostics strip private and nonboolean fields", () => {
 test("malformed diagnostics never expose raw stderr", () => {
   const { sanitizedBrowserDiagnostics } = require("./instagramReelFallback");
   for (const value of [undefined, "SECRET", "HARMONY_INSTAGRAM_DIAGNOSTICS:SIGNED", "HARMONY_INSTAGRAM_DIAGNOSTICS:null", "HARMONY_INSTAGRAM_DIAGNOSTICS:[]"]) assert.equal(sanitizedBrowserDiagnostics(value), null);
+});
+
+test("Instagram reel browser tests pass", () => {
+  const result = spawnSync(process.env.PYTHON_PATH || "python3", ["instagramReelBrowser.test.py"], {
+    cwd: __dirname,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test("browser diagnostics keep redacted session fields and drop secrets", () => {
+  const { sanitizedBrowserDiagnostics } = require("./instagramReelFallback");
+  const payload = {
+    helperStarted: true,
+    cookieCount: 9,
+    sessionCookiePresent: false,
+    userIdCookiePresent: true,
+    sessionCookieFileExpiry: "past",
+    sessionCookieLoader: "dropped",
+    title: "This content is unavailable • Instagram",
+    finalPath: "/reel/EXACT/",
+    cookie: "SECRET",
+    url: "SIGNED",
+    sessionid: "SECRET",
+  };
+  const report = sanitizedBrowserDiagnostics("PRIVATE STDERR\nHARMONY_INSTAGRAM_DIAGNOSTICS:" + JSON.stringify(payload));
+  assert.deepEqual(report, {
+    helperStarted: true,
+    cookieCount: 9,
+    sessionCookiePresent: false,
+    userIdCookiePresent: true,
+    sessionCookieFileExpiry: "past",
+    sessionCookieLoader: "dropped",
+    title: "This content is unavailable • Instagram",
+    finalPath: "/reel/EXACT/",
+  });
+  const rejected = sanitizedBrowserDiagnostics("HARMONY_INSTAGRAM_DIAGNOSTICS:" + JSON.stringify({
+    helperStarted: true,
+    cookieCount: -1,
+    sessionCookieFileExpiry: "expired",
+    sessionCookieLoader: "ok",
+    title: "See https://www.instagram.com/reel/EXACT/",
+    finalPath: "https://www.instagram.com/reel/EXACT/?signed=TOKEN",
+  }));
+  assert.deepEqual(rejected, { helperStarted: true });
 });
 
 test("failed browser execution logs only sanitized stage booleans", async () => {

@@ -2,6 +2,8 @@ import importlib.util
 import unittest
 import io
 import json
+import os
+import tempfile
 from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -153,6 +155,125 @@ class ExactReelTests(unittest.TestCase):
         for url in ["https://evil.test/reel/EXACT/", "http://www.instagram.com/reel/EXACT/", "https://www.instagram.com/accounts/login/"]:
             with self.assertRaises(ValueError):
                 reel.reel_code(url)
+
+    def cookie_jar(self, expiry, include_session=True, include_user=True):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
+        handle.write("# Netscape HTTP Cookie File\n")
+        if include_session:
+            handle.write(f"#HttpOnly_.instagram.com\tTRUE\t/\tTRUE\t{expiry}\tsessionid\tfake\n")
+        if include_user:
+            handle.write(".instagram.com\tTRUE\t/\tTRUE\t4102444800\tds_user_id\tfake\n")
+        handle.write(".example.com\tTRUE\t/\tTRUE\t4102444800\tsessionid\tother\n")
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_cookie_expiry_state_categories(self):
+        self.assertEqual(reel.cookie_expiry_state(self.cookie_jar(4102444800), "sessionid", now=1000), "future")
+        self.assertEqual(reel.cookie_expiry_state(self.cookie_jar(500), "sessionid", now=1000), "past")
+        self.assertEqual(reel.cookie_expiry_state(self.cookie_jar(0), "sessionid", now=1000), "zero")
+        self.assertEqual(reel.cookie_expiry_state(self.cookie_jar(""), "sessionid", now=1000), "session")
+        self.assertEqual(reel.cookie_expiry_state(self.cookie_jar(0, include_session=False), "sessionid", now=1000), "absent")
+
+    def test_loader_keeps_future_sessionid_and_drops_zero_or_past_expiry(self):
+        # Current reel loader uses ignore_expires=False; this documents that
+        # behavior without changing which cookies are loaded.
+        future = {c["name"] for c in reel.load_cookies(self.cookie_jar(4102444800))}
+        self.assertEqual(future, {"sessionid", "ds_user_id"})
+        for expiry in ("0", "500"):
+            names = {c["name"] for c in reel.load_cookies(self.cookie_jar(expiry))}
+            self.assertEqual(names, {"ds_user_id"}, expiry)
+            self.assertNotIn("sessionid", names)
+
+    def test_session_diagnostics_report_dropped_past_expiry_sessionid(self):
+        filename = self.cookie_jar(500)
+        output = io.StringIO()
+        def fail(signals):
+            signals["sessionCookieFileExpiry"] = reel.cookie_expiry_state(filename, "sessionid", now=1000)
+            cookies = reel.load_cookies(filename)
+            names = {cookie["name"] for cookie in cookies}
+            signals["cookieCount"] = len(cookies)
+            signals["sessionCookiePresent"] = "sessionid" in names
+            signals["userIdCookiePresent"] = "ds_user_id" in names
+            signals["sessionCookieLoader"] = "dropped"
+            signals["finalPath"] = "/reel/EXACT/"
+            signals["title"] = "This content is unavailable • Instagram"
+            signals["loginRoute"] = False
+            raise ValueError("No verified exact-record Instagram reel video")
+        with redirect_stderr(output):
+            self.assertEqual(reel.run(fail), 1)
+        text = output.getvalue()
+        self.assertNotIn("fake", text)
+        report = json.loads(text.split("HARMONY_INSTAGRAM_DIAGNOSTICS:")[1])
+        self.assertEqual(report["sessionCookieFileExpiry"], "past")
+        self.assertFalse(report["sessionCookiePresent"])
+        self.assertTrue(report["userIdCookiePresent"])
+        self.assertEqual(report["sessionCookieLoader"], "dropped")
+        self.assertEqual(report["cookieCount"], 1)
+        self.assertEqual(report["finalPath"], "/reel/EXACT/")
+        self.assertEqual(report["title"], "This content is unavailable • Instagram")
+        self.assertFalse(report["loginRoute"])
+
+    def test_session_diagnostics_report_survived_future_sessionid(self):
+        filename = self.cookie_jar(4102444800)
+        output = io.StringIO()
+        def fail(signals):
+            signals["sessionCookieFileExpiry"] = reel.cookie_expiry_state(filename, "sessionid", now=1000)
+            cookies = reel.load_cookies(filename)
+            names = {cookie["name"] for cookie in cookies}
+            signals["cookieCount"] = len(cookies)
+            signals["sessionCookiePresent"] = "sessionid" in names
+            signals["userIdCookiePresent"] = "ds_user_id" in names
+            signals["sessionCookieLoader"] = "survived"
+            signals["finalPath"] = "/reel/EXACT/"
+            signals["title"] = "Instagram"
+            raise RuntimeError("stop")
+        with redirect_stderr(output):
+            self.assertEqual(reel.run(fail), 1)
+        report = json.loads(output.getvalue().split("HARMONY_INSTAGRAM_DIAGNOSTICS:")[1])
+        self.assertEqual(report["sessionCookieFileExpiry"], "future")
+        self.assertTrue(report["sessionCookiePresent"])
+        self.assertEqual(report["sessionCookieLoader"], "survived")
+        self.assertEqual(report["cookieCount"], 2)
+        self.assertNotIn("fake", output.getvalue())
+
+    def test_session_diagnostics_strip_secrets_and_foreign_keys(self):
+        output = io.StringIO()
+        with redirect_stderr(output):
+            reel.emit_diagnostics({
+                "exactRecordSeen": True,
+                "cookieCount": 3,
+                "sessionCookiePresent": True,
+                "sessionCookieFileExpiry": "future",
+                "sessionCookieLoader": "survived",
+                "userIdCookiePresent": True,
+                "title": "This content is unavailable • Instagram",
+                "finalPath": "/reel/EXACT/",
+                "cookie": "SECRET",
+                "url": "https://www.instagram.com/reel/EXACT/?signed=TOKEN",
+                "sessionid": "SECRET",
+            })
+        text = output.getvalue()
+        report = json.loads(text.split(":", 1)[1])
+        self.assertTrue(report["exactRecordSeen"])
+        self.assertEqual(report["cookieCount"], 3)
+        self.assertTrue(report["sessionCookiePresent"])
+        self.assertEqual(report["sessionCookieFileExpiry"], "future")
+        self.assertEqual(report["sessionCookieLoader"], "survived")
+        self.assertEqual(report["title"], "This content is unavailable • Instagram")
+        self.assertEqual(report["finalPath"], "/reel/EXACT/")
+        self.assertNotIn("cookie", report)
+        self.assertNotIn("url", report)
+        self.assertNotIn("sessionid", report)
+        self.assertNotIn("SECRET", text)
+        self.assertNotIn("TOKEN", text)
+        self.assertNotIn("https://", text)
+
+    def test_safe_path_drops_query_string(self):
+        self.assertEqual(reel.safe_path("https://www.instagram.com/reel/EXACT/?signed=TOKEN"), "/reel/EXACT/")
+        self.assertEqual(reel._short_text("  Instagram  title  ", 100), "Instagram title")
+
+
 
 
 if __name__ == "__main__":
