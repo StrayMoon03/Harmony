@@ -13,6 +13,20 @@ const DIAGNOSTIC_KEYS = new Set([
   "exactRecordSeen", "exactVideoDeclared", "allowedVideoCandidateSeen",
   "scriptJsonParsed", "scriptJsonFailed", "helperCompleted",
 ]);
+const SESSION_DIAGNOSTIC_ALLOW = {
+  cookieCount: (value) => Number.isInteger(value) && value >= 0 && value < 10000,
+  sessionCookiePresent: (value) => typeof value === "boolean",
+  userIdCookiePresent: (value) => typeof value === "boolean",
+  sessionCookieFileExpiry: (value) => ["future", "past", "zero", "session", "absent"].includes(value),
+  sessionCookieLoader: (value) => ["survived", "dropped", "absent"].includes(value),
+  title: (value) => typeof value === "string" && value.length <= 100 && !/https?:/i.test(value),
+  finalPath: (value) => typeof value === "string" && value.startsWith("/") && value.length <= 100 && !value.includes("://"),
+};
+
+function isSafeDiagnosticEntry(key, value) {
+  if (DIAGNOSTIC_KEYS.has(key)) return typeof value === "boolean";
+  return Boolean(SESSION_DIAGNOSTIC_ALLOW[key] && SESSION_DIAGNOSTIC_ALLOW[key](value));
+}
 
 function sanitizedBrowserDiagnostics(stderr) {
   if (typeof stderr !== "string") return null;
@@ -22,7 +36,7 @@ function sanitizedBrowserDiagnostics(stderr) {
   try {
     const value = JSON.parse(line.slice(prefix.length));
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    return Object.fromEntries(Object.entries(value).filter(([key, flag]) => DIAGNOSTIC_KEYS.has(key) && typeof flag === "boolean"));
+    return Object.fromEntries(Object.entries(value).filter(([key, flag]) => isSafeDiagnosticEntry(key, flag)));
   } catch { return null; }
 }
 
