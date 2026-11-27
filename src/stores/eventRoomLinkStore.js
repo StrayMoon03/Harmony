@@ -26,6 +26,23 @@ function remove(g, e, users) {
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
+function replaceRecipients(g, e, selected, expected, actor, now = new Date()) {
+  const db = getDb(), wanted = new Set(selected), baseline = [...new Set(expected)].sort();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = members(g, e).map(m => m.user_id).sort();
+    if (JSON.stringify(current) !== JSON.stringify(baseline)) throw Error("Recipients changed in another setup. Reopen Manage DM Recipients to load the saved list.");
+    const added = [...wanted].filter(u => !current.includes(u)), removed = current.filter(u => !wanted.has(u));
+    // Unchanged members keep their schedule and audit fields. Saving never queues deliveries.
+    add(g, e, added, actor, now);
+    for (const u of removed) {
+      db.prepare("UPDATE event_room_link_members SET active=0,scheduled=0 WHERE guild_id=? AND event_id=? AND user_id=?").run(g, e, u);
+      db.prepare("UPDATE event_room_link_deliveries SET status='cancelled' WHERE guild_id=? AND event_id=? AND user_id=? AND status='pending'").run(g, e, u);
+    }
+    db.exec("COMMIT");
+    return { added: added.length, removed: removed.length, count: wanted.size };
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
 function schedule(g, e, enabled, users = null) {
   if (users) {
     const statement = getDb().prepare("UPDATE event_room_link_members SET scheduled=? WHERE guild_id=? AND event_id=? AND user_id=? AND active=1");
@@ -76,4 +93,4 @@ function diagnostics() {
   const counts = getDb().prepare("SELECT COUNT(*) enrolled,COALESCE(SUM(scheduled),0) scheduled FROM event_room_link_members WHERE active=1").get();
   return { ...counts, jobs: getDb().prepare("SELECT status,COUNT(*) count FROM event_room_link_deliveries GROUP BY status").all() };
 }
-module.exports = { diagnostics, recentFailures, settings, members, deliveries, get, configure, add, remove, schedule, enqueue, scheduledMembers, reconcile, due, claim, renew, update, release, retry };
+module.exports = { diagnostics, recentFailures, settings, members, deliveries, get, configure, add, remove, replaceRecipients, schedule, enqueue, scheduledMembers, reconcile, due, claim, renew, update, release, retry };

@@ -184,7 +184,7 @@ test("private manager selects members without RSVP, schedules event-day messages
   assert.equal(store.members(f.guildId, f.eventId)[0].scheduled, 1);
   assert.equal(store.settings(f.guildId, f.eventId).local_time, "10:15");
   assert.equal(f.calls.send, 0);
-  const snapshot = manager.page(s), sendId = snapshot.components[3].toJSON().components[0].custom_id;
+  const snapshot = manager.page(s), sendId = snapshot.components[2].toJSON().components[0].custom_id;
   const send = i("send", { customId: sendId }); await manager.handle(send);
   assert.equal(f.calls.send, 1);
   assert.match(send.response.content, /Confirmed delivered: 1/);
@@ -304,7 +304,7 @@ test("busy private status pages stay below Discord content limits while preservi
   }
   const view = manager.page(s);
   assert.ok(view.content.length <= 1900);
-  assert.equal(view.components.length, 5);
+  assert.equal(view.components.length, 4);
 });
 test("a crash after Discord accepts a DM but before its success checkpoint recovers the original message", async () => {
   const f = fixture(), id = f.enqueue(), update = store.update;
@@ -356,7 +356,7 @@ test("a first DM can send when reading the empty conversation is denied, but an 
 });
 test("Send Now immediately displays Sending and provides a separate private delivered receipt", async () => {
   const f = fixture(), { s, i } = ui(f); f.add();
-  const sendId = manager.page(s).components[3].toJSON().components[0].custom_id;
+  const sendId = manager.page(s).components[2].toJSON().components[0].custom_id;
   const original = service.deliver;
   let release;
   service.deliver = async () => {
@@ -382,7 +382,7 @@ test("Send Now immediately displays Sending and provides a separate private deli
 test("a failed direct message produces an explicit private failure receipt without falsely reporting success", async () => {
   const f = fixture(), { s, i } = ui(f); f.add();
   f.sendError = Object.assign(Error("Cannot send messages"), { code: 50007 });
-  const sendId = manager.page(s).components[3].toJSON().components[0].custom_id;
+  const sendId = manager.page(s).components[2].toJSON().components[0].custom_id;
   const receipts = [], send = i("send", { customId: sendId, followUp: async p => { receipts.push(p); } });
   await manager.handle(send);
   assert.match(receipts[0].content, /Delivered: 0 · Not delivered: 1/);
@@ -448,4 +448,162 @@ test("private controls explicitly distinguish DM delivery from the room the butt
   assert.match(view.content, /Button opens:/);
   assert.match(json, /Send DM Now/);
   assert.match(json, /Room the DM button opens/);
+});
+
+function recipientFixture(count = 30) {
+  const f = fixture(), roster = new Collection();
+  for (let n = 0; n < count; n++) {
+    const user = String(800000 + n);
+    roster.set(user, { id: user, guild: f.guild, displayName: `Member ${String(n).padStart(2, '0')}`, user: { id: user, username: `member${n}`, bot: false } });
+  }
+  f.guild.members.fetch = async options => {
+    if (!options) return roster;
+    const member = roster.get(options.user);
+    if (!member) throw Error('Member left the server');
+    return member;
+  };
+  return { f, roster, ...ui(f) };
+}
+const jsonRows = payload => payload.components.map(r => r.toJSON());
+const picker = payload => jsonRows(payload).flatMap(r => r.components).find(c => c.type === 3);
+async function act(editor, action, extra = {}) {
+  const interaction = editor.i(action, extra); await manager.handle(interaction); return interaction;
+}
+async function pick(editor, payload, values) {
+  return act(editor, 'recipients-pick', { customId: picker(payload).custom_id, values });
+}
+test('one recipient manager preselects saved members, checks and unchecks names, and only saves on request', async () => {
+  const x = recipientFixture(); store.add(x.f.guildId, x.f.eventId, ['800000'], 'owner');
+  const main = manager.page(x.s), controls = jsonRows(main).flatMap(r => r.components);
+  assert.equal(controls.filter(c => c.label === 'Manage DM Recipients').length, 1);
+  assert.equal(controls.some(c => c.type === 5), false);
+  const open = await act(x, 'recipients');
+  assert.equal(picker(open.response).options[0].default, true);
+  const changed = await pick(x, open.response, ['800001', '800002']);
+  assert.match(changed.response.content, /2 selected members/);
+  assert.deepEqual(store.members(x.f.guildId, x.f.eventId).map(m => m.user_id), ['800000']);
+  await act(x, 'recipients-save');
+  assert.deepEqual(store.members(x.f.guildId, x.f.eventId).map(m => m.user_id).sort(), ['800001', '800002']);
+  assert.equal(x.f.calls.send, 0);
+  assert.equal(store.deliveries(x.f.guildId, x.f.eventId).length, 0);
+});
+test('search, pagination, zero selections, Back and reopening preserve off-page draft selections', async () => {
+  const x = recipientFixture(60); store.add(x.f.guildId, x.f.eventId, ['800000', '800026'], 'owner');
+  let view = (await act(x, 'recipients')).response;
+  assert.equal(picker(view).max_values, 25); assert.equal(picker(view).min_values, 0);
+  await pick(x, view, []);
+  view = (await act(x, 'recipients-next')).response;
+  assert.equal(picker(view).options.find(o => o.value === '800026').default, true);
+  view = (await pick(x, view, ['800026', '800027'])).response;
+  const modal = await act(x, 'recipients-search'); assert.equal(modal.modal.toJSON().components.length, 1);
+  view = (await act(x, 'recipients-query', { fields: { getTextInputValue: () => 'no matches' } })).response;
+  assert.equal(picker(view), undefined); assert.match(view.content, /2 selected members/);
+  await act(x, 'recipients-back');
+  view = (await act(x, 'recipients')).response; assert.match(view.content, /2 selected members/);
+  view = (await act(x, 'recipients-clear')).response;
+  assert.equal(picker(view).options[0].default, false);
+  await act(x, 'recipients-save'); db.closeDb();
+  const reopened = ui(x.f); view = (await act(reopened, 'recipients')).response;
+  assert.match(view.content, /2 selected members/);
+  view = (await act(reopened, 'recipients-next')).response;
+  assert.equal(picker(view).options.find(o => o.value === '800027').default, true);
+});
+test('search includes nicknames, usernames, accents and duplicate names without requiring interest', async () => {
+  const x = recipientFixture(3);
+  x.roster.get('800000').displayName = 'Máría'; x.roster.get('800001').displayName = 'Máría';
+  await act(x, 'recipients');
+  let view = (await act(x, 'recipients-query', { fields: { getTextInputValue: () => 'maria' } })).response;
+  assert.equal(picker(view).options.length, 2);
+  assert.notEqual(picker(view).options[0].description, picker(view).options[1].description);
+  view = (await act(x, 'recipients-query', { fields: { getTextInputValue: () => 'member2' } })).response;
+  assert.equal(picker(view).options[0].value, '800002');
+  await pick(x, view, ['800002']); await act(x, 'recipients-save');
+  assert.equal(store.members(x.f.guildId, x.f.eventId).length, 1);
+});
+test('stale pages, forged values and other users cannot change recipient drafts', async () => {
+  const x = recipientFixture(); const old = (await act(x, 'recipients')).response;
+  await act(x, 'recipients-next');
+  assert.match((await pick(x, old, ['800000'])).response.content, /member list changed/);
+  const current = manager.recipientPage(x.s);
+  assert.match((await pick(x, current, ['outsider'])).response.content, /member list changed/);
+  const unauthorized = await act(x, 'recipients-save', { user: { id: 'other-owner' } });
+  assert.match(unauthorized.response.content, /expired|someone else|Only/);
+  assert.equal(x.s.recipientEdits.get(x.s.event).selected.size, 0);
+});
+test('new selections are freshly validated and invalid members cannot partially save', async () => {
+  for (const invalid of ['bot', 'left', 'other-guild']) {
+    const x = recipientFixture(2), view = (await act(x, 'recipients')).response;
+    await pick(x, view, ['800000', '800001']);
+    if (invalid === 'bot') x.roster.get('800001').user.bot = true;
+    if (invalid === 'left') x.roster.delete('800001');
+    if (invalid === 'other-guild') x.roster.get('800001').guild = { id: 'other' };
+    const saved = await act(x, 'recipients-save');
+    assert.match(saved.response.content, /Recipients were not saved/);
+    assert.equal(store.members(x.f.guildId, x.f.eventId).length, 0);
+    assert.equal(x.s.recipientEdits.get(x.s.event).selected.size, 2);
+  }
+});
+test('saved unavailable recipients are retained and roster failures never discard assignments', async () => {
+  const x = recipientFixture(1); store.add(x.f.guildId, x.f.eventId, ['departed'], 'owner');
+  let view = (await act(x, 'recipients')).response;
+  assert.equal(picker(view).options.find(o => o.value === 'departed').default, true);
+  await act(x, 'recipients-save');
+  assert.equal(store.members(x.f.guildId, x.f.eventId)[0].user_id, 'departed');
+  x.f.guild.members.fetch = async () => { throw Error('Discord temporarily unavailable'); };
+  view = (await act(x, 'recipients')).response;
+  assert.match(view.content, /Recipients were not saved/);
+  assert.equal(store.members(x.f.guildId, x.f.eventId)[0].user_id, 'departed');
+});
+test('concurrent recipient changes reject Save atomically and reopening loads the latest saved list', async () => {
+  const x = recipientFixture(3); await act(x, 'recipients');
+  store.add(x.f.guildId, x.f.eventId, ['800002'], 'other-staff');
+  assert.match((await act(x, 'recipients-save')).response.content, /another setup/);
+  assert.deepEqual(store.members(x.f.guildId, x.f.eventId).map(m => m.user_id), ['800002']);
+  const view = (await act(x, 'recipients')).response;
+  assert.match(view.content, /Loaded the latest/);
+  assert.equal(picker(view).options.find(o => o.value === '800002').default, true);
+  assert.throws(() => store.replaceRecipients(x.f.guildId, x.f.eventId, [], [], 'owner'), /another setup/);
+});
+test('Save preserves retained schedules and every delivery checkpoint, nonce and message ID without requeuing', async () => {
+  const x = recipientFixture(3), g = x.f.guildId, e = x.f.eventId;
+  store.add(g, e, ['800000', '800001'], 'owner', now); store.schedule(g, e, true);
+  const sent = store.enqueue(g, e, ['800000'], 'delivered-fixture', 'scheduled', now.toISOString(), now)[0];
+  const token = store.claim(sent, now); store.update(sent, token, { status: 'sent', message_id: 'existing-message', sent_at: now.toISOString() }); store.release(sent, token);
+  const queued = store.enqueue(g, e, ['800000', '800001'], 'queued-fixture', 'scheduled', '2030-06-19T13:00:00Z', now);
+  const beforeMembers = store.members(g, e), beforeJobs = store.deliveries(g, e);
+  await act(x, 'recipients'); await act(x, 'recipients-save');
+  assert.deepEqual(store.members(g, e), beforeMembers); assert.deepEqual(store.deliveries(g, e), beforeJobs);
+  let view = (await act(x, 'recipients')).response; await pick(x, view, ['800000', '800002']); await act(x, 'recipients-save');
+  assert.deepEqual(store.get(sent), beforeJobs.find(j => j.id === sent));
+  assert.deepEqual(store.get(queued[0]), beforeJobs.find(j => j.id === queued[0]));
+  assert.equal(store.get(queued[1]).status, 'cancelled');
+  assert.equal(store.members(g, e).find(m => m.user_id === '800000').scheduled, 1);
+  assert.equal(store.members(g, e).find(m => m.user_id === '800002').scheduled, 0);
+  assert.equal(store.deliveries(g, e).length, beforeJobs.length); assert.equal(x.f.calls.send, 0);
+  db.closeDb(); assert.equal(store.get(sent).message_id, 'existing-message');
+});
+test('recipient components serialize within Discord limits on every page, and drafts never cross events', async () => {
+  const x = recipientFixture(53); let view = (await act(x, 'recipients')).response;
+  for (let n = 0; n < 3; n++) {
+    assert.ok(view.content.length <= 2000); assert.ok(view.components.length <= 5);
+    for (const row of jsonRows(view)) for (const c of row.components) {
+      assert.ok(c.custom_id.length <= 100);
+      if (c.options) { assert.ok(c.options.length <= 25); assert.ok(c.max_values <= 25); assert.equal(c.options.length, c.max_values); }
+    }
+    view = (await act(x, 'recipients-next')).response;
+  }
+  const last = picker(view).options[0].value; await pick(x, view, [last]);
+  const firstEvent = x.s.event, other = events.createCalendarEvent({ guildId: x.f.guildId, calendarChannelId: 'calendar', calendarType: 'community', title: 'Other event', eventDate: '2030-06-23', createdBy: 'owner' });
+  x.s.event = other; view = (await act(x, 'recipients')).response; assert.match(view.content, /0 selected members/);
+  x.s.event = firstEvent; view = (await act(x, 'recipients')).response; assert.match(view.content, /1 selected members/);
+  x.s.expires = 0; assert.match((await act(x, 'recipients-save')).response.content, /expired/);
+  assert.equal(store.members(x.f.guildId, firstEvent).length, 0);
+});
+test('removing then readding an already delivered recipient never rearms its delivery', async () => {
+  const f = fixture(), delivered = f.enqueue('already-delivered');
+  await service.deliver(f.client, delivered, { now }); const checkpoint = store.get(delivered);
+  store.replaceRecipients(f.guildId, f.eventId, [], [f.userId], 'owner');
+  store.replaceRecipients(f.guildId, f.eventId, [f.userId], [], 'owner');
+  service.reconcile(now); await service.deliver(f.client, delivered, { now });
+  assert.deepEqual(store.get(delivered), checkpoint); assert.equal(f.calls.send, 1);
 });

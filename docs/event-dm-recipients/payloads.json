@@ -1,0 +1,377 @@
+{
+  "main": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": "**Sunday Listening Party — PRIVATE DMs**\nDelivery: Private DMs to the selected members\nEvent day: 2030-06-23 · America/New_York\nButton opens: <#fixture-room>\n3 selected members:\n• <@900000> — Send Now only\n• <@900012> — Send Now only\n• <@900017> — Send Now only\nConfirmed delivered: 0. Queued / scheduled: 0.\nUse Manage DM Recipients even if they have not marked themselves interested. Scheduling applies only to this selected event occurrence. Send Now does not cancel an event-day message.",
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients",
+            "label": "Manage DM Recipients",
+            "style": 2
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 8,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:room",
+            "placeholder": "Room the DM button opens",
+            "channel_types": [
+              0,
+              5,
+              2,
+              13
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:send:d8a6bded8b053aca",
+            "label": "Send DM Now",
+            "style": 1,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:schedule",
+            "label": "Schedule Event-Day DM",
+            "style": 3,
+            "disabled": false
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:stop",
+            "label": "Stop Scheduled Messages",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:retry",
+            "label": "Retry Failed Delivery",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:back",
+            "label": "Back to Events",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "recipients": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": "**Manage DM Recipients — Sunday Listening Party**\n3 selected members · Page 1 of 2\nAll server members\n28 matching members\nCheck names to add them; uncheck names to remove them.\nSelections on other pages and searches are kept. Event interest is not required.\nChoose Save Recipients to apply your changes. This does not send any messages.",
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-pick:74f1bcd536038dee",
+            "placeholder": "Check or uncheck members",
+            "min_values": 0,
+            "max_values": 25,
+            "options": [
+              {
+                "label": "Alice",
+                "value": "900000",
+                "description": "@alice_stay",
+                "default": true
+              },
+              {
+                "label": "Amy",
+                "value": "900023",
+                "description": "@amy_stay",
+                "default": false
+              },
+              {
+                "label": "Barbara",
+                "value": "900001",
+                "description": "@barbara_stay",
+                "default": false
+              },
+              {
+                "label": "Betty",
+                "value": "900024",
+                "description": "@betty_stay",
+                "default": false
+              },
+              {
+                "label": "Carol",
+                "value": "900002",
+                "description": "@carol_stay",
+                "default": false
+              },
+              {
+                "label": "Diane",
+                "value": "900003",
+                "description": "@diane_stay",
+                "default": false
+              },
+              {
+                "label": "Donna",
+                "value": "900025",
+                "description": "@donna_stay",
+                "default": false
+              },
+              {
+                "label": "Elaine",
+                "value": "900004",
+                "description": "@elaine_stay",
+                "default": false
+              },
+              {
+                "label": "Fran",
+                "value": "900005",
+                "description": "@fran_stay",
+                "default": false
+              },
+              {
+                "label": "Grace",
+                "value": "900006",
+                "description": "@grace_stay",
+                "default": false
+              },
+              {
+                "label": "Helen",
+                "value": "900007",
+                "description": "@helen_stay",
+                "default": false
+              },
+              {
+                "label": "Irene",
+                "value": "900008",
+                "description": "@irene_stay",
+                "default": false
+              },
+              {
+                "label": "Janet",
+                "value": "900009",
+                "description": "@janet_stay",
+                "default": false
+              },
+              {
+                "label": "Joan",
+                "value": "900026",
+                "description": "@joan_stay",
+                "default": false
+              },
+              {
+                "label": "Joyce",
+                "value": "900027",
+                "description": "@joyce_stay",
+                "default": false
+              },
+              {
+                "label": "Karen",
+                "value": "900010",
+                "description": "@karen_stay",
+                "default": false
+              },
+              {
+                "label": "Linda",
+                "value": "900011",
+                "description": "@linda_stay",
+                "default": false
+              },
+              {
+                "label": "Mary",
+                "value": "900012",
+                "description": "@mary_stay",
+                "default": true
+              },
+              {
+                "label": "Nancy",
+                "value": "900013",
+                "description": "@nancy_stay",
+                "default": false
+              },
+              {
+                "label": "Patricia",
+                "value": "900014",
+                "description": "@patricia_stay",
+                "default": false
+              },
+              {
+                "label": "Rose",
+                "value": "900015",
+                "description": "@rose_stay",
+                "default": false
+              },
+              {
+                "label": "Sandra",
+                "value": "900016",
+                "description": "@sandra_stay",
+                "default": false
+              },
+              {
+                "label": "Susan",
+                "value": "900017",
+                "description": "@susan_stay",
+                "default": true
+              },
+              {
+                "label": "Teresa",
+                "value": "900018",
+                "description": "@teresa_stay",
+                "default": false
+              },
+              {
+                "label": "Valerie",
+                "value": "900019",
+                "description": "@valerie_stay",
+                "default": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-search",
+            "label": "Search Members",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-clear",
+            "label": "Clear Search",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": false
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-save",
+            "label": "Save Recipients",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  },
+  "search": {
+    "allowedMentions": {
+      "parse": []
+    },
+    "content": "**Manage DM Recipients — Sunday Listening Party**\n3 selected members · Page 1 of 1\nSearch: Mary\n1 matching members\nCheck names to add them; uncheck names to remove them.\nSelections on other pages and searches are kept. Event interest is not required.\nChoose Save Recipients to apply your changes. This does not send any messages.",
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 3,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-pick:a257d5f3f2476284",
+            "placeholder": "Check or uncheck members",
+            "min_values": 0,
+            "max_values": 1,
+            "options": [
+              {
+                "label": "Mary",
+                "value": "900012",
+                "description": "@mary_stay",
+                "default": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-search",
+            "label": "Search Members",
+            "style": 2
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-clear",
+            "label": "Clear Search",
+            "style": 2,
+            "disabled": false
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-prev",
+            "label": "Previous",
+            "style": 2,
+            "disabled": true
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-next",
+            "label": "Next",
+            "style": 2,
+            "disabled": true
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-save",
+            "label": "Save Recipients",
+            "style": 3
+          },
+          {
+            "type": 2,
+            "custom_id": "harmony-room-links:fc8f38730dc42a82:recipients-back",
+            "label": "Back",
+            "style": 2
+          }
+        ]
+      }
+    ]
+  }
+}

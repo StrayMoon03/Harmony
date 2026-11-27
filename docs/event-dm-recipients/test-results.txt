@@ -1,0 +1,39 @@
+Event DM recipient simplification — isolated local verification
+
+Recipient and delivery regressions
+node --test test/eventRoomLinks.test.js
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 791.511064
+
+Focused event scheduling regressions
+HARMONY_DB_PATH=<temporary isolated database> node --test --test-concurrency=1 test/eventRoomLinks.test.js test/eventSchedule*.test.js
+ℹ tests 193
+ℹ suites 0
+ℹ pass 193
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3109.366261
+
+Full regression suite
+HARMONY_DB_PATH=<temporary isolated database> npm test -- --test-concurrency=1
+ℹ tests 1048
+ℹ suites 0
+ℹ pass 1048
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 39560.68522
+
+node --check src/services/eventRoomLinkManager.js: passed
+node --check src/stores/eventRoomLinkStore.js: passed
+git diff --check: passed
+No production databases or live Discord sends were used.
